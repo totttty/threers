@@ -39,3 +39,26 @@ Optional compatibility with popular three.js add-ons, compiled only when enabled
 
 - No requirement to ship the full three-mesh-bvh shader/debug visualization suite on day one.
 - No default enablement; apps opt in explicitly at build time.
+
+### mesh-bvh (implemented)
+
+Build wasm with BVH support:
+
+```bash
+MESH_BVH=1 web/build.sh
+```
+
+This enables the Cargo `mesh-bvh` feature **and** flips the JS feature flag (`web/features.js` → `features.meshBvh: true`), wiring `mesh-bvh-addon.js` to the real implementation instead of the stub.
+
+Import the addon in browser apps:
+
+```js
+import { isMeshBvhEnabled, installMeshBvh, MeshBVH, StaticGeometryGenerator } from './mesh-bvh-addon.js';
+if (!isMeshBvhEnabled()) throw new Error('Rebuild with MESH_BVH=1 web/build.sh');
+installMeshBvh(THREE);
+geom.boundsTree = new MeshBVH(geom);
+```
+
+Verify: `node web/scripts/check-mesh-bvh.mjs` (after `MESH_BVH=1` build).
+
+Flagged parity scenes: `tests/parity/scenes-manifest-mesh-bvh.json` — run via `node tests/parity/run-mesh-bvh.js` (after `MESH_BVH=1 web/build.sh`).

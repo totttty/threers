@@ -18,7 +18,12 @@ if [ "$PROFILE" = "release" ]; then
 fi
 
 echo "==> Building threers ($PROFILE) for wasm32-unknown-unknown..."
-cargo build --target wasm32-unknown-unknown --lib $PROFILE_FLAG
+FEATURES=""
+if [ "${MESH_BVH:-}" = "1" ]; then
+    FEATURES="--features mesh-bvh"
+    echo "    (mesh-bvh feature enabled)"
+fi
+cargo build --target wasm32-unknown-unknown --lib $PROFILE_FLAG $FEATURES
 
 echo "==> Generating JS bindings into web/pkg..."
 wasm-bindgen \
@@ -28,7 +33,7 @@ wasm-bindgen \
     --no-typescript
 
 echo "==> Patching WebGPU device limits for browser compatibility..."
-"$WEB/post-build.sh"
+MESH_BVH="${MESH_BVH:-}" "$WEB/post-build.sh"
 
 echo "==> Done. Open web/index.html with a static server (e.g. python3 -m http.server -d web)."
 echo "    Browser must support WebGPU (Chrome 113+ or Firefox Nightly with flag)."

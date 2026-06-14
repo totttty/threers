@@ -51,6 +51,8 @@ if (!changed) {
 
 node scripts/generate-shim-types.mjs
 
+MESH_BVH="${MESH_BVH:-}" node scripts/generate-mesh-bvh-addon.mjs
+
 # Dev parity UI reads this to bust browser cache after rebuilds.
 date +%s > pkg/build-id.txt
 echo "==> wrote pkg/build-id.txt"

@@ -108,6 +108,26 @@ impl Raycaster {
             f32::INFINITY
         };
 
+        #[cfg(feature = "mesh-bvh")]
+        if let Some(bvh) = &mesh.geometry.bounds_tree {
+            let near_local = self.near * inv_world_scale(&obj.matrix_world);
+            let hits = bvh.raycast(&local_ray, near_local, max_local_t, false);
+            for hit in hits {
+                let world_point = hit.point.apply_matrix4(&obj.matrix_world);
+                let world_distance = (world_point - self.ray.origin).length();
+                if world_distance < self.near || world_distance > self.far {
+                    continue;
+                }
+                out.push(Intersection {
+                    distance: world_distance,
+                    point: world_point,
+                    face_index: hit.face_index,
+                    object: id,
+                });
+            }
+            return;
+        }
+
         let positions: Vec<Vector3> = match mesh.geometry.positions() {
             Some(it) => it.collect(),
             None => return,

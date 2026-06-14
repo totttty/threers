@@ -2335,14 +2335,52 @@ export class AnimationMixer {
 
 // ---- Controls ----
 export class OrbitControls {
-    constructor(camera, _dom) {
+    constructor(camera, domElement) {
         this._w = new WebOrbitControls(camera._w);
         this._camera = camera;
+        this.domElement = domElement;
+        this.enabled = true;
+        this._rotating = false;
+        this._panning = false;
+        this._lastX = 0;
+        this._lastY = 0;
+        if (domElement?.addEventListener) {
+            domElement.addEventListener('pointerdown', (e) => {
+                this._rotating = e.button === 0;
+                this._panning = e.button === 2;
+                this._lastX = e.clientX;
+                this._lastY = e.clientY;
+            });
+            domElement.addEventListener('pointermove', (e) => {
+                if (!this.enabled || (!this._rotating && !this._panning)) return;
+                const dx = e.clientX - this._lastX;
+                const dy = e.clientY - this._lastY;
+                this._lastX = e.clientX;
+                this._lastY = e.clientY;
+                this.update(dx, dy, 0, this._rotating, this._panning);
+            });
+            domElement.addEventListener('pointerup', () => { this._rotating = false; this._panning = false; });
+            domElement.addEventListener('wheel', (e) => {
+                if (!this.enabled) return;
+                e.preventDefault();
+                this.update(0, 0, e.deltaY, false, false);
+            }, { passive: false });
+        }
     }
     update(dx = 0, dy = 0, wheel = 0, rotating = false, panning = false) {
-        const w = (typeof window !== 'undefined' ? window.innerWidth : 800);
-        const h = (typeof window !== 'undefined' ? window.innerHeight : 600);
+        const w = this.domElement?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 800);
+        const h = this.domElement?.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 600);
         this._w.update(this._camera._w, dx, dy, wheel, rotating, panning, w, h);
+        if (dx || dy || wheel || rotating || panning) this._syncFromWasm();
+    }
+    _syncFromWasm() {
+        const p = this._camera._w.readPosition();
+        const t = this._camera._w.readTarget();
+        this._camera.position.set(p.x, p.y, p.z);
+        this._camera._lookAt.set(t.x, t.y, t.z);
+    }
+    resetFromCamera() {
+        this._w = new WebOrbitControls(this._camera._w);
     }
 }
 export class TrackballControls {

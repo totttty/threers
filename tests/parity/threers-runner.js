@@ -5,6 +5,10 @@
 const _assetV = new URLSearchParams(location.search).get('v') || '';
 const _shimUrl = `/web/threejs-shim.js${_assetV ? `?v=${encodeURIComponent(_assetV)}` : ''}`;
 const { default: THREE, initThreers, seedRandom } = await import(_shimUrl);
+import { buildInitialRender, buildThreersOrbitTail, detectCamVar } from '/tests/parity/parity-interact.js';
+import { installOrbitSyncBridge } from '/tests/parity/parity-orbit-sync.js';
+
+installOrbitSyncBridge();
 
 const canvas = document.getElementById('c');
 const errEl = document.getElementById('err');
@@ -12,22 +16,66 @@ const errEl = document.getElementById('err');
 /** @type {import('/web/threejs-shim.js').WebGLRenderer | null} */
 let renderer = null;
 
+/** mesh-bvh addon exports when wasm was built with MESH_BVH=1 (null otherwise). */
+let meshBvh = null;
+
 /** Safari does not expose `AsyncFunction` as a global — derive it from async fn syntax. */
 const AsyncFunction = (async function () {}).constructor;
+
+function sceneNeedsMeshBvh(html) {
+    return /\bMeshBVH\b/.test(html)
+        || /\bNOT_INTERSECTED\b/.test(html)
+        || /\bINTERSECTED\b/.test(html)
+        || /\bacceleratedRaycast\b/.test(html)
+        || /\bshapecast\s*\(/.test(html);
+}
+
+function meshBvhUrl() {
+    return `/web/mesh-bvh-addon.js${_assetV ? `?v=${encodeURIComponent(_assetV)}` : ''}`;
+}
+
+function featuresUrl() {
+    return `/web/features.js${_assetV ? `?v=${encodeURIComponent(_assetV)}` : ''}`;
+}
+
+async function ensureMeshBvh() {
+    if (meshBvh) return meshBvh;
+    const featMod = await import(featuresUrl());
+    if (!featMod.features?.meshBvh) {
+        throw new Error('mesh-bvh scenes require MESH_BVH=1 web/build.sh (features.meshBvh is false)');
+    }
+    meshBvh = await import(meshBvhUrl());
+    meshBvh.installMeshBvh(THREE);
+    return meshBvh;
+}
+
+function meshBvhBindings() {
+    if (!meshBvh) return '';
+    return [
+        'const MeshBVH = meshBvh.MeshBVH;',
+        'const NOT_INTERSECTED = meshBvh.NOT_INTERSECTED;',
+        'const INTERSECTED = meshBvh.INTERSECTED;',
+        'const CONTAINED = meshBvh.CONTAINED;',
+        'const acceleratedRaycast = meshBvh.acceleratedRaycast;',
+        'const computeBoundsTree = meshBvh.computeBoundsTree;',
+        'const disposeBoundsTree = meshBvh.disposeBoundsTree;',
+        'const StaticGeometryGenerator = meshBvh.StaticGeometryGenerator;',
+    ].join('\n');
+}
 
 function extractSceneSetup(html) {
     const mod = html.match(/<script[^>]*type=["']module["'][^>]*>([\s\S]*?)<\/script>/i);
     if (!mod) throw new Error('no module script in scene html');
     let body = mod[1];
-    body = body.replace(/^import[\s\S]*?;\s*/m, '');
+    body = body.replace(/^import\s[\s\S]*?;\s*/gm, '');
     body = body.replace(/^const errEl[\s\S]*?;\s*/m, '');
     body = body.replace(/^function showError\([\s\S]*?\}\s*/m, '');
     body = body.replace(/^\s*(?:const|let)\s+canvas\s*=\s*document\.getElementById\([^)]+\);\s*/gm, '');
     body = body.replace(/\(async \(\) => \{[\s\S]*?try \{[\s\S]*?await initThreers\(\s*['"][^'"]+['"]\s*\);\s*/m, '');
     // Scenes without try/catch (e.g. ssao-rtcopy).
     body = body.replace(/\(async \(\) => \{[\s\S]*?await initThreers\(\s*['"][^'"]+['"]\s*\);\s*/m, '');
+    body = body.replace(/^\s*installMeshBvh\(THREE\);\s*/gm, '');
     body = body.replace(/^\}\)\(\);\s*/m, '');
-    // Non-greedy — nested parens in getElementById('c') break [^)]+ patterns.
     body = body.replace(/^\s*const r = await THREE\.WebGLRenderer\.create\([\s\S]*?\);\s*/gm, '');
     body = body.replace(/^\s*const renderer = await THREE\.WebGLRenderer\.create\([\s\S]*?\);\s*/gm, '');
     // Drop bootstrap setSize right after renderer create (runner sets size once up front).
@@ -59,29 +107,24 @@ function setupPresents(setup) {
 }
 
 function buildRenderTail(setup) {
-    if (/\bEffectComposer\b/.test(setup)) {
-        return 'await composer.render();';
-    }
-    if (/\bawait\s+composer\.render\s*\(\s*\)/.test(setup)) {
-        return 'await composer.render();';
-    }
-    if (/\bcomposer\.render\s*\(\s*\)/.test(setup)) {
-        return 'composer.render();';
-    }
-    if (setupPresents(setup)) {
-        return '';
-    }
-    return 'r.render(scene, cam);';
+    const expr = buildInitialRender(setup, { threers: true });
+    if (expr) return expr;
+    if (setupPresents(setup)) return '';
+    const cam = detectCamVar(setup);
+    return cam ? `r.render(scene, ${cam});` : '';
 }
 
 function buildSceneFn(setup) {
     const tail = buildRenderTail(setup);
+    const orbitTail = buildThreersOrbitTail(setup);
     const body = [
+        meshBvhBindings(),
         setup,
         tail,
         'await new Promise((rs) => requestAnimationFrame(rs));',
+        orbitTail,
     ].filter(Boolean).join('\n');
-    return new AsyncFunction('THREE', 'renderer', 'canvas', 'seedRandom', body);
+    return new AsyncFunction('THREE', 'renderer', 'canvas', 'seedRandom', 'meshBvh', body);
 }
 
 async function runScene(slug) {
@@ -100,9 +143,10 @@ async function runScene(slug) {
     const res = await fetch(`/tests/parity/scenes/threers-${slug}.html`);
     if (!res.ok) throw new Error(`scene not found: threers-${slug}.html`);
     const html = await res.text();
+    if (sceneNeedsMeshBvh(html)) await ensureMeshBvh();
     const setup = extractSceneSetup(html);
     const run = buildSceneFn(setup);
-    await run(THREE, renderer, canvas, seedRandom);
+    await run(THREE, renderer, canvas, seedRandom, meshBvh);
     document.body.dataset.ready = 'true';
 }
 
@@ -138,6 +182,15 @@ async function wasmUrl() {
 
 try {
     await initThreers(await wasmUrl());
+    try {
+        const featMod = await import(featuresUrl());
+        if (featMod.features?.meshBvh) {
+            meshBvh = await import(meshBvhUrl());
+            meshBvh.installMeshBvh(THREE);
+        }
+    } catch (e) {
+        console.warn('mesh-bvh addon not loaded at boot', e);
+    }
     renderer = await THREE.WebGLRenderer.create(canvas);
     renderer.setSize(800, 600, false);
     window.parent.postMessage({ type: 'parity-threers-boot', ok: true }, '*');

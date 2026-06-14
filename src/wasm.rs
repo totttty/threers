@@ -999,6 +999,24 @@ impl WebCamera {
         }
     }
 
+    #[wasm_bindgen(js_name = readPosition)]
+    pub fn read_position(&self) -> WebVector3 {
+        let p = match &self.inner {
+            CameraInner::Perspective(c) => c.position,
+            CameraInner::Orthographic(c) => c.position,
+        };
+        WebVector3::new(p.x, p.y, p.z)
+    }
+
+    #[wasm_bindgen(js_name = readTarget)]
+    pub fn read_target(&self) -> WebVector3 {
+        let t = match &self.inner {
+            CameraInner::Perspective(c) => c.target,
+            CameraInner::Orthographic(c) => c.target,
+        };
+        WebVector3::new(t.x, t.y, t.z)
+    }
+
     #[wasm_bindgen(js_name = lookAt)]
     pub fn look_at(&mut self, x: f32, y: f32, z: f32) {
         match &mut self.inner {
@@ -1842,6 +1860,12 @@ impl WebGeometry {
     #[wasm_bindgen(js_name = boxLine)]
     pub fn box_line(w: f32, h: f32, d: f32) -> WebGeometry {
         WebGeometry { inner: Arc::new(crate::BoxLineGeometry::new(w, h, d)) }
+    }
+
+    /// Clone into a `WebBufferGeometry` handle (same underlying data).
+    #[wasm_bindgen(js_name = toBufferGeometry)]
+    pub fn to_buffer_geometry(&self) -> WebBufferGeometry {
+        WebBufferGeometry { inner: self.inner.clone() }
     }
 }
 
@@ -3049,6 +3073,25 @@ impl WebBufferGeometry {
     pub fn draw_count(&self) -> usize { self.inner.draw_count() }
 }
 
+#[cfg(all(target_arch = "wasm32", feature = "mesh-bvh"))]
+#[wasm_bindgen]
+impl WebBufferGeometry {
+    #[wasm_bindgen(js_name = getAttributeArray)]
+    pub fn get_attribute_array(&self, name: &str) -> Option<Vec<f32>> {
+        self.inner.get_attribute(name).map(|a| a.array.clone())
+    }
+
+    #[wasm_bindgen(js_name = getAttributeItemSize)]
+    pub fn get_attribute_item_size(&self, name: &str) -> Option<usize> {
+        self.inner.get_attribute(name).map(|a| a.item_size)
+    }
+
+    #[wasm_bindgen(js_name = getIndexArray)]
+    pub fn get_index_array(&self) -> Option<Vec<u32>> {
+        self.inner.index.clone()
+    }
+}
+
 // Convert a user-built BufferGeometry into a WebGeometry handle.
 #[wasm_bindgen]
 impl WebGeometry {
@@ -3056,4 +3099,178 @@ impl WebGeometry {
     pub fn from_buffer_geometry(g: WebBufferGeometry) -> WebGeometry {
         WebGeometry { inner: g.inner }
     }
+}
+
+// ======================================================================
+//                         MESH BVH (feature mesh-bvh)
+// ======================================================================
+
+#[cfg(all(target_arch = "wasm32", feature = "mesh-bvh"))]
+#[wasm_bindgen]
+pub struct WebMeshBvh {
+    pub(crate) inner: Arc<crate::mesh_bvh::MeshBvh>,
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mesh-bvh"))]
+#[wasm_bindgen]
+impl WebMeshBvh {
+    #[wasm_bindgen(constructor)]
+    pub fn new(geometry: &WebBufferGeometry) -> Result<WebMeshBvh, JsValue> {
+        Self::new_with_options(geometry, 40, 10)
+    }
+
+    #[wasm_bindgen(js_name = newWithOptions)]
+    pub fn new_with_options(
+        geometry: &WebBufferGeometry,
+        max_depth: u32,
+        max_leaf_tris: u32,
+    ) -> Result<WebMeshBvh, JsValue> {
+        let options = crate::mesh_bvh::BuildOptions {
+            strategy: crate::mesh_bvh::CENTER,
+            max_depth,
+            max_leaf_tris,
+        };
+        let bvh = crate::mesh_bvh::MeshBvh::build(&geometry.inner, options)
+            .ok_or_else(|| JsValue::from_str("failed to build MeshBVH"))?;
+        Ok(WebMeshBvh { inner: Arc::new(bvh) })
+    }
+
+    /// Packed hits: per entry `[distance, px, py, pz, face_index, u, v]`.
+    pub fn raycast(
+        &self,
+        ox: f32,
+        oy: f32,
+        oz: f32,
+        dx: f32,
+        dy: f32,
+        dz: f32,
+        near: f32,
+        far: f32,
+    ) -> Vec<f32> {
+        let ray = crate::Ray::new(
+            crate::Vector3::new(ox, oy, oz),
+            crate::Vector3::new(dx, dy, dz),
+        );
+        let hits = self.inner.raycast(&ray, near, far, false);
+        pack_hits(&hits)
+    }
+
+    /// Closest hit packed as `[distance, px, py, pz, face_index, u, v]`, or empty vec.
+    #[wasm_bindgen(js_name = raycastFirst)]
+    pub fn raycast_first(
+        &self,
+        ox: f32,
+        oy: f32,
+        oz: f32,
+        dx: f32,
+        dy: f32,
+        dz: f32,
+        near: f32,
+        far: f32,
+    ) -> Vec<f32> {
+        let ray = crate::Ray::new(
+            crate::Vector3::new(ox, oy, oz),
+            crate::Vector3::new(dx, dy, dz),
+        );
+        match self.inner.raycast_first(&ray, near, far, false) {
+            Some(h) => pack_hits(&[h]),
+            None => Vec::new(),
+        }
+    }
+
+    #[wasm_bindgen(js_name = getBoundingBox)]
+    pub fn get_bounding_box(&self) -> WebBox3 {
+        WebBox3 { inner: self.inner.bounding_box() }
+    }
+
+    #[wasm_bindgen(js_name = nodeBuffer)]
+    pub fn node_buffer(&self) -> Vec<f32> {
+        self.inner.node_buffer().to_vec()
+    }
+
+    #[wasm_bindgen(js_name = nodeCount)]
+    pub fn node_count(&self) -> usize {
+        self.inner.node_count()
+    }
+
+    #[wasm_bindgen(js_name = triangleCount)]
+    pub fn triangle_count(&self) -> usize {
+        self.inner.triangle_count()
+    }
+
+    #[wasm_bindgen(js_name = triangleIndices)]
+    pub fn triangle_indices(&self) -> Vec<u32> {
+        self.inner
+            .triangle_indices()
+            .iter()
+            .flat_map(|(a, b, c)| [*a, *b, *c])
+            .collect()
+    }
+
+    pub fn positions(&self) -> Vec<f32> {
+        self.inner.positions().to_vec()
+    }
+
+    #[wasm_bindgen(js_name = triangleOrder)]
+    pub fn triangle_order(&self) -> Vec<u32> {
+        self.inner.triangle_order().iter().map(|&i| i as u32).collect()
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mesh-bvh"))]
+fn pack_hits(hits: &[crate::mesh_bvh::BvhHit]) -> Vec<f32> {
+    let mut out = Vec::with_capacity(hits.len() * 7);
+    for h in hits {
+        out.push(h.distance);
+        out.push(h.point.x);
+        out.push(h.point.y);
+        out.push(h.point.z);
+        out.push(h.face_index as f32);
+        out.push(h.uv.x);
+        out.push(h.uv.y);
+    }
+    out
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mesh-bvh"))]
+#[wasm_bindgen]
+impl WebBufferGeometry {
+    #[wasm_bindgen(js_name = computeBoundsTree)]
+    pub fn compute_bounds_tree(
+        &mut self,
+        max_depth: u32,
+        max_leaf_tris: u32,
+    ) -> Result<WebMeshBvh, JsValue> {
+        let options = crate::mesh_bvh::BuildOptions {
+            strategy: crate::mesh_bvh::CENTER,
+            max_depth,
+            max_leaf_tris,
+        };
+        let bvh = Arc::make_mut(&mut self.inner)
+            .compute_bounds_tree(options)
+            .ok_or_else(|| JsValue::from_str("failed to build bounds tree"))?;
+        Ok(WebMeshBvh { inner: bvh })
+    }
+
+    #[wasm_bindgen(js_name = disposeBoundsTree)]
+    pub fn dispose_bounds_tree(&mut self) {
+        Arc::make_mut(&mut self.inner).dispose_bounds_tree();
+    }
+
+    #[wasm_bindgen(js_name = hasBoundsTree)]
+    pub fn has_bounds_tree(&self) -> bool {
+        self.inner.bounds_tree.is_some()
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", feature = "mesh-bvh"))]
+#[wasm_bindgen(js_name = mergeGeometries)]
+pub fn merge_geometries(geometries: Vec<WebBufferGeometry>) -> Result<WebBufferGeometry, JsValue> {
+    if geometries.is_empty() {
+        return Err(JsValue::from_str("mergeGeometries: empty input"));
+    }
+    let refs: Vec<crate::BufferGeometry> = geometries.iter().map(|g| (*g.inner).clone()).collect();
+    let merged = crate::merge_geometries(&refs)
+        .ok_or_else(|| JsValue::from_str("mergeGeometries: incompatible geometries"))?;
+    Ok(WebBufferGeometry { inner: Arc::new(merged) })
 }

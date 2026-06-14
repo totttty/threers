@@ -49,6 +49,9 @@ pub mod scene;
 pub mod wasm;
 pub mod renderer;
 
+#[cfg(feature = "mesh-bvh")]
+pub mod mesh_bvh;
+
 #[cfg(target_arch = "wasm32")]
 #[macro_export]
 macro_rules! log {
@@ -150,3 +153,6 @@ pub use extras::{MarchingCubes, CcdIkSolver, IkBone, Octree, SimplexNoise, Pmrem
 pub use stats::Stats;
 pub use scene::Scene;
 pub use renderer::{Renderer, RenderTarget};
+
+#[cfg(feature = "mesh-bvh")]
+pub use mesh_bvh::{MeshBvh, BvhHit, BuildOptions as MeshBvhBuildOptions, CENTER, NOT_INTERSECTED, INTERSECTED, CONTAINED};

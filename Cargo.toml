@@ -9,6 +9,10 @@ readme = "README.md"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+mesh-bvh = []
+
 [dependencies]
 wgpu = "0.20"
 bytemuck = { version = "1.16", features = ["derive"] }
@@ -76,3 +80,8 @@ path = "examples/physical.rs"
 [[example]]
 name = "shadow"
 path = "examples/shadow.rs"
+
+[[example]]
+name = "mesh_bvh_picking"
+path = "examples/mesh_bvh_picking.rs"
+required-features = ["mesh-bvh"]

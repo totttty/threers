@@ -6,13 +6,14 @@
     <title>threers — three.js-shaped Rust/wasm demo</title>
     <style>
         body { margin: 0; overflow: hidden; background: #111; color: #ccc; font-family: monospace; }
-        #info { position: absolute; top: 8px; left: 8px; padding: 6px 10px; background: rgba(0,0,0,0.5); border-radius: 4px; }
-        canvas { display: block; width: 100vw; height: 100vh; }
+        #info { position: absolute; top: 8px; left: 8px; padding: 6px 10px; background: rgba(0,0,0,0.5); border-radius: 4px; z-index: 1; }
+        canvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+        canvas:active { cursor: grabbing; }
         #error { position: absolute; bottom: 12px; left: 12px; right: 12px; padding: 12px; background: #500; color: #fdd; white-space: pre-wrap; font-size: 12px; display: none; }
     </style>
 </head>
 <body>
-    <div id="info">threers — drop-in three.js shim demo (rotating cube)</div>
+    <div id="info">threers — drop-in three.js shim demo · drag to orbit · <a href="/tests/parity/" style="color:#8cf">parity compare</a></div>
     <canvas id="canvas"></canvas>
     <div id="error"></div>
 
@@ -54,6 +55,8 @@
             camera.position.set(2.5, 2.0, 3.5);
             camera.lookAt(0, 0, 0);
 
+            const controls = new THREE.OrbitControls(camera, canvas);
+
             window.addEventListener('resize', () => {
                 const dpr = Math.min(window.devicePixelRatio || 1, 2);
                 const w = Math.floor(window.innerWidth * dpr);
@@ -63,10 +66,8 @@
                 camera.updateProjectionMatrix();
             });
 
-            let t0 = performance.now();
             function frame() {
-                const t = (performance.now() - t0) * 0.001;
-                cube.rotation.set(t * 0.7, t * 1.1, 0);
+                controls.update();
                 renderer.render(scene, camera);
                 requestAnimationFrame(frame);
             }

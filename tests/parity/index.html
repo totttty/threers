@@ -223,6 +223,16 @@
             flex-shrink: 0;
             flex-wrap: wrap;
         }
+        .sync-orbit {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: var(--muted);
+            cursor: pointer;
+            user-select: none;
+        }
+        .sync-orbit input { accent-color: var(--accent, #6af); }
         #scene-title {
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             font-size: 16px;
@@ -518,12 +528,16 @@
                     <button type="button" class="btn" id="btn-prev" aria-label="Previous scene">◀</button>
                     <button type="button" class="btn" id="btn-next" aria-label="Next scene">▶</button>
                     <button type="button" class="btn" id="btn-reload" title="Reload (R)">↻</button>
+                    <label class="sync-orbit" title="Keep three.js and threers cameras aligned while orbiting">
+                        <input type="checkbox" id="sync-orbit" checked>
+                        Sync orbit
+                    </label>
                     <h2 id="scene-title">—</h2>
                     <span id="scene-counter">—</span>
                     <span id="scene-stat" class="stat muted">—</span>
                     <p id="scene-apis"></p>
                 </div>
-                <p class="hint">Navigate with <kbd>←</kbd> <kbd>→</kbd> or <kbd>J</kbd> <kbd>K</kbd> · reload <kbd>R</kbd> · run <code>node run.js</code> to refresh diff stats</p>
+                <p class="hint">Navigate with <kbd>←</kbd> <kbd>→</kbd> or <kbd>J</kbd> <kbd>K</kbd> · reload <kbd>R</kbd> · drag to orbit · right-drag pan · wheel zoom · enable <strong>Sync orbit</strong> to mirror camera between panes · run <code>node run.js</code> to refresh diff stats · mesh-bvh scenes need <code>MESH_BVH=1 web/build.sh</code></p>
                 <div class="compare-wrap">
                     <div class="pane">
                         <div class="pane-head">

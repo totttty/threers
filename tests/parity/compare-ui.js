@@ -74,6 +74,10 @@ function initTheme() {
 let SCENES = [];
 let SCENE_API_MAP = {};
 let APPROXIMATE_SCENES = [];
+/** Scene slugs that need optional wasm/shim features (e.g. mesh-bvh). */
+let FEATURE_SCENES = new Map();
+/** @type {string | null} */
+let meshBvhBuildEnabled = null;
 
 let stats = new Map();
 /** Latest iframe boot/render result — overrides stale compare-results device errors. */
@@ -81,18 +85,23 @@ const liveSceneStatus = new Map();
 
 let index = 0;
 let gridMode = false;
+let syncOrbitEnabled = true;
+/** @type {string} */
+let lastOrbitRelayKey = '';
 /** Persistent threers runner — wasm/WebGPU init once per compare session. */
 let threersRunnerReady = false;
 let threersRunnerBoot = null;
 /** Bust iframe cache after wasm/shim rebuilds (from build-id.txt or ↻ / R). */
 let iframeCacheBust = '';
+/** Bump when threers-runner.js changes (paired with wasm build-id for ?v= cache bust). */
+const THREERS_RUNNER_REV = 4;
 
 async function fetchAssetVersion() {
     try {
         const res = await fetch('/web/pkg/build-id.txt', { cache: 'no-store' });
-        if (res.ok) return (await res.text()).trim();
+        if (res.ok) return `${(await res.text()).trim()}-r${THREERS_RUNNER_REV}`;
     } catch (_) { /* optional */ }
-    return String(Date.now());
+    return `${Date.now()}-r${THREERS_RUNNER_REV}`;
 }
 /** @type {Map<string, { path: string, display: string, full: string, url?: string }>} */
 const sourceCache = new Map();
@@ -371,6 +380,7 @@ const els = {
     btnNext: document.getElementById('btn-next'),
     btnReload: document.getElementById('btn-reload'),
     btnOpenScene: document.getElementById('btn-open-scene'),
+    syncOrbit: document.getElementById('sync-orbit'),
 };
 
 function slugFromHash() {
@@ -431,7 +441,8 @@ function renderList(filter = '') {
         li.dataset.index = String(i);
         const r = stats.get(slug);
         const pct = r && r.pct != null ? `${r.pct.toFixed(2)}%` : '—';
-        li.innerHTML = `<span class="slug">${slug}</span><span class="pct">${pct}</span>`;
+        const feat = FEATURE_SCENES.has(slug) ? ' · mesh-bvh' : '';
+        li.innerHTML = `<span class="slug">${slug}${feat}</span><span class="pct">${pct}</span>`;
         li.addEventListener('click', () => goTo(i));
         els.list.appendChild(li);
     });
@@ -465,6 +476,64 @@ function syncViewMode() {
     document.body.classList.toggle('mode-grid', gridMode);
 }
 
+function broadcastOrbitSyncEnabled(enabled, seedState = null) {
+    const msg = { type: 'parity-orbit-sync-enabled', enabled };
+    if (seedState) msg.seedState = seedState;
+    try { els.threeFrame?.contentWindow?.postMessage(msg, '*'); } catch (_) { /* not ready */ }
+    try { els.threersFrame?.contentWindow?.postMessage(msg, '*'); } catch (_) { /* not ready */ }
+}
+
+function requestOrbitState(frame, source) {
+    return new Promise((resolve) => {
+        const onMsg = (event) => {
+            const d = event.data;
+            if (!d || d.type !== 'parity-orbit-state' || d.source !== source) return;
+            window.removeEventListener('message', onMsg);
+            resolve(d.state || null);
+        };
+        window.addEventListener('message', onMsg);
+        setTimeout(() => {
+            window.removeEventListener('message', onMsg);
+            resolve(null);
+        }, 500);
+        try {
+            frame?.contentWindow?.postMessage({ type: 'parity-orbit-get-state' }, '*');
+        } catch (_) {
+            window.removeEventListener('message', onMsg);
+            resolve(null);
+        }
+    });
+}
+
+async function alignOrbitsFromThree() {
+    const state = await requestOrbitState(els.threeFrame, 'three');
+    if (!state) return;
+    lastOrbitRelayKey = `${state.position.x.toFixed(4)},${state.position.y.toFixed(4)},${state.position.z.toFixed(4)}|${state.target.x.toFixed(4)},${state.target.y.toFixed(4)},${state.target.z.toFixed(4)}`;
+    try {
+        els.threersFrame?.contentWindow?.postMessage({
+            type: 'parity-orbit-sync',
+            from: 'three',
+            state,
+        }, '*');
+    } catch (_) { /* not ready */ }
+}
+
+function handleOrbitRelay(event) {
+    const d = event.data;
+    if (!d || d.type !== 'parity-orbit-change' || !syncOrbitEnabled) return;
+    const key = `${d.state.position.x.toFixed(4)},${d.state.position.y.toFixed(4)},${d.state.position.z.toFixed(4)}|${d.state.target.x.toFixed(4)},${d.state.target.y.toFixed(4)},${d.state.target.z.toFixed(4)}`;
+    if (key === lastOrbitRelayKey) return;
+    lastOrbitRelayKey = key;
+    const target = d.source === 'three' ? els.threersFrame : els.threeFrame;
+    try {
+        target?.contentWindow?.postMessage({
+            type: 'parity-orbit-sync',
+            from: d.source,
+            state: d.state,
+        }, '*');
+    } catch (_) { /* not ready */ }
+}
+
 function waitPostMessage(type, slug, timeoutMs = 45000) {
     return new Promise((resolve) => {
         const start = Date.now();
@@ -492,6 +561,7 @@ async function ensureThreersRunner(forceReload = false) {
     if (forceReload) {
         threersRunnerReady = false;
         threersRunnerBoot = null;
+        iframeCacheBust = `${await fetchAssetVersion()}-${Date.now()}`;
     }
     if (threersRunnerReady) return threersRunnerBoot;
 
@@ -509,6 +579,9 @@ async function ensureThreersRunner(forceReload = false) {
 
 async function loadThreersScene(slug, { forceReload = false } = {}) {
     await ensureThreersRunner(forceReload);
+    if (FEATURE_SCENES.has(slug) && meshBvhBuildEnabled === false) {
+        throw new Error('mesh-bvh not in wasm build — run: MESH_BVH=1 web/build.sh');
+    }
     els.threersFrame.contentWindow.postMessage({ type: 'parity-scene', slug }, '*');
     const msg = await waitPostMessage('parity-threers', slug);
     if (!msg.ok) throw new Error(msg.err || 'render error');
@@ -572,6 +645,10 @@ async function pollFrames(forceThreersReload = false) {
         els.stat.className = `stat ${st.cls}`;
         renderList(els.search.value);
     }
+    if (syncOrbitEnabled) {
+        broadcastOrbitSyncEnabled(true);
+        alignOrbitsFromThree();
+    }
 }
 
 function loadScene(i, { forceReload = false } = {}) {
@@ -586,13 +663,20 @@ function loadScene(i, { forceReload = false } = {}) {
     const apis = SCENE_API_MAP[slug];
     els.apis.textContent = apis && apis.length ? apis.join(', ') : 'core renderer / scene graph';
     if (APPROXIMATE_SCENES.includes(slug)) els.apis.textContent += ' · approximate';
+    const feat = FEATURE_SCENES.get(slug);
+    if (feat) {
+        els.apis.textContent += ` · feature:${feat} (MESH_BVH=1 web/build.sh)`;
+        if (meshBvhBuildEnabled === false) {
+            els.apis.textContent += ' · wasm build missing mesh-bvh';
+        }
+    }
 
     if (forceReload) {
         iframeCacheBust = String(Date.now());
         threersRunnerReady = false;
     }
-    const bust = iframeCacheBust ? `?v=${iframeCacheBust}` : '';
-    els.threeFrame.src = `${BASE}/threejs-${slug}.html${bust}`;
+    const bust = iframeCacheBust ? `&v=${encodeURIComponent(iframeCacheBust)}` : '';
+    els.threeFrame.src = `/tests/parity/threejs-runner.html?slug=${encodeURIComponent(slug)}${bust}`;
     // threers: persistent runner (postMessage scene swap) — no per-scene iframe reload.
 
     if (els.btnOpenScene) els.btnOpenScene.href = `${BASE}/threejs-${slug}.html`;
@@ -612,25 +696,56 @@ function step(delta) {
 }
 
 async function loadManifest() {
-    const res = await fetch('/tests/parity/scenes-manifest.json');
-    if (!res.ok) throw new Error('scenes-manifest.json missing — run node generate-scenes.js');
-    const data = await res.json();
-    SCENES = data.scenes;
-    SCENE_API_MAP = data.apiMap || {};
+    const [mainRes, bvhRes] = await Promise.all([
+        fetch('/tests/parity/scenes-manifest.json'),
+        fetch('/tests/parity/scenes-manifest-mesh-bvh.json'),
+    ]);
+    if (!mainRes.ok) throw new Error('scenes-manifest.json missing — run node generate-scenes.js');
+    const data = await mainRes.json();
+    SCENES = [...data.scenes];
+    SCENE_API_MAP = { ...(data.apiMap || {}) };
     APPROXIMATE_SCENES = data.approximate || [];
+
+    if (bvhRes.ok) {
+        const bvh = await bvhRes.json();
+        const flag = bvh.feature || 'mesh-bvh';
+        for (const slug of bvh.scenes || []) {
+            if (!SCENES.includes(slug)) SCENES.push(slug);
+            FEATURE_SCENES.set(slug, flag);
+        }
+        Object.assign(SCENE_API_MAP, bvh.apiMap || {});
+    }
+}
+
+async function loadMeshBvhBuildFlag() {
+    try {
+        const bust = iframeCacheBust ? `?v=${encodeURIComponent(iframeCacheBust)}` : '';
+        const res = await fetch(`/web/features.js${bust}`);
+        if (!res.ok) { meshBvhBuildEnabled = false; return; }
+        const text = await res.text();
+        meshBvhBuildEnabled = /meshBvh:\s*true/.test(text);
+    } catch (_) {
+        meshBvhBuildEnabled = false;
+    }
 }
 
 async function loadStats() {
-    try {
-        const bust = iframeCacheBust ? `?v=${encodeURIComponent(iframeCacheBust)}` : '';
-        const res = await fetch(`/tests/parity/out/compare-results.json${bust}`);
-        if (!res.ok) return;
-        const ct = res.headers.get('content-type') || '';
-        if (!ct.includes('json')) return;
-        const rows = await res.json();
-        if (!Array.isArray(rows)) return;
-        stats = new Map(rows.map(r => [r.scene, r]));
-    } catch (_) { /* optional */ }
+    const rows = [];
+    const bust = iframeCacheBust ? `?v=${encodeURIComponent(iframeCacheBust)}` : '';
+    for (const url of [
+        `/tests/parity/out/compare-results.json${bust}`,
+        `/tests/parity/out/compare-results-mesh-bvh.json${bust}`,
+    ]) {
+        try {
+            const res = await fetch(url);
+            if (!res.ok) continue;
+            const ct = res.headers.get('content-type') || '';
+            if (!ct.includes('json')) continue;
+            const part = await res.json();
+            if (Array.isArray(part)) rows.push(...part);
+        } catch (_) { /* optional */ }
+    }
+    if (rows.length) stats = new Map(rows.map(r => [r.scene, r]));
 }
 
 function bind() {
@@ -681,12 +796,31 @@ function bind() {
         if (e.key === 'ArrowRight' || e.key === 'j') { e.preventDefault(); step(1); }
         if (e.key === 'r') { e.preventDefault(); loadScene(index, { forceReload: true }); }
     });
+
+    if (els.syncOrbit) {
+        els.syncOrbit.addEventListener('change', async () => {
+            syncOrbitEnabled = els.syncOrbit.checked;
+            try { localStorage.setItem('parity-sync-orbit', syncOrbitEnabled ? '1' : '0'); } catch (_) { /* private */ }
+            broadcastOrbitSyncEnabled(syncOrbitEnabled);
+            if (syncOrbitEnabled) await alignOrbitsFromThree();
+        });
+    }
+    window.addEventListener('message', handleOrbitRelay);
 }
 
 async function initCompare() {
     initTheme();
+    syncOrbitEnabled = (() => {
+        try {
+            const v = localStorage.getItem('parity-sync-orbit');
+            if (v === '0') return false;
+            return true;
+        } catch (_) { return true; }
+    })();
+    if (els.syncOrbit) els.syncOrbit.checked = syncOrbitEnabled;
     iframeCacheBust = await fetchAssetVersion();
     await loadManifest();
+    await loadMeshBvhBuildFlag();
     await loadStats();
     bind();
     syncViewMode();

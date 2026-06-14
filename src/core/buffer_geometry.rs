@@ -2,6 +2,9 @@ use std::collections::HashMap;
 use crate::math::{Box3, Sphere, Vector3};
 use super::BufferAttribute;
 
+#[cfg(feature = "mesh-bvh")]
+use std::sync::Arc;
+
 /// A collection of named vertex attributes plus an optional index buffer.
 /// Mirrors three.js's `BufferGeometry`: `geometry.setAttribute("position", ...)`,
 /// `geometry.setIndex(...)`.
@@ -13,6 +16,9 @@ pub struct BufferGeometry {
     pub bounding_sphere: Option<Sphere>,
     /// Bumped whenever attributes/index change so the renderer re-uploads GPU buffers.
     pub geometry_version: u32,
+    /// Optional BVH acceleration structure (three-mesh-bvh `boundsTree`).
+    #[cfg(feature = "mesh-bvh")]
+    pub bounds_tree: Option<Arc<crate::mesh_bvh::MeshBvh>>,
 }
 
 impl BufferGeometry {
@@ -26,6 +32,10 @@ impl BufferGeometry {
         self.bounding_box = None;
         self.bounding_sphere = None;
         self.geometry_version = self.geometry_version.wrapping_add(1);
+        #[cfg(feature = "mesh-bvh")]
+        {
+            self.bounds_tree = None;
+        }
         self
     }
 
@@ -36,6 +46,10 @@ impl BufferGeometry {
     pub fn set_index(&mut self, indices: Vec<u32>) -> &mut Self {
         self.index = Some(indices);
         self.geometry_version = self.geometry_version.wrapping_add(1);
+        #[cfg(feature = "mesh-bvh")]
+        {
+            self.bounds_tree = None;
+        }
         self
     }
 
@@ -86,6 +100,23 @@ impl BufferGeometry {
         let s = Sphere::new(center, max_r2.sqrt());
         self.bounding_sphere = Some(s);
         s
+    }
+
+    /// Build and store a BVH bounds tree on this geometry.
+    #[cfg(feature = "mesh-bvh")]
+    pub fn compute_bounds_tree(
+        &mut self,
+        options: crate::mesh_bvh::BuildOptions,
+    ) -> Option<Arc<crate::mesh_bvh::MeshBvh>> {
+        let bvh = Arc::new(crate::mesh_bvh::MeshBvh::build(self, options)?);
+        self.bounds_tree = Some(bvh.clone());
+        Some(bvh)
+    }
+
+    /// Drop the stored BVH bounds tree.
+    #[cfg(feature = "mesh-bvh")]
+    pub fn dispose_bounds_tree(&mut self) {
+        self.bounds_tree = None;
     }
 }
 
