@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#0a0a0a}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a0a);
+scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+dl.position.set(2, 3, 4);
+scene.add(dl);
+// Procedural 16×16 normal map: tangent-space normals encoded RGB ((n*0.5)+0.5).
+const size = 16;
+const data = new Uint8Array(size * size * 4);
+for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    // Hemisphere bumps: each cell looks like a small bump in tangent space.
+    const u = (x % 4) / 3 - 0.5, v = (y % 4) / 3 - 0.5;
+    const z = Math.sqrt(Math.max(0, 1 - u*u - v*v));
+    const i = (y * size + x) * 4;
+    data[i  ] = Math.round((u * 0.5 + 0.5) * 255);
+    data[i+1] = Math.round((v * 0.5 + 0.5) * 255);
+    data[i+2] = Math.round((z * 0.5 + 0.5) * 255);
+    data[i+3] = 255;
+}
+const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter;
+tex.needsUpdate = true;
+const sphere = new THREE.Mesh(
+    new THREE.SphereGeometry(1.1, 48, 24),
+    new THREE.MeshStandardMaterial({ color: 0xaaaaaa, roughness: 0.4, metalness: 0, normalMap: tex })
+);
+scene.add(sphere);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 3.5); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

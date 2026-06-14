@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#1a1a22}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap;display:none"></div>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const errEl = document.getElementById('err');
+try {
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a22);
+scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+const mat = new THREE.MeshBasicMaterial({ color: 0x88aaff });
+const batch = new THREE.BatchedMesh(9, 4096, 8192, mat);
+
+const cubeG = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+const sphG  = new THREE.SphereGeometry(0.25, 12, 8);
+const conG  = new THREE.ConeGeometry(0.25, 0.5, 8);
+
+const tmp = new THREE.Matrix4();
+const layout = [
+    [cubeG, 0.7],
+    [sphG,  0.0],
+    [conG, -0.7],
+];
+for (const [g, y] of layout) {
+    for (let i = 0; i < 3; i++) {
+        const id = batch.addGeometry(g);
+        tmp.identity().setPosition(-0.7 + i*0.7, y, 0);
+        batch.setMatrixAt(id, tmp);
+    }
+}
+scene.add(batch);
+
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+} catch (e) { errEl.style.display='block'; errEl.textContent = e?.stack || String(e); document.body.dataset.ready = 'error'; }
+</script></body></html>

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>controls examples</title>
+    <link rel="stylesheet" href="/web/examples/controls-demo.css">
+    <style>
+        main { padding: 24px; max-width: 720px; }
+        main h2 { margin: 24px 0 8px; font-size: 16px; }
+        main p { color: var(--muted); line-height: 1.5; }
+        .cards { display: grid; gap: 12px; margin-top: 16px; }
+        .card {
+            display: block;
+            padding: 16px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+        .card:hover { border-color: var(--accent); text-decoration: none; }
+        .card strong { display: block; margin-bottom: 4px; color: var(--text); }
+        .card span { color: var(--muted); font-size: 13px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Camera controls</h1>
+        <nav>
+            <a href="/tests/parity/">parity compare</a>
+            <a href="/web/index.html">main demo</a>
+        </nav>
+    </header>
+    <main>
+        <p>Side-by-side live demos with source code (JavaScript, TypeScript, and Rust for threers).</p>
+        <div class="cards">
+            <a class="card" href="/web/examples/controls-threejs.html">
+                <strong>three.js · OrbitControls</strong>
+                <span>WebGL reference — drop-in controls from examples/jsm</span>
+            </a>
+            <a class="card" href="/web/examples/controls-threers.html">
+                <strong>threers · TrackballControls</strong>
+                <span>wasm/wgpu shim — plus Rust native example</span>
+            </a>
+        </div>
+        <h2>Docs</h2>
+        <p>Full API comparison: <code>docs/controls.md</code> in the repo.</p>
+        <h2>TypeScript</h2>
+        <p>Types: <code>web/threejs-shim.d.ts</code> · validate with <code>cd web && npm run typecheck</code></p>
+        <h2>Run locally</h2>
+        <pre style="background:var(--panel);padding:12px;border-radius:6px;font-size:12px;overflow:auto">cd tests/parity && node server.js
+# open http://localhost:8087/web/examples/</pre>
+    </main>
+</body>
+</html>

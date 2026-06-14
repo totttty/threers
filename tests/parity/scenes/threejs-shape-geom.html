@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#181820}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x181820);
+const shape = new THREE.Shape();
+shape.moveTo(-0.6, -0.5);
+shape.lineTo( 0.6, -0.5);
+shape.lineTo( 0.0,  0.7);
+shape.lineTo(-0.6, -0.5);
+const tri = new THREE.Mesh(
+    new THREE.ShapeGeometry(shape),
+    new THREE.MeshBasicMaterial({ color: 0x77ddaa, side: THREE.DoubleSide })
+);
+scene.add(tri);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 2); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

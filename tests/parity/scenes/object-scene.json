@@ -1,0 +1,36 @@
+{
+  "metadata": { "version": 4.5, "type": "Object", "generator": "test" },
+  "geometries": [
+    {
+      "uuid": "box-g",
+      "type": "BufferGeometry",
+      "data": {
+        "attributes": {
+          "position": { "itemSize": 3, "type": "Float32Array", "array": [-0.5,-0.5,0.5, 0.5,-0.5,0.5, 0.5,0.5,0.5, -0.5,0.5,0.5, -0.5,-0.5,-0.5, 0.5,-0.5,-0.5, 0.5,0.5,-0.5, -0.5,0.5,-0.5], "normalized": false },
+          "normal":   { "itemSize": 3, "type": "Float32Array", "array": [0,0,1,0,0,1,0,0,1,0,0,1, 0,0,-1,0,0,-1,0,0,-1,0,0,-1], "normalized": false }
+        },
+        "index": { "type": "Uint32Array", "array": [0,1,2, 0,2,3, 4,6,5, 4,7,6] }
+      }
+    }
+  ],
+  "materials": [
+    {
+      "uuid": "mat-red",
+      "type": "MeshBasicMaterial",
+      "color": 16729156
+    }
+  ],
+  "object": {
+    "uuid": "root",
+    "type": "Scene",
+    "children": [
+      {
+        "uuid": "mesh-1",
+        "type": "Mesh",
+        "geometry": "box-g",
+        "material": "mat-red",
+        "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+      }
+    ]
+  }
+}

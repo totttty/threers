@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#111}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+        dir.position.set(1, 3, 2);
+        scene.add(dir);
+
+        const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(6, 6),
+            new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.15, metalness: 0.85 })
+        );
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = -0.5;
+        scene.add(floor);
+
+        const cube = new THREE.Mesh(
+            new THREE.BoxGeometry(0.6, 0.6, 0.6),
+            new THREE.MeshStandardMaterial({ color: 0xff5533, roughness: 0.4, metalness: 0.1 })
+        );
+        cube.position.set(0, 0.1, 0);
+        scene.add(cube);
+
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(0, 1.2, 3); cam.lookAt(0, 0, 0);
+
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+
+        const ssr = new THREE.SSRPass({ renderer: r, scene, camera: cam, width: 800, height: 600 });
+        ssr.opacity = 0.55;
+        ssr.maxDistance = 0.4;
+        ssr.renderAndApply(r, scene, cam);
+
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

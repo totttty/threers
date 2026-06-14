@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+html,body{margin:0;background:#101418}
+canvas{display:block;width:800px;height:600px}
+#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap;max-width:100%}
+</style>
+</head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script src="/web/webgpu-limit-patch.js"></script>
+<script type="module">
+const v = new URLSearchParams(location.search).get('v') || '';
+await import(`/tests/parity/threers-runner.js${v ? `?v=${encodeURIComponent(v)}` : ''}`);
+</script>
+</body></html>

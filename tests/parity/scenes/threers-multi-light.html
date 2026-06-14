@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#0a0a14}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0a14);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.2));
+        const dl = new THREE.DirectionalLight(0xffeecc, 0.6);
+        dl.position.set(3, 4, 2);
+        scene.add(dl);
+        const pl = new THREE.PointLight(0x60a0ff, 3.0, 0, 2);
+        pl.position.set(-2, 1, 2);
+        scene.add(pl);
+        const sphere = new THREE.Mesh(
+            new THREE.SphereGeometry(1.0, 32, 16),
+            new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.45, metalness: 0.0 })
+        );
+        scene.add(sphere);
+        const cam = new THREE.PerspectiveCamera(50, 800/600, 0.1, 100);
+        cam.position.set(0, 0.5, 3.8);
+        cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(canvas);
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

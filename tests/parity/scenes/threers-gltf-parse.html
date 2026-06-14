@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#202028}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        // Same inline GLTF as the three.js side.
+        const positions = new Float32Array([0,0,0, 1,0,0, 0,1,0]);
+        const indices  = new Uint32Array([0, 1, 2]);
+        const bin = new Uint8Array(positions.byteLength + indices.byteLength);
+        bin.set(new Uint8Array(positions.buffer), 0);
+        bin.set(new Uint8Array(indices.buffer),  positions.byteLength);
+        const dataURI = 'data:application/octet-stream;base64,' + btoa(String.fromCharCode(...bin));
+        const gltf = {
+            asset: { version: '2.0' },
+            scene: 0,
+            scenes: [{ nodes: [0] }],
+            nodes: [{ mesh: 0, name: 'Tri' }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, material: 0 }] }],
+            materials: [{ pbrMetallicRoughness: { baseColorFactor: [0.8, 0.4, 0.2, 1.0], roughnessFactor: 0.5, metallicFactor: 0 } }],
+            accessors: [
+                { bufferView: 0, componentType: 5126, count: 3, type: 'VEC3' },
+                { bufferView: 1, componentType: 5125, count: 3, type: 'SCALAR' },
+            ],
+            bufferViews: [
+                { buffer: 0, byteOffset: 0, byteLength: 36 },
+                { buffer: 0, byteOffset: 36, byteLength: 12 },
+            ],
+            buffers: [{ uri: dataURI, byteLength: 48 }],
+        };
+        const loader = new THREE.GLTFLoader();
+        // Replicate the GLTF buffer resolution that .load() does, but pass the buffers directly.
+        const buffers = [bin.buffer];
+        const data = loader.parse(gltf, buffers);
+        if (!data.scene) throw new Error('No scene returned');
+
+        const scene = data.scene;
+        scene.background = new THREE.Color(0x202028);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+        dl.position.set(2, 3, 4);
+        scene.add(dl);
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(0.4, 0.4, 2); cam.lookAt(0.4, 0.4, 0);
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) { console.error(e); errEl.style.display='block'; errEl.textContent = e?.stack || String(e); document.body.dataset.ready = 'error'; }
+})();
+</script></body></html>

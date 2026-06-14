@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#000}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+        const rt = new THREE.WebGLRenderTarget(800, 600);
+        const sceneA = new THREE.Scene();
+        sceneA.background = new THREE.Color(0x222244);
+        const quad = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.0),
+            new THREE.MeshBasicMaterial({ color: 0xff8844 }));
+        sceneA.add(quad);
+        const camA = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        camA.position.set(0, 0, 1.5); camA.lookAt(0, 0, 0);
+        r.setRenderTarget(rt);
+        r.render(sceneA, camA);
+        r.setRenderTarget(null);
+        const sceneB = new THREE.Scene();
+        sceneB.background = new THREE.Color(0x000000);
+        const fsCam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        fsCam.position.set(0, 0, 2); fsCam.lookAt(0, 0, 0);
+        const fsQuad = new THREE.Mesh(new THREE.PlaneGeometry(1.65, 1.24),
+            new THREE.MeshBasicMaterial({ map: rt.texture }));
+        sceneB.add(fsQuad);
+        r.render(sceneB, fsCam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

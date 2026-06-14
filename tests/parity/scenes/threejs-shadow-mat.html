@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x888888);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.ShadowMaterial({ opacity: 0.4 }));
+floor.rotation.x = -Math.PI / 2; floor.position.y = -0.6; floor.receiveShadow = true; scene.add(floor);
+const cube = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), new THREE.MeshStandardMaterial({ color: 0x66aaff }));
+cube.position.y = 0; cube.castShadow = true; scene.add(cube);
+const dl = new THREE.DirectionalLight(0xffffff, 1.2); dl.position.set(2, 4, 2); dl.castShadow = true;
+dl.shadow.camera.left = -3; dl.shadow.camera.right = 3; dl.shadow.camera.top = 3; dl.shadow.camera.bottom = -3;
+dl.shadow.mapSize.set(1024, 1024); scene.add(dl);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 1.2, 3); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+if (r.shadowMap) r.shadowMap.enabled = true;
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

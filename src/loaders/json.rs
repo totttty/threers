@@ -1,0 +1,156 @@
+//! Tiny hand-rolled JSON parser. Handles enough of the spec to read GLTF JSON
+//! chunks: objects, arrays, strings (no `\uXXXX`), numbers, true/false/null.
+//! Errors are kept terse (`&'static str`) — bring in `serde_json` for anything
+//! production-grade.
+
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub enum Value {
+    Null,
+    Bool(#[allow(dead_code)] bool),
+    Number(f64),
+    String(String),
+    Array(Vec<Value>),
+    Object(HashMap<String, Value>),
+}
+
+impl Value {
+    pub fn as_object(&self) -> Option<&HashMap<String, Value>> {
+        if let Value::Object(o) = self { Some(o) } else { None }
+    }
+    pub fn as_array(&self) -> Option<&Vec<Value>> {
+        if let Value::Array(a) = self { Some(a) } else { None }
+    }
+    pub fn as_str(&self) -> Option<&str> {
+        if let Value::String(s) = self { Some(s.as_str()) } else { None }
+    }
+    pub fn as_number(&self) -> Option<f64> {
+        if let Value::Number(n) = self { Some(*n) } else { None }
+    }
+    pub fn as_u64(&self) -> Option<u64> { self.as_number().map(|n| n as u64) }
+    pub fn as_f32(&self) -> Option<f32> { self.as_number().map(|n| n as f32) }
+}
+
+pub fn parse(src: &str) -> Result<Value, &'static str> {
+    let mut p = Parser { bytes: src.as_bytes(), pos: 0 };
+    p.skip_ws();
+    let v = p.value()?;
+    p.skip_ws();
+    if p.pos != p.bytes.len() { return Err("trailing data after JSON value"); }
+    Ok(v)
+}
+
+struct Parser<'a> { bytes: &'a [u8], pos: usize }
+
+impl<'a> Parser<'a> {
+    fn peek(&self) -> Option<u8> { self.bytes.get(self.pos).copied() }
+    fn bump(&mut self) -> Option<u8> {
+        let b = self.peek()?; self.pos += 1; Some(b)
+    }
+    fn skip_ws(&mut self) {
+        while let Some(b) = self.peek() {
+            if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' { self.pos += 1; } else { break; }
+        }
+    }
+    fn expect(&mut self, b: u8) -> Result<(), &'static str> {
+        if self.bump() == Some(b) { Ok(()) } else { Err("unexpected byte") }
+    }
+    fn value(&mut self) -> Result<Value, &'static str> {
+        self.skip_ws();
+        let Some(c) = self.peek() else { return Err("unexpected end"); };
+        match c {
+            b'{' => self.object(),
+            b'[' => self.array(),
+            b'"' => self.string().map(Value::String),
+            b't' | b'f' => self.boolean(),
+            b'n' => self.null(),
+            b'-' | b'0'..=b'9' => self.number(),
+            _ => Err("unexpected token"),
+        }
+    }
+    fn object(&mut self) -> Result<Value, &'static str> {
+        self.expect(b'{')?;
+        let mut map = HashMap::new();
+        self.skip_ws();
+        if self.peek() == Some(b'}') { self.pos += 1; return Ok(Value::Object(map)); }
+        loop {
+            self.skip_ws();
+            let key = self.string()?;
+            self.skip_ws();
+            self.expect(b':')?;
+            let v = self.value()?;
+            map.insert(key, v);
+            self.skip_ws();
+            match self.bump() {
+                Some(b',') => continue,
+                Some(b'}') => break,
+                _ => return Err("expected , or } in object"),
+            }
+        }
+        Ok(Value::Object(map))
+    }
+    fn array(&mut self) -> Result<Value, &'static str> {
+        self.expect(b'[')?;
+        let mut out = Vec::new();
+        self.skip_ws();
+        if self.peek() == Some(b']') { self.pos += 1; return Ok(Value::Array(out)); }
+        loop {
+            let v = self.value()?;
+            out.push(v);
+            self.skip_ws();
+            match self.bump() {
+                Some(b',') => continue,
+                Some(b']') => break,
+                _ => return Err("expected , or ] in array"),
+            }
+        }
+        Ok(Value::Array(out))
+    }
+    fn string(&mut self) -> Result<String, &'static str> {
+        self.expect(b'"')?;
+        let mut s = String::new();
+        loop {
+            let Some(b) = self.bump() else { return Err("unterminated string"); };
+            match b {
+                b'"' => return Ok(s),
+                b'\\' => {
+                    let Some(esc) = self.bump() else { return Err("bad escape"); };
+                    match esc {
+                        b'"' => s.push('"'),
+                        b'\\' => s.push('\\'),
+                        b'/' => s.push('/'),
+                        b'b' => s.push('\u{08}'),
+                        b'f' => s.push('\u{0c}'),
+                        b'n' => s.push('\n'),
+                        b'r' => s.push('\r'),
+                        b't' => s.push('\t'),
+                        _ => return Err("unsupported escape (no \\u)"),
+                    }
+                }
+                _ => s.push(b as char),
+            }
+        }
+    }
+    fn boolean(&mut self) -> Result<Value, &'static str> {
+        if self.bytes[self.pos..].starts_with(b"true") { self.pos += 4; Ok(Value::Bool(true)) }
+        else if self.bytes[self.pos..].starts_with(b"false") { self.pos += 5; Ok(Value::Bool(false)) }
+        else { Err("bad bool") }
+    }
+    fn null(&mut self) -> Result<Value, &'static str> {
+        if self.bytes[self.pos..].starts_with(b"null") { self.pos += 4; Ok(Value::Null) }
+        else { Err("bad null") }
+    }
+    fn number(&mut self) -> Result<Value, &'static str> {
+        let start = self.pos;
+        if self.peek() == Some(b'-') { self.pos += 1; }
+        while let Some(b) = self.peek() {
+            if b.is_ascii_digit() || b == b'.' || b == b'e' || b == b'E' || b == b'+' || b == b'-' {
+                self.pos += 1;
+            } else { break; }
+        }
+        let s = std::str::from_utf8(&self.bytes[start..self.pos]).map_err(|_| "utf8")?;
+        let n: f64 = s.parse().map_err(|_| "bad number")?;
+        Ok(Value::Number(n))
+    }
+}

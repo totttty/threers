@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#000}canvas{display:block}</style></head>
+<body><canvas id="c" width="336" height="128"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+
+function solidFace(size, r, g, b) {
+    const d = new Uint8Array(size * size * 4);
+    for (let i = 0; i < size * size; i++) { d[i*4]=r; d[i*4+1]=g; d[i*4+2]=b; d[i*4+3]=255; }
+    const tex = new THREE.DataTexture(d, size, size, THREE.RGBAFormat);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    return tex;
+}
+
+const size = 32;
+const src = new THREE.CubeTexture([
+    solidFace(size, 255, 64, 64), solidFace(size, 64, 255, 64), solidFace(size, 64, 64, 255),
+    solidFace(size, 255, 255, 64), solidFace(size, 255, 64, 255), solidFace(size, 64, 255, 255),
+]);
+src.colorSpace = THREE.SRGBColorSpace;
+src.needsUpdate = true;
+
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(336, 128, false);
+r.outputColorSpace = THREE.LinearSRGBColorSpace;
+r.toneMapping = THREE.NoToneMapping;
+
+const pmrem = new THREE.PMREMGenerator(r);
+const env = pmrem.fromCubemap(src);
+pmrem.dispose();
+
+const w = env.width, h = env.height;
+const maxMip = Math.floor(Math.log2(h)) - 2;
+
+function roughnessToMip(roughness) {
+    if (roughness >= 0.8) return (1.0 - roughness) / 0.2 - 2.0;
+    if (roughness >= 0.4) return (0.8 - roughness) * 3.0 / 0.4 - 1.0;
+    if (roughness >= 0.305) return (0.4 - roughness) / 0.095 + 2.0;
+    if (roughness >= 0.21) return (0.305 - roughness) / 0.095 + 3.0;
+    return -2.0 * Math.log2(1.16 * Math.max(roughness, 0.001));
+}
+function getFace(dir) {
+    const ax = Math.abs(dir[0]), ay = Math.abs(dir[1]), az = Math.abs(dir[2]);
+    if (ax > az) { if (ax > ay) return dir[0] > 0 ? 0 : 3; return dir[1] > 0 ? 1 : 4; }
+    if (az > ay) return dir[2] > 0 ? 2 : 5;
+    return dir[1] > 0 ? 1 : 4;
+}
+function getUV(dir, face) {
+    let u, v;
+    if (face === 0) { u = dir[2]/Math.abs(dir[0]); v = dir[1]/Math.abs(dir[0]); }
+    else if (face === 1) { u = -dir[0]/Math.abs(dir[1]); v = -dir[2]/Math.abs(dir[1]); }
+    else if (face === 2) { u = -dir[0]/Math.abs(dir[2]); v = dir[1]/Math.abs(dir[2]); }
+    else if (face === 3) { u = -dir[2]/Math.abs(dir[0]); v = dir[1]/Math.abs(dir[0]); }
+    else if (face === 4) { u = -dir[0]/Math.abs(dir[1]); v = dir[2]/Math.abs(dir[1]); }
+    else { u = dir[0]/Math.abs(dir[2]); v = dir[1]/Math.abs(dir[2]); }
+    return [0.5*(u+1), 0.5*(v+1)];
+}
+
+// Linear HalfFloat atlas readback (matches GPU IBL sampling space).
+const floatData = new Float32Array(w * h * 4);
+r.setRenderTarget(env);
+r.readRenderTargetPixels(env, 0, 0, w, h, floatData);
+r.setRenderTarget(null);
+const floatAt = (xx, yy) => {
+    const row = h - 1 - yy;
+    const i = (row * w + xx) * 4;
+    return [floatData[i], floatData[i+1], floatData[i+2]];
+};
+function sampleAtlasFloat(dir, mipInt) {
+    const CUBEUV_MIN_MIP = 4, MIN_TILE = 16;
+    let face = getFace(dir);
+    let uv = getUV(dir, face);
+    const filterInt = Math.max(CUBEUV_MIN_MIP - mipInt, 0);
+    mipInt = Math.max(mipInt, CUBEUV_MIN_MIP);
+    const faceSize = 2 ** mipInt;
+    uv[0] = uv[0] * (faceSize - 2) + 1;
+    uv[1] = uv[1] * (faceSize - 2) + 1;
+    if (face > 2) { uv[1] += faceSize; face -= 3; }
+    uv[0] += face * faceSize;
+    uv[0] += filterInt * 3 * MIN_TILE;
+    uv[1] += 4 * (2 ** maxMip - faceSize);
+    const u = uv[0] / w;
+    const v = 1.0 - uv[1] / h;
+    const x = u * (w - 1), y = v * (h - 1);
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const x1 = Math.min(x0+1, w-1), y1 = Math.min(y0+1, h-1);
+    const tx = x - x0, ty = y - y0;
+    const px = (xx, yy) => floatAt(xx, yy);
+    const c00 = px(x0,y0), c10 = px(x1,y0), c01 = px(x0,y1), c11 = px(x1,y1);
+    const out = [0,0,0];
+    for (let c = 0; c < 3; c++) {
+        const a = c00[c]*(1-tx)+c10[c]*tx;
+        const b = c01[c]*(1-tx)+c11[c]*tx;
+        out[c] = a*(1-ty)+b*ty;
+    }
+    return out;
+}
+function sampleEnvFloat(dir, roughness) {
+    const mip = Math.max(-2, Math.min(maxMip, roughnessToMip(roughness)));
+    const mipI = Math.floor(mip);
+    const mipF = mip - mipI;
+    const c0 = sampleAtlasFloat(dir, mipI);
+    const c1 = sampleAtlasFloat(dir, mipI + 1);
+    return c0.map((v,i) => v*(1-mipF) + c1[i]*mipF);
+}
+
+// Canvas byte readback (display path; sRGB-encoded bytes / 255).
+const scene = new THREE.Scene();
+const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const mat = new THREE.MeshBasicMaterial({ map: env.texture, toneMapped: false });
+scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
+r.render(scene, cam);
+const gl = r.getContext();
+const data = new Uint8Array(w * h * 4);
+gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
+const flipped = new Uint8Array(data.length);
+for (let y = 0; y < h; y++) {
+    const src = (h - 1 - y) * w * 4;
+    flipped.set(data.subarray(src, src + w * 4), y * w * 4);
+}
+function sampleAtlasByte(dir, mipInt) {
+    const CUBEUV_MIN_MIP = 4, MIN_TILE = 16;
+    let face = getFace(dir);
+    let uv = getUV(dir, face);
+    const filterInt = Math.max(CUBEUV_MIN_MIP - mipInt, 0);
+    mipInt = Math.max(mipInt, CUBEUV_MIN_MIP);
+    const faceSize = 2 ** mipInt;
+    uv[0] = uv[0] * (faceSize - 2) + 1;
+    uv[1] = uv[1] * (faceSize - 2) + 1;
+    if (face > 2) { uv[1] += faceSize; face -= 3; }
+    uv[0] += face * faceSize;
+    uv[0] += filterInt * 3 * MIN_TILE;
+    uv[1] += 4 * (2 ** maxMip - faceSize);
+    const u = uv[0] / w;
+    const v = 1.0 - uv[1] / h;
+    const x = u * (w - 1), y = v * (h - 1);
+    const x0 = Math.floor(x), y0 = Math.floor(y);
+    const x1 = Math.min(x0+1, w-1), y1 = Math.min(y0+1, h-1);
+    const tx = x - x0, ty = y - y0;
+    const pxAt = (xx, yy) => {
+        const i = (yy * w + xx) * 4;
+        return [flipped[i]/255, flipped[i+1]/255, flipped[i+2]/255];
+    };
+    const c00 = pxAt(x0,y0), c10 = pxAt(x1,y0), c01 = pxAt(x0,y1), c11 = pxAt(x1,y1);
+    const out = [0,0,0];
+    for (let c = 0; c < 3; c++) {
+        const a = c00[c]*(1-tx)+c10[c]*tx;
+        const b = c01[c]*(1-tx)+c11[c]*tx;
+        out[c] = a*(1-ty)+b*ty;
+    }
+    return out;
+}
+function sampleEnvByte(dir, roughness) {
+    const mip = Math.max(-2, Math.min(maxMip, roughnessToMip(roughness)));
+    const mipI = Math.floor(mip);
+    const mipF = mip - mipI;
+    const c0 = sampleAtlasByte(dir, mipI);
+    const c1 = sampleAtlasByte(dir, mipI + 1);
+    return c0.map((v,i) => v*(1-mipF) + c1[i]*mipF);
+}
+
+const rough = 0.45;
+const dir = [0,0,1];
+// pmrem parity sphere pixel (366,178): grazing reflect + normal (world space).
+const reflectGrazing = [-0.190915793669969, 0.6924259382358577, 0.6957711403799082];
+const normalGrazing = [-0.09560317121482893, 0.3467398597791558, 0.9330763651995477];
+const probe = (xx, yy) => {
+    const i = (yy * w + xx) * 4;
+    return [flipped[i]/255, flipped[i+1]/255, flipped[i+2]/255];
+};
+const perMipByte = {};
+for (let m = -2; m <= maxMip; m++) perMipByte[m] = sampleAtlasByte(dir, m);
+const perMipReflectByte = {};
+for (let m = -2; m <= maxMip; m++) perMipReflectByte[m] = sampleAtlasByte(reflectGrazing, m);
+
+document.body.dataset.samples = JSON.stringify({
+    '+Z_byte': sampleAtlasByte(dir, Math.round(roughnessToMip(rough))),
+    '+Z_env_byte': sampleEnvByte(dir, rough),
+    '+Z_mip5_byte': sampleAtlasByte(dir, 5),
+    '+Z_mip4_byte': sampleAtlasByte(dir, 4),
+    '+Z_mip3_byte': sampleAtlasByte(dir, 3),
+    '+Z_mip2_byte': sampleAtlasByte(dir, 2),
+    '+Z_mip1_byte': sampleAtlasByte(dir, 1),
+    '+Z_linear': sampleEnvFloat(dir, rough),
+    reflect_grazing_env_byte: sampleEnvByte(reflectGrazing, rough),
+    reflect_grazing_env_linear: sampleEnvFloat(reflectGrazing, rough),
+    normal_grazing_env_byte: sampleEnvByte(normalGrazing, 1.0),
+    normal_grazing_env_linear: sampleEnvFloat(normalGrazing, 1.0),
+    perMipReflectByte,
+    probe183_56_byte: probe(183, 56),
+    probe136_56_byte: probe(136, 56),
+    probe40_56_byte: probe(40, 56),
+    probe42_49_byte: probe(42, 49),
+    probe42_48_byte: probe(42, 48),
+    probe42_50_byte: probe(42, 50),
+    probe88_56_byte: probe(88, 56),
+    probe232_56_byte: probe(232, 56),
+    perMipByte,
+    maxMip,
+});
+document.body.dataset.ready = 'true';
+</script></body></html>

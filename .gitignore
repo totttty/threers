@@ -1,0 +1,25 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+
+# Wasm / web build output
+/web/pkg/*
+!/web/pkg/.gitignore
+/web/threejs-shim.d.ts
+
+# Parity test artifacts (screenshots, diffs, logs)
+/tests/parity/out/
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.log
+
+# Local agent / tooling
+.claude/

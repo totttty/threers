@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#222}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x222222);
+// Procedural 4x4 checkerboard so both engines get the same input bytes.
+const size = 4;
+const data = new Uint8Array(size * size * 4);
+for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const v = (x + y) % 2 === 0 ? 255 : 64;
+    const i = (y * size + x) * 4;
+    data[i] = v; data[i+1] = v; data[i+2] = v; data[i+3] = 255;
+}
+const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+tex.magFilter = THREE.LinearFilter; tex.minFilter = THREE.LinearFilter;
+tex.needsUpdate = true;
+const cube = new THREE.Mesh(
+    new THREE.BoxGeometry(1.5, 1.5, 1.5),
+    new THREE.MeshBasicMaterial({ map: tex })
+);
+cube.rotation.set(0.4, 0.5, 0);
+scene.add(cube);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 4);
+cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

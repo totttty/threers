@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#0a0a14}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+// Build a tiny radial-gradient matcap as a DataTexture.
+const size = 64;
+const data = new Uint8Array(size * size * 4);
+for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    const cx = x - size / 2, cy = y - size / 2;
+    const r = Math.hypot(cx, cy) / (size / 2);
+    const k = Math.max(0, 1 - r);
+    const i = (y * size + x) * 4;
+    data[i] = 60 + k * 195;
+    data[i + 1] = 80 + k * 175;
+    data[i + 2] = 200 + k * 55;
+    data[i + 3] = 255;
+}
+const tex = new THREE.DataTexture(data, size, size);
+tex.needsUpdate = true;
+const mat = new THREE.MeshMatcapMaterial({ matcap: tex });
+const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.9, 32, 16), mat);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0a14);
+scene.add(sphere);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

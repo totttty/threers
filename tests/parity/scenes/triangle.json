@@ -1,0 +1,12 @@
+{
+  "metadata": { "version": 4.5, "type": "BufferGeometry", "generator": "test" },
+  "uuid": "triangle-test",
+  "type": "BufferGeometry",
+  "data": {
+    "attributes": {
+      "position": { "itemSize": 3, "type": "Float32Array", "array": [-1.0, -0.8, 0.0, 1.0, -0.8, 0.0, 0.0, 1.0, 0.0], "normalized": false },
+      "normal":   { "itemSize": 3, "type": "Float32Array", "array": [0, 0, 1, 0, 0, 1, 0, 0, 1], "normalized": false }
+    },
+    "index": { "type": "Uint32Array", "array": [0, 1, 2] }
+  }
+}

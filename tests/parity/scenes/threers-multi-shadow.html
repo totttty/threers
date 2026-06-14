@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#1a1a1f}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a1f);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+        const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+        dl.position.set(3, 5, 3);
+        dl.castShadow = true;
+        dl.shadow.camera.left = -4; dl.shadow.camera.right = 4;
+        dl.shadow.camera.top = 4; dl.shadow.camera.bottom = -4;
+        scene.add(dl);
+        const left = new THREE.Mesh(
+            new THREE.BoxGeometry(1, 1, 1),
+            new THREE.MeshStandardMaterial({ color: 0xcc5555, roughness: 0.5, metalness: 0 })
+        );
+        left.position.set(-1.2, 0.5, 0);
+        left.castShadow = true;
+        scene.add(left);
+        const right = new THREE.Mesh(
+            new THREE.SphereGeometry(0.6, 24, 12),
+            new THREE.MeshStandardMaterial({ color: 0x55cc88, roughness: 0.45, metalness: 0 })
+        );
+        right.position.set(1.2, 0.6, 0);
+        right.castShadow = true;
+        scene.add(right);
+        const ground = new THREE.Mesh(
+            new THREE.PlaneGeometry(8, 8),
+            new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.7, metalness: 0 })
+        );
+        ground.rotation.set(-Math.PI / 2, 0, 0);
+        ground.receiveShadow = true;
+        scene.add(ground);
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(0, 3, 5); cam.lookAt(0, 0.4, 0);
+        const r = await THREE.WebGLRenderer.create(canvas);
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

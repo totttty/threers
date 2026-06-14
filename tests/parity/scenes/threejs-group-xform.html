@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#141618}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x141618);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const dl = new THREE.DirectionalLight(0xffffff, 0.8);
+dl.position.set(1, 2, 3);
+scene.add(dl);
+const g = new THREE.Group();
+g.position.set(0.6, 0, 0);
+g.rotation.set(0, 0.5, 0);
+const c1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5),
+    new THREE.MeshStandardMaterial({ color: 0xff3344, roughness: 0.5 }));
+c1.position.set(-0.7, 0, 0);
+const c2 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5),
+    new THREE.MeshStandardMaterial({ color: 0x33ff88, roughness: 0.5 }));
+c2.position.set(0.7, 0, 0);
+g.add(c1); g.add(c2);
+scene.add(g);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0.6, 3.4); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

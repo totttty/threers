@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#050505}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x050505);
+// Side-by-side panels: decay=0 (left, broad falloff) vs decay=2 (right, tight hotspot).
+const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 });
+const left = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 2.6), mat);
+left.position.set(-0.78, 0, -0.5);
+scene.add(left);
+const right = new THREE.Mesh(new THREE.PlaneGeometry(1.35, 2.6), mat);
+right.position.set(0.78, 0, -0.5);
+scene.add(right);
+const pl0 = new THREE.PointLight(0xff8844, 2.5, 3.5, 0);
+pl0.position.set(-0.78, 0.2, 0.15);
+scene.add(pl0);
+const pl2 = new THREE.PointLight(0xff8844, 2.5, 3.5, 2);
+pl2.position.set(0.78, 0.2, 0.15);
+scene.add(pl2);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 2.4); cam.lookAt(0, 0, -0.5);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

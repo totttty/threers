@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>controls — three.js</title>
+    <link rel="stylesheet" href="/web/examples/controls-demo.css">
+    <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.165.0/build/three.module.js" } }
+    </script>
+</head>
+<body>
+    <header>
+        <h1>three.js <span class="tag">· OrbitControls</span></h1>
+        <span class="status">live demo</span>
+        <nav>
+            <a href="/web/examples/controls-threers.html">threers demo →</a>
+            <a href="/web/examples/">all examples</a>
+        </nav>
+    </header>
+    <div class="layout">
+        <div class="preview">
+            <div class="hint">drag orbit · right pan · wheel zoom</div>
+            <canvas id="canvas"></canvas>
+        </div>
+        <section class="code-panel" id="code-panel">
+            <div class="tabs"></div>
+            <div class="code-wrap">
+                <div class="loading">Loading source…</div>
+                <pre></pre>
+            </div>
+        </section>
+    </div>
+    <script type="module" src="/web/examples/controls-threejs-demo.js"></script>
+    <script type="module">
+    import { initCodePanel } from '/web/examples/controls-code-panel.js';
+
+    await initCodePanel(document.getElementById('code-panel'), [
+        { id: 'js', label: 'JavaScript', url: '/web/examples/controls-threejs-demo.js' },
+        { id: 'ts', label: 'TypeScript', url: '/web/examples/controls-threejs.ts' },
+        { id: 'html', label: 'HTML shell', url: '/web/examples/controls-threejs.html' },
+    ]);
+    </script>
+</body>
+</html>

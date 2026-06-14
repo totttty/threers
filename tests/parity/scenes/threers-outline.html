@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x101418);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const cube = new THREE.Mesh(
+            new THREE.BoxGeometry(0.6, 0.6, 0.6),
+            new THREE.MeshBasicMaterial({ color: 0x66aaff })
+        );
+        cube.position.set(-0.5, 0, 0);
+        scene.add(cube);
+        const sphere = new THREE.Mesh(
+            new THREE.SphereGeometry(0.35, 16, 12),
+            new THREE.MeshBasicMaterial({ color: 0xff9966 })
+        );
+        sphere.position.set(0.5, 0, 0);
+        scene.add(sphere);
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+
+        const outlinePass = new THREE.OutlinePass(new THREE.Vector2(800, 600), scene, cam, [cube]);
+        outlinePass.edgeStrength = 5;
+        outlinePass.edgeThickness = 2;
+        outlinePass.visibleEdgeColor.setHex(0xffffff);
+        outlinePass.hiddenEdgeColor.setHex(0xffffff);
+        outlinePass.renderAndOutline(r, scene, cam, [cube]);
+
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

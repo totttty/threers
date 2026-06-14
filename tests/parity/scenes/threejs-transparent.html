@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#202028}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x202028);
+// Single solid box behind a transparent one.
+const back = new THREE.Mesh(
+    new THREE.BoxGeometry(1.0, 1.0, 1.0),
+    new THREE.MeshBasicMaterial({ color: 0xff4444 })
+);
+back.position.set(0, 0, -0.6);
+scene.add(back);
+const front = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 1.4, 1.4),
+    new THREE.MeshBasicMaterial({ color: 0x44aaff, transparent: true, opacity: 0.5 })
+);
+front.position.set(0, 0, 0.4);
+front.rotation.set(0.3, 0.4, 0);
+scene.add(front);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 4);
+cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

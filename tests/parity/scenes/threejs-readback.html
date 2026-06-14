@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#000}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+// Render a solid colored quad into a 64×64 RT. Read pixels back and verify
+// the center pixel is roughly the expected orange. Indicator color = green
+// on match, red on mismatch.
+const rt = new THREE.WebGLRenderTarget(64, 64);
+const sceneA = new THREE.Scene();
+sceneA.background = new THREE.Color(0xff8844);
+const camA = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
+camA.position.set(0, 0, 1); camA.lookAt(0, 0, 0);
+r.setRenderTarget(rt);
+r.render(sceneA, camA);
+const buffer = new Uint8Array(64 * 64 * 4);
+r.readRenderTargetPixels(rt, 0, 0, 64, 64, buffer);
+r.setRenderTarget(null);
+const center = (32 * 64 + 32) * 4;
+const dR = Math.abs(buffer[center] - 0xff);
+const dG = Math.abs(buffer[center + 1] - 0x88);
+const dB = Math.abs(buffer[center + 2] - 0x44);
+const matched = dR < 20 && dG < 20 && dB < 20;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x222222);
+const indicator = new THREE.Mesh(new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ color: matched ? 0x44ff44 : 0xff4444 }));
+scene.add(indicator);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 2.5); cam.lookAt(0, 0, 0);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

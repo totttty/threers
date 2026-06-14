@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#080812}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x080812);
+scene.add(new THREE.AmbientLight(0xffffff, 0.05));
+const sl = new THREE.SpotLight(0xffffff, 4.0, 0, Math.PI/6, 0.2, 1.5);
+sl.position.set(1.5, 2.0, 2.5);
+sl.target.position.set(0, 0, 0);
+scene.add(sl);
+scene.add(sl.target);
+const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(3, 2.2),
+    new THREE.MeshStandardMaterial({ color: 0xddccaa, roughness: 0.8, metalness: 0.0, side: THREE.DoubleSide })
+);
+plane.rotation.set(-0.2, 0.1, 0);
+scene.add(plane);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0.2, 3.5);
+cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

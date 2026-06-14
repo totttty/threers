@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#0d0d0d}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0d0d);
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+dl.position.set(2, 3, 4);
+scene.add(dl);
+// Tetrahedron + Octahedron side-by-side
+const tetra = new THREE.Mesh(
+    new THREE.TetrahedronGeometry(0.9, 0),
+    new THREE.MeshStandardMaterial({ color: 0xff7755, roughness: 0.5, metalness: 0 })
+);
+tetra.position.set(-1.0, 0, 0);
+tetra.rotation.set(0.3, 0.5, 0);
+scene.add(tetra);
+const octa = new THREE.Mesh(
+    new THREE.OctahedronGeometry(0.9, 0),
+    new THREE.MeshStandardMaterial({ color: 0x77cc55, roughness: 0.4, metalness: 0 })
+);
+octa.position.set(1.0, 0, 0);
+octa.rotation.set(0.3, 0.6, 0);
+scene.add(octa);
+const cam = new THREE.PerspectiveCamera(50, 800/600, 0.1, 100);
+cam.position.set(0, 0.2, 4);
+cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

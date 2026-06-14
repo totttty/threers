@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/RenderPass.js';
+import { GlitchPass } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/GlitchPass.js';
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x101010);
+scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0x00ff88 })));
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0);
+(function(s){let st=s>>>0;Math.random=()=>{st=(Math.imul(st,1664525)+1013904223)>>>0;return st/4294967296;};})(42);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+const composer = new EffectComposer(r);
+composer.addPass(new RenderPass(scene, cam));
+const glitchPass = new GlitchPass();
+glitchPass.render = function(renderer, writeBuffer, readBuffer) {
+    this.uniforms.tDiffuse.value = readBuffer.texture;
+    this.uniforms.byp.value = 1;
+    renderer.setRenderTarget(null);
+    this.fsQuad.render(renderer);
+};
+composer.addPass(glitchPass);
+composer.render();
+document.body.dataset.ready = 'true';
+</script></body></html>

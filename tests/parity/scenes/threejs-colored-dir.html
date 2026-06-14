@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#0a0e14}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0e14);
+scene.add(new THREE.AmbientLight(0xffffff, 0.1));
+// Two colored directional lights pointing in different directions.
+const dl1 = new THREE.DirectionalLight(0xff4488, 1.0);
+dl1.position.set(3, 2, 1);
+scene.add(dl1);
+const dl2 = new THREE.DirectionalLight(0x44aaff, 1.0);
+dl2.position.set(-3, 2, 1);
+scene.add(dl2);
+const sphere = new THREE.Mesh(
+    new THREE.SphereGeometry(1.1, 32, 16),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5, metalness: 0 })
+);
+scene.add(sphere);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 3.5); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

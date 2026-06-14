@@ -1,0 +1,138 @@
+//! Parent/child scene-graph demo: a group rotates, and child meshes inherit
+//! its transform — the same demonstration three.js's `Group` docs use.
+
+use std::sync::Arc;
+use std::time::Instant;
+
+use threers::cameras::Camera;
+use threers::{
+    BasicMaterial, BoxGeometry, Color, Euler, Mesh, Object3D,
+    PerspectiveCamera, Renderer, Scene, SphereGeometry, Vector3,
+};
+
+use winit::{
+    event::{Event, WindowEvent},
+    event_loop::EventLoop,
+    window::WindowBuilder,
+};
+
+fn main() {
+    env_logger::init();
+    pollster::block_on(run());
+}
+
+async fn run() {
+    let event_loop = EventLoop::new().expect("event loop");
+    let window = Arc::new(
+        WindowBuilder::new()
+            .with_title("threers — scene graph")
+            .with_inner_size(winit::dpi::LogicalSize::new(900, 700))
+            .build(&event_loop)
+            .expect("window"),
+    );
+
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::PRIMARY,
+        ..Default::default()
+    });
+    let surface = instance.create_surface(window.clone()).expect("surface");
+
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::default(),
+        compatible_surface: Some(&surface),
+        force_fallback_adapter: false,
+    })).expect("adapter");
+
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: None,
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults(),
+        },
+        None,
+    )).expect("device");
+
+    let device = Arc::new(device);
+    let queue = Arc::new(queue);
+
+    let size = window.inner_size();
+    let caps = surface.get_capabilities(&adapter);
+    let format = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(caps.formats[0]);
+
+    let mut config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format,
+        width: size.width.max(1),
+        height: size.height.max(1),
+        present_mode: caps.present_modes[0],
+        alpha_mode: caps.alpha_modes[0],
+        view_formats: vec![],
+        desired_maximum_frame_latency: 2,
+    };
+    surface.configure(&device, &config);
+
+    let mut renderer = Renderer::new(device.clone(), queue.clone(), format, config.width, config.height);
+
+    let mut scene = Scene::new();
+    scene.background = Color::from_hex(0x101018);
+
+    // A rotating group at the origin holding two children.
+    let group_id = scene.add(Object3D::group());
+
+    let mut left = Object3D::mesh(Mesh::new(
+        BoxGeometry::new(0.8, 0.8, 0.8),
+        BasicMaterial::new(Color::from_hex(0x44aaff)).into(),
+    ));
+    left.position = Vector3::new(-1.5, 0.0, 0.0);
+    scene.add_to(group_id, left);
+
+    let mut right = Object3D::mesh(Mesh::new(
+        SphereGeometry::new(0.5, 24, 16),
+        BasicMaterial::new(Color::from_hex(0xff6688)).into(),
+    ));
+    right.position = Vector3::new(1.5, 0.0, 0.0);
+    scene.add_to(group_id, right);
+
+    let mut camera = PerspectiveCamera::new(60.0, config.width as f32 / config.height as f32, 0.1, 100.0);
+    camera.position = Vector3::new(0.0, 1.5, 5.0);
+    camera.look_at(Vector3::ZERO);
+
+    let start = Instant::now();
+    let win = window.clone();
+
+    event_loop.run(move |event, target| {
+        match event {
+            Event::WindowEvent { event, window_id } if window_id == win.id() => match event {
+                WindowEvent::CloseRequested => target.exit(),
+                WindowEvent::Resized(s) => {
+                    config.width = s.width.max(1);
+                    config.height = s.height.max(1);
+                    surface.configure(&device, &config);
+                    renderer.resize(config.width, config.height);
+                    camera.set_aspect(config.width as f32 / config.height as f32);
+                }
+                WindowEvent::RedrawRequested => {
+                    let t = start.elapsed().as_secs_f32();
+                    if let Some(g) = scene.get_mut(group_id) {
+                        g.quaternion = Euler::new(0.0, t * 0.8, 0.0).to_quaternion();
+                    }
+
+                    match surface.get_current_texture() {
+                        Ok(frame) => {
+                            let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                            renderer.render(&mut scene, &camera, &view, false);
+                            frame.present();
+                        }
+                        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                            surface.configure(&device, &config);
+                        }
+                        Err(e) => log::error!("surface error: {e:?}"),
+                    }
+                    win.request_redraw();
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }).expect("event loop");
+}

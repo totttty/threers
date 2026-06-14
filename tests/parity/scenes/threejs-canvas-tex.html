@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#181818}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+// Build a tiny 2D canvas with a draw, use it as a texture.
+const src = document.createElement('canvas');
+src.width = src.height = 64;
+const ctx = src.getContext('2d');
+ctx.fillStyle = '#ff7733'; ctx.fillRect(0, 0, 64, 64);
+ctx.fillStyle = '#44aaff'; ctx.fillRect(16, 16, 32, 32);
+const tex = new THREE.CanvasTexture(src);
+const cube = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4),
+    new THREE.MeshBasicMaterial({ map: tex }));
+cube.rotation.set(0.3, 0.5, 0);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x181818);
+scene.add(cube);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 4); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

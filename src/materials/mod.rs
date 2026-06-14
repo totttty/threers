@@ -1,0 +1,412 @@
+//! Materials. Mirrors three.js's `Material` family.
+
+mod basic;
+mod lambert;
+mod phong;
+mod standard;
+mod physical;
+mod normal_mat;
+mod depth;
+mod toon;
+mod matcap;
+mod line;
+mod points_mat;
+mod sprite_mat;
+
+pub use basic::BasicMaterial;
+pub use lambert::LambertMaterial;
+pub use phong::PhongMaterial;
+pub use standard::StandardMaterial;
+pub use physical::PhysicalMaterial;
+pub use normal_mat::NormalMaterial;
+pub use depth::DepthMaterial;
+pub use toon::ToonMaterial;
+pub use matcap::MatcapMaterial;
+pub use line::LineBasicMaterial;
+pub use points_mat::PointsMaterial;
+pub use sprite_mat::SpriteMaterial;
+
+use std::sync::Arc;
+use crate::math::{Color, Vector2};
+use crate::textures::Texture;
+
+#[derive(Debug, Clone)]
+pub enum Material {
+    Basic(BasicMaterial),
+    Lambert(LambertMaterial),
+    Phong(PhongMaterial),
+    Standard(StandardMaterial),
+    Physical(PhysicalMaterial),
+    Normal(NormalMaterial),
+    Depth(DepthMaterial),
+    Toon(ToonMaterial),
+    Matcap(MatcapMaterial),
+    Line(LineBasicMaterial),
+    Points(PointsMaterial),
+    Sprite(SpriteMaterial),
+    Distance(DistanceMaterial),
+    Sky(SkyMaterial),
+    Mirror(MirrorMaterial),
+}
+
+/// Mirror material — drives the Reflector / Refractor / Water shader path
+/// which projectively samples a render-target texture using a per-frame
+/// texture matrix supplied from JS. The texture matrix encodes
+/// `scaleBias * virtualCamProj * virtualCamView` so that fragment-side
+/// `texture_matrix * world_pos` lands in [0,1] UV space.
+#[derive(Debug, Clone)]
+pub struct MirrorMaterial {
+    pub color: Color,
+    pub map: Option<Arc<Texture>>,
+    pub texture_matrix: [f32; 16],
+    pub side: u32,
+}
+impl Default for MirrorMaterial {
+    fn default() -> Self {
+        Self {
+            color: Color::WHITE,
+            map: None,
+            texture_matrix: [
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+            side: 0,
+        }
+    }
+}
+
+/// Sky shader material. Drives the Preetham atmospheric scattering shader.
+/// Mirrors three.js's `Sky` from `examples/jsm/objects/Sky.js`.
+#[derive(Debug, Clone, Copy)]
+pub struct SkyMaterial {
+    pub sun_position: crate::math::Vector3,
+    pub turbidity: f32,
+    pub rayleigh: f32,
+    pub mie_coefficient: f32,
+    pub mie_directional_g: f32,
+}
+impl Default for SkyMaterial {
+    fn default() -> Self {
+        Self {
+            sun_position: crate::math::Vector3::new(0.0, 1.0, 0.0),
+            turbidity: 10.0,
+            rayleigh: 3.0,
+            mie_coefficient: 0.005,
+            mie_directional_g: 0.7,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+pub enum MaterialKind {
+    Basic    = 0,
+    Lambert  = 1,
+    Phong    = 2,
+    Standard = 3,
+    Physical = 4,
+    Normal   = 5,
+    Depth    = 6,
+    Toon     = 7,
+    Matcap   = 8,
+    Line     = 9,
+    Points   = 10,
+    Sprite   = 11,
+    Distance = 12,
+    Sky      = 13,
+    Mirror   = 14,
+}
+
+#[derive(Debug, Clone)]
+pub struct DistanceMaterial {
+    pub reference_position: crate::math::Vector3,
+    pub near_distance: f32,
+    pub far_distance: f32,
+}
+impl Default for DistanceMaterial {
+    fn default() -> Self {
+        Self { reference_position: crate::math::Vector3::ZERO, near_distance: 1.0, far_distance: 1000.0 }
+    }
+}
+impl DistanceMaterial {
+    pub fn new(reference_position: crate::math::Vector3, near: f32, far: f32) -> Self {
+        Self { reference_position, near_distance: near.max(0.0), far_distance: far.max(near + 0.001) }
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct MaterialTextureSlots {
+    pub map: Option<Arc<Texture>>,
+    pub normal_map: Option<Arc<Texture>>,
+    pub roughness_map: Option<Arc<Texture>>,
+    pub metalness_map: Option<Arc<Texture>>,
+    pub ao_map: Option<Arc<Texture>>,
+    pub emissive_map: Option<Arc<Texture>>,
+    pub matcap_map: Option<Arc<Texture>>,
+}
+
+impl Material {
+    pub fn color(&self) -> Color {
+        match self {
+            Material::Basic(m)    => m.color,
+            Material::Lambert(m)  => m.color,
+            Material::Phong(m)    => m.color,
+            Material::Standard(m) => m.color,
+            Material::Physical(m) => m.color,
+            Material::Normal(_)   => Color::WHITE,
+            Material::Depth(_)    => Color::WHITE,
+            Material::Toon(m)     => m.color,
+            Material::Matcap(m)   => m.color,
+            Material::Line(m)     => m.color,
+            Material::Points(m)   => m.color,
+            Material::Sprite(m)   => m.color,
+            Material::Distance(_) => Color::WHITE,
+            Material::Sky(_)      => Color::WHITE,
+            Material::Mirror(m)   => m.color,
+        }
+    }
+
+    pub fn wireframe(&self) -> bool {
+        match self {
+            Material::Basic(m)    => m.wireframe,
+            Material::Lambert(m)  => m.wireframe,
+            Material::Phong(m)    => m.wireframe,
+            Material::Standard(m) => m.wireframe,
+            Material::Physical(m) => m.wireframe,
+            Material::Normal(m)   => m.wireframe,
+            Material::Depth(m)    => m.wireframe,
+            Material::Toon(m)     => m.wireframe,
+            Material::Matcap(m)   => m.wireframe,
+            _ => false,
+        }
+    }
+
+    pub fn transparent(&self) -> bool {
+        match self {
+            Material::Basic(m)    => m.transparent,
+            // Other materials: treat opacity < 1 as transparent by default,
+            // matching three.js's behavior when only opacity is set.
+            _ => self.opacity() < 1.0,
+        }
+    }
+
+
+    pub fn opacity(&self) -> f32 {
+        match self {
+            Material::Basic(m)    => m.opacity,
+            Material::Lambert(m)  => m.opacity,
+            Material::Phong(m)    => m.opacity,
+            Material::Standard(m) => m.opacity,
+            Material::Physical(m) => m.opacity,
+            Material::Normal(m)   => m.opacity,
+            Material::Depth(m)    => m.opacity,
+            Material::Toon(m)     => m.opacity,
+            Material::Matcap(m)   => m.opacity,
+            Material::Line(m)     => m.opacity,
+            Material::Points(m)   => m.opacity,
+            Material::Sprite(m)   => m.opacity,
+            Material::Distance(_) => 1.0,
+            Material::Sky(_)      => 1.0,
+            Material::Mirror(_)   => 1.0,
+        }
+    }
+
+    pub fn alpha_test(&self) -> f32 {
+        match self {
+            Material::Basic(m) => m.alpha_test,
+            _ => 0.0,
+        }
+    }
+
+    pub fn shadow_only(&self) -> bool {
+        match self {
+            Material::Basic(m) => m.shadow_only,
+            _ => false,
+        }
+    }
+
+    pub fn emissive(&self) -> Color {
+        match self {
+            Material::Lambert(m)  => m.emissive,
+            Material::Phong(m)    => m.emissive,
+            Material::Standard(m) => Color::new(m.emissive.r * m.emissive_intensity, m.emissive.g * m.emissive_intensity, m.emissive.b * m.emissive_intensity),
+            Material::Physical(m) => Color::new(m.emissive.r * m.emissive_intensity, m.emissive.g * m.emissive_intensity, m.emissive.b * m.emissive_intensity),
+            Material::Toon(m)     => m.emissive,
+            _ => Color::BLACK,
+        }
+    }
+
+    pub fn specular(&self) -> Color {
+        match self {
+            Material::Phong(m) => m.specular,
+            _ => Color::BLACK,
+        }
+    }
+
+    /// Material's render side. `0` = FrontSide (default), `1` = BackSide,
+    /// `2` = DoubleSide. Threaded from JS via `WebMaterial.setSide`.
+    pub fn side(&self) -> u32 {
+        match self {
+            Material::Basic(m)    => m.side,
+            Material::Lambert(m)  => m.side,
+            Material::Phong(m)    => m.side,
+            Material::Standard(m) => m.side,
+            Material::Physical(m) => m.side,
+            Material::Toon(m)     => m.side,
+            Material::Matcap(_)   => 0,
+            Material::Normal(_)   => 0,
+            Material::Depth(_)    => 0,
+            Material::Distance(_) => 0,
+            Material::Line(_)     => 0,
+            Material::Points(_)   => 0,
+            Material::Sprite(_)   => 0,
+            Material::Sky(_)      => 1, // Sky uses BackSide → no-cull pipeline.
+            Material::Mirror(m)   => m.side,
+        }
+    }
+
+    pub fn shininess(&self) -> f32 {
+        match self {
+            Material::Phong(m) => m.shininess,
+            _ => 0.0,
+        }
+    }
+
+    pub fn roughness(&self) -> f32 {
+        match self {
+            Material::Standard(m) => m.roughness,
+            Material::Physical(m) => m.roughness,
+            _ => 1.0,
+        }
+    }
+
+    pub fn metalness(&self) -> f32 {
+        match self {
+            Material::Standard(m) => m.metalness,
+            Material::Physical(m) => m.metalness,
+            _ => 0.0,
+        }
+    }
+
+    pub fn ao_intensity(&self) -> f32 {
+        match self {
+            Material::Standard(m) => m.ao_intensity,
+            Material::Physical(m) => m.ao_intensity,
+            _ => 1.0,
+        }
+    }
+
+    pub fn normal_scale(&self) -> Vector2 {
+        match self {
+            Material::Standard(m) => m.normal_scale,
+            Material::Physical(m) => m.normal_scale,
+            _ => Vector2::ONE,
+        }
+    }
+
+    pub fn depth_range(&self) -> (f32, f32) {
+        match self {
+            Material::Depth(m) => (m.near, m.far),
+            _ => (0.0, 0.0),
+        }
+    }
+
+    pub fn toon_steps(&self) -> u32 {
+        match self {
+            Material::Toon(m) => m.steps,
+            _ => 0,
+        }
+    }
+
+    pub fn point_size(&self) -> f32 {
+        match self {
+            Material::Points(m) => m.size,
+            _ => 1.0,
+        }
+    }
+
+    pub fn point_size_attenuation(&self) -> bool {
+        match self {
+            Material::Points(m) => m.size_attenuation,
+            _ => false,
+        }
+    }
+
+    pub fn kind(&self) -> MaterialKind {
+        match self {
+            Material::Basic(_)    => MaterialKind::Basic,
+            Material::Lambert(_)  => MaterialKind::Lambert,
+            Material::Phong(_)    => MaterialKind::Phong,
+            Material::Standard(_) => MaterialKind::Standard,
+            Material::Physical(_) => MaterialKind::Physical,
+            Material::Normal(_)   => MaterialKind::Normal,
+            Material::Depth(_)    => MaterialKind::Depth,
+            Material::Toon(_)     => MaterialKind::Toon,
+            Material::Matcap(_)   => MaterialKind::Matcap,
+            Material::Line(_)     => MaterialKind::Line,
+            Material::Points(_)   => MaterialKind::Points,
+            Material::Sprite(_)   => MaterialKind::Sprite,
+            Material::Distance(_) => MaterialKind::Distance,
+            Material::Sky(_)      => MaterialKind::Sky,
+            Material::Mirror(_)   => MaterialKind::Mirror,
+        }
+    }
+
+    pub fn texture_slots(&self) -> MaterialTextureSlots {
+        match self {
+            Material::Standard(m) => MaterialTextureSlots {
+                map: m.map.clone(),
+                normal_map: m.normal_map.clone(),
+                roughness_map: m.roughness_map.clone(),
+                metalness_map: m.metalness_map.clone(),
+                ao_map: m.ao_map.clone(),
+                emissive_map: m.emissive_map.clone(),
+                matcap_map: None,
+            },
+            Material::Physical(m) => MaterialTextureSlots {
+                map: m.map.clone(),
+                normal_map: m.normal_map.clone(),
+                roughness_map: m.roughness_map.clone(),
+                metalness_map: m.metalness_map.clone(),
+                ao_map: m.ao_map.clone(),
+                emissive_map: m.emissive_map.clone(),
+                matcap_map: None,
+            },
+            Material::Matcap(m) => MaterialTextureSlots {
+                matcap_map: m.matcap.clone(),
+                ..Default::default()
+            },
+            Material::Sprite(m) => MaterialTextureSlots {
+                map: m.map.clone(),
+                ..Default::default()
+            },
+            Material::Basic(m) => MaterialTextureSlots {
+                map: m.map.clone(),
+                ..Default::default()
+            },
+            Material::Mirror(m) => MaterialTextureSlots {
+                map: m.map.clone(),
+                ..Default::default()
+            },
+            _ => MaterialTextureSlots::default(),
+        }
+    }
+}
+
+impl From<BasicMaterial>      for Material { fn from(m: BasicMaterial)      -> Self { Material::Basic(m) } }
+impl From<LambertMaterial>    for Material { fn from(m: LambertMaterial)    -> Self { Material::Lambert(m) } }
+impl From<PhongMaterial>      for Material { fn from(m: PhongMaterial)      -> Self { Material::Phong(m) } }
+impl From<StandardMaterial>   for Material { fn from(m: StandardMaterial)   -> Self { Material::Standard(m) } }
+impl From<PhysicalMaterial>   for Material { fn from(m: PhysicalMaterial)   -> Self { Material::Physical(m) } }
+impl From<NormalMaterial>     for Material { fn from(m: NormalMaterial)     -> Self { Material::Normal(m) } }
+impl From<DepthMaterial>      for Material { fn from(m: DepthMaterial)      -> Self { Material::Depth(m) } }
+impl From<ToonMaterial>       for Material { fn from(m: ToonMaterial)       -> Self { Material::Toon(m) } }
+impl From<MatcapMaterial>     for Material { fn from(m: MatcapMaterial)     -> Self { Material::Matcap(m) } }
+impl From<LineBasicMaterial>  for Material { fn from(m: LineBasicMaterial)  -> Self { Material::Line(m) } }
+impl From<PointsMaterial>     for Material { fn from(m: PointsMaterial)     -> Self { Material::Points(m) } }
+impl From<SpriteMaterial>     for Material { fn from(m: SpriteMaterial)     -> Self { Material::Sprite(m) } }
+impl From<DistanceMaterial>   for Material { fn from(m: DistanceMaterial)   -> Self { Material::Distance(m) } }
+impl From<SkyMaterial>        for Material { fn from(m: SkyMaterial)        -> Self { Material::Sky(m) } }
+impl From<MirrorMaterial>     for Material { fn from(m: MirrorMaterial)     -> Self { Material::Mirror(m) } }

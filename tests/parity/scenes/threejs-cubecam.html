@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#111}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+
+// World scene rendered by both the cube camera and the main camera.
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x223344);
+const cube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({ color: 0xff8844 }));
+cube.rotation.set(0.3, 0.5, 0);
+scene.add(cube);
+
+// Create a cube render target + cube camera (the cube cam captures the
+// surroundings into 6 faces — we use it as an API smoke check here).
+const cubeRT = new THREE.WebGLCubeRenderTarget(64);
+const cubeCam = new THREE.CubeCamera(0.1, 100, cubeRT);
+scene.add(cubeCam);
+cubeCam.position.set(0, 0, 0);
+cubeCam.update(r, scene);
+
+// Now main canvas render — must be unaffected by the cube updates above.
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

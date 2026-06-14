@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#202028}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        // ---- Smoke: construct/use a swath of the new shim API surface.
+        // If any of these throw, the parity harness reports an error.
+
+        // Verify Sprite / InstancedMesh / SkinnedMesh / Skeleton / Bone exist and instantiate cleanly.
+        new THREE.Sprite(new THREE.SpriteMaterial({ color: 0xff0000 }));
+        new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1), new THREE.MeshBasicMaterial({ color: 0x00ff00 }), 4);
+        const bones = [new THREE.Bone(), new THREE.Bone()];
+        const skel = new THREE.Skeleton(bones);
+        if (skel.bones.length !== 2) throw new Error('Skeleton.bones broken: ' + skel.bones.length);
+        const sm = new THREE.SkinnedMesh(new THREE.BoxGeometry(), new THREE.MeshBasicMaterial());
+        sm.bind(skel);
+        if (!sm.skeleton) throw new Error('SkinnedMesh.bind broken');
+        // EdgesGeometry / WireframeGeometry should be real, with extracted edges.
+        const eg = new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1));
+        if (!eg.attributes?.position) throw new Error('EdgesGeometry missing position');
+        const wg = new THREE.WireframeGeometry(new THREE.BoxGeometry(1,1,1));
+        if (!wg.attributes?.position) throw new Error('WireframeGeometry missing position');
+
+        // Math
+        const v = new THREE.Vector3(1, 2, 3).add(new THREE.Vector3(4, 5, 6))
+            .sub(new THREE.Vector3(1, 1, 1)).normalize();
+        if (Math.abs(v.length() - 1) > 1e-5) throw new Error('Vector3.normalize broken');
+        const v2 = new THREE.Vector3(0, 0, 0).lerpVectors(new THREE.Vector3(0,0,0), new THREE.Vector3(2,4,6), 0.5);
+        if (v2.x !== 1 || v2.y !== 2 || v2.z !== 3) throw new Error('lerpVectors broken: ' + JSON.stringify(v2));
+        const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), Math.PI / 2);
+        const m4 = new THREE.Matrix4().makeTranslation(1, 2, 3).multiply(new THREE.Matrix4().makeRotationY(Math.PI/4));
+        const cInv = new THREE.Matrix4().copy(m4).invert();
+        const test = new THREE.Vector3(0, 0, 0).applyMatrix4(m4).applyMatrix4(cInv);
+        if (Math.abs(test.x) > 1e-4 || Math.abs(test.y) > 1e-4 || Math.abs(test.z) > 1e-4) throw new Error('Matrix4.invert broken: ' + JSON.stringify(test));
+
+        // Color
+        const col = new THREE.Color(0xff8800);
+        if (Math.abs(col.getHex() - 0xff8800) > 0xff) throw new Error('Color.getHex broken: ' + col.getHex().toString(16));
+        new THREE.Color().setHSL(0.5, 1, 0.5);
+        new THREE.Color().setStyle('#aabbcc');
+
+        // Geometries (including new fallback stubs)
+        new THREE.BoxGeometry(); new THREE.LatheGeometry(); new THREE.TubeGeometry();
+        new THREE.ExtrudeGeometry(); new THREE.EdgesGeometry(); new THREE.WireframeGeometry();
+        new THREE.ShapeGeometry(); new THREE.ConvexGeometry(); new THREE.DecalGeometry();
+        new THREE.TextGeometry(); new THREE.ParametricGeometry();
+        // Assert real triangulators produce position data (not just BoxGeometry fallback).
+        const lath = new THREE.LatheGeometry();
+        if (!lath.attributes?.position?.array?.length) throw new Error('LatheGeometry has no positions');
+        const par = new THREE.ParametricGeometry();
+        if (!par.attributes?.position?.array?.length) throw new Error('ParametricGeometry has no positions');
+        const shg = new THREE.ShapeGeometry();
+        if (!shg.attributes?.position?.array?.length) throw new Error('ShapeGeometry has no positions');
+
+        // Helpers (no-op stubs)
+        new THREE.DirectionalLightHelper(); new THREE.PointLightHelper();
+        new THREE.SpotLightHelper(); new THREE.CameraHelper();
+        new THREE.ArrowHelper(); new THREE.PlaneHelper(); new THREE.SkeletonHelper();
+
+        // EventDispatcher
+        const ed = new THREE.EventDispatcher();
+        let fired = 0;
+        const listener = () => { fired++; };
+        ed.addEventListener('foo', listener);
+        ed.dispatchEvent({ type: 'foo' });
+        ed.removeEventListener('foo', listener);
+        ed.dispatchEvent({ type: 'foo' });
+        if (fired !== 1) throw new Error('EventDispatcher fired ' + fired + ', expected 1');
+
+        // Loaders (instantiation only — actual fetch in network smoke tests)
+        const lm = new THREE.LoadingManager();
+        new THREE.FileLoader(lm); new THREE.ImageLoader(lm); new THREE.TextureLoader(lm);
+        new THREE.FontLoader(lm); new THREE.GLTFLoader(lm); new THREE.FBXLoader(lm);
+        new THREE.AudioLoader(lm); new THREE.CubeTextureLoader(lm); new THREE.EXRLoader(lm);
+
+        // Controls
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+        new THREE.DragControls(); new THREE.ArcballControls(); new THREE.MapControls();
+        new THREE.FlyControls(); new THREE.TransformControls();
+
+        // Render targets
+        const rt = new THREE.WebGLRenderTarget(256, 256);
+        rt.setSize(512, 512); rt.dispose();
+
+        // Animation tracks
+        new THREE.NumberKeyframeTrack('.opacity', [0, 1], [0, 1]);
+        new THREE.VectorKeyframeTrack('.position', [0, 1], [0,0,0, 1,1,1]);
+        new THREE.QuaternionKeyframeTrack('.quaternion', [0, 1], [0,0,0,1, 0,1,0,0]);
+        new THREE.ColorKeyframeTrack('.color', [0, 1], [1,0,0, 0,1,0]);
+        const ag = new THREE.AnimationObjectGroup({ position: new THREE.Vector3() });
+
+        // Curves
+        const qbc = new THREE.QuadraticBezierCurve(new THREE.Vector2(0, 0), new THREE.Vector2(0.5, 1), new THREE.Vector2(1, 0));
+        const pts = qbc.getPoints(8);
+        if (pts.length !== 9) throw new Error('QuadraticBezierCurve.getPoints broken: ' + pts.length);
+        new THREE.CubicBezierCurve3(new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3());
+        new THREE.SplineCurve([new THREE.Vector2(0,0), new THREE.Vector2(1,1)]);
+        new THREE.ArcCurve(0, 0, 1, 0, Math.PI, false).getPoints(8);
+
+        // MathUtils
+        if (Math.abs(THREE.MathUtils.degToRad(180) - Math.PI) > 1e-9) throw new Error('MathUtils.degToRad broken');
+        if (THREE.MathUtils.clamp(5, 0, 3) !== 3) throw new Error('MathUtils.clamp broken');
+        if (THREE.MathUtils.lerp(0, 10, 0.5) !== 5) throw new Error('MathUtils.lerp broken');
+        const uuid = THREE.MathUtils.generateUUID();
+        if (!/^[0-9A-F-]{36}$/.test(uuid)) throw new Error('UUID looks wrong: ' + uuid);
+        const s = THREE.MathUtils.smoothstep(0.5, 0, 1);
+        if (Math.abs(s - 0.5) > 1e-9) throw new Error('smoothstep(0.5,0,1) != 0.5: ' + s);
+
+        // Constants
+        const expected = { RGBAFormat: 1023, UnsignedByteType: 1009, NearestFilter: 1003,
+            FrontSide: 0, BackSide: 1, DoubleSide: 2, NoBlending: 0, NormalBlending: 1,
+            SRGBColorSpace: 'srgb', NoToneMapping: 0, ACESFilmicToneMapping: 4,
+            LoopOnce: 2200, LoopRepeat: 2201,
+            BasicDepthPacking: 3200, RGBADepthPacking: 3201 };
+        for (const [k, v] of Object.entries(expected)) {
+            if (THREE[k] !== v) throw new Error(`THREE.${k} expected ${v}, got ${THREE[k]}`);
+        }
+        if (THREE.REVISION !== '165') throw new Error('REVISION expected 165, got ' + THREE.REVISION);
+
+        // ---- Now render a tiny scene so the parity test has a baseline image. ----
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x202028);
+        const cube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1),
+            new THREE.MeshBasicMaterial({ color: 0x44cc88 }));
+        cube.rotation.set(0.5, 0.5, 0);
+        cube.scale.setScalar(0.99985);
+        scene.add(cube);
+        cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0);
+        const r = await THREE.WebGLRenderer.create(canvas);
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

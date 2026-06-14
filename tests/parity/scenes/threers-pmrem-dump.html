@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head><body>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+
+await initThreers('/web/pkg/threers_bg.wasm');
+
+function solidFace(size, r, g, b) {
+    const d = new Uint8Array(size * size * 4);
+    for (let i = 0; i < size * size; i++) { d[i*4]=r; d[i*4+1]=g; d[i*4+2]=b; d[i*4+3]=255; }
+    return d;
+}
+
+const size = 32;
+const src = new THREE.CubeTexture(size,
+    solidFace(size, 255, 64, 64),
+    solidFace(size, 64, 255, 64),
+    solidFace(size, 64, 64, 255),
+    solidFace(size, 255, 255, 64),
+    solidFace(size, 255, 64, 255),
+    solidFace(size, 64, 255, 255),
+);
+const pmrem = new THREE.PMREMGenerator(null);
+const env = pmrem.fromCubemap(src);
+if (!env?.texture?._w?.sampleCubeUvEnv) {
+    throw new Error('PMREM env texture missing sampleCubeUvEnv');
+}
+
+const rough = 0.45;
+const dirs = {
+    '+X': [1,0,0], '-X': [-1,0,0], '+Y': [0,1,0], '-Y': [0,-1,0],
+    '+Z': [0,0,1], '-Z': [0,0,-1], 'reflect+Z': [0,0,1],
+};
+const out = {};
+for (const [k, d] of Object.entries(dirs)) {
+    out[k] = Array.from(env.texture._w.sampleCubeUvEnv(d[0], d[1], d[2], rough));
+}
+document.body.dataset.samples = JSON.stringify(out);
+document.body.dataset.ready = 'true';
+</script></body></html>

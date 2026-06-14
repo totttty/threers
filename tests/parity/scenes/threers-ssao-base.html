@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#888}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+(async () => {
+    await initThreers('/web/pkg/threers_bg.wasm');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x888888);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+    const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+    dir.position.set(2, 4, 3);
+    scene.add(dir);
+    const floor = new THREE.Mesh(
+        new THREE.BoxGeometry(3, 0.2, 3),
+        new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.9, metalness: 0.0 })
+    );
+    floor.position.y = -0.6;
+    scene.add(floor);
+    const cube = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.7, 0.7),
+        new THREE.MeshStandardMaterial({ color: 0x6699ff, roughness: 0.6, metalness: 0.0 })
+    );
+    scene.add(cube);
+    const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+    cam.position.set(0, 0.5, 3.5); cam.lookAt(0, 0, 0);
+    const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+    r.setSize(800, 600);
+    r.render(scene, cam);
+    await new Promise(rs => requestAnimationFrame(() => rs()));
+    document.body.dataset.ready = 'true';
+})();
+</script></body></html>

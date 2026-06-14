@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": [],
+    "paths": {
+      "/web/threejs-shim.js": ["./threejs-shim.d.ts"],
+      "/web/pkg/threers.js": ["./pkg/threers.d.ts"]
+    }
+  },
+  "include": [
+    "threejs-shim.d.ts",
+    "examples/controls-threers.ts"
+  ],
+  "exclude": [
+    "examples/controls-threejs.ts"
+  ]
+}

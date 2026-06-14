@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>controls — threers</title>
+    <link rel="stylesheet" href="/web/examples/controls-demo.css">
+</head>
+<body>
+    <header>
+        <h1>threers <span class="tag">· <span id="mode">TrackballControls</span></span></h1>
+        <span class="status">live demo · wasm / wgpu</span>
+        <nav>
+            <a href="/web/examples/controls-threejs.html">← three.js demo</a>
+            <a href="/web/examples/">all examples</a>
+        </nav>
+    </header>
+    <div class="layout">
+        <div class="preview">
+            <div class="hint">drag orbit · right pan · wheel zoom</div>
+            <canvas id="canvas"></canvas>
+            <div id="err"></div>
+        </div>
+        <section class="code-panel" id="code-panel">
+            <div class="tabs"></div>
+            <div class="code-wrap">
+                <div class="loading">Loading source…</div>
+                <pre></pre>
+            </div>
+        </section>
+    </div>
+    <script type="module" src="/web/examples/controls-threers-demo.js"></script>
+    <script type="module">
+    import { initCodePanel } from '/web/examples/controls-code-panel.js';
+
+    await initCodePanel(document.getElementById('code-panel'), [
+        { id: 'js', label: 'JavaScript', url: '/web/examples/controls-threers-demo.js' },
+        { id: 'ts', label: 'TypeScript', url: '/web/examples/controls-threers.ts' },
+        { id: 'rust', label: 'Rust', url: '/examples/controls_orbit.rs' },
+        { id: 'html', label: 'HTML shell', url: '/web/examples/controls-threers.html' },
+    ]);
+    </script>
+</body>
+</html>

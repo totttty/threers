@@ -1,0 +1,194 @@
+{
+  "scenes": [
+    "cube",
+    "sphere-point",
+    "basic-color",
+    "multi-mesh",
+    "plane-rot",
+    "ortho-cube",
+    "spot-light",
+    "hemi-light",
+    "multi-light",
+    "metal-sphere",
+    "nested",
+    "phong",
+    "textured-plane",
+    "vertex-colors",
+    "lines",
+    "points",
+    "torusknot",
+    "lambert",
+    "normal-mat",
+    "depth-overlap",
+    "cylinder",
+    "cone",
+    "torus",
+    "icosahedron",
+    "transparent",
+    "wireframe",
+    "depth-mat",
+    "tetra-octa",
+    "api-smoke",
+    "shadow",
+    "spot-shadow",
+    "multi-shadow",
+    "toon",
+    "physical",
+    "many-meshes",
+    "camera-tilt",
+    "emissive",
+    "background-only",
+    "colored-dir",
+    "mesh-scale",
+    "normal-map",
+    "three-points",
+    "rotation-axes",
+    "instanced",
+    "sprite",
+    "lathe",
+    "gltf-parse",
+    "anim-mixer",
+    "edges-geom",
+    "shape-geom",
+    "canvas-tex",
+    "buffergeo-load",
+    "object-load",
+    "group-xform",
+    "nested-group",
+    "quaternion",
+    "lineloop",
+    "extrude",
+    "visible",
+    "tex-tint",
+    "geo-translate",
+    "dirlight-target",
+    "pointlight-decay",
+    "mixed-mats",
+    "two-pass",
+    "matcap",
+    "layers",
+    "fog",
+    "dashed",
+    "merged-geom",
+    "raycast",
+    "convex",
+    "morph",
+    "multi-mat",
+    "rt",
+    "skinned",
+    "postfx",
+    "cubecam",
+    "sampler",
+    "env-cube",
+    "readback",
+    "postfx-copy",
+    "bloom",
+    "sky",
+    "skinned-morph",
+    "batched",
+    "reflector",
+    "outline",
+    "ssao",
+    "ssr",
+    "pmrem",
+    "parametric",
+    "circle",
+    "ring",
+    "capsule",
+    "dodecahedron",
+    "fog-exp2",
+    "doubleside",
+    "backside",
+    "alphatest",
+    "wireframe-geom",
+    "tube-curve",
+    "extrude-bevel",
+    "render-order",
+    "axes-grid",
+    "quat-track",
+    "color-track",
+    "shadow-mat",
+    "fxaa",
+    "film",
+    "dotscreen",
+    "halftone-postfx",
+    "glitch"
+  ],
+  "apiMap": {
+    "parametric": [
+      "ParametricGeometry"
+    ],
+    "circle": [
+      "CircleGeometry"
+    ],
+    "ring": [
+      "RingGeometry"
+    ],
+    "capsule": [
+      "CapsuleGeometry"
+    ],
+    "dodecahedron": [
+      "DodecahedronGeometry"
+    ],
+    "fog-exp2": [
+      "FogExp2"
+    ],
+    "doubleside": [
+      "DoubleSide"
+    ],
+    "backside": [
+      "BackSide"
+    ],
+    "alphatest": [
+      "alphaTest"
+    ],
+    "wireframe-geom": [
+      "WireframeGeometry"
+    ],
+    "tube-curve": [
+      "TubeGeometry",
+      "CatmullRomCurve3"
+    ],
+    "extrude-bevel": [
+      "ExtrudeGeometry",
+      "bevelEnabled"
+    ],
+    "render-order": [
+      "renderOrder"
+    ],
+    "axes-grid": [
+      "AxesHelper",
+      "GridHelper"
+    ],
+    "quat-track": [
+      "QuaternionKeyframeTrack",
+      "AnimationMixer"
+    ],
+    "color-track": [
+      "ColorKeyframeTrack",
+      "AnimationMixer"
+    ],
+    "shadow-mat": [
+      "ShadowMaterial",
+      "castShadow",
+      "receiveShadow"
+    ],
+    "fxaa": [
+      "FXAAShader",
+      "WebGLRenderTarget"
+    ],
+    "film": [
+      "FilmPass"
+    ],
+    "dotscreen": [
+      "DotScreenPass"
+    ],
+    "halftone-postfx": [
+      "HalftonePass"
+    ],
+    "glitch": [
+      "GlitchPass"
+    ]
+  },
+  "approximate": []
+}

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#080810}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x080810);
+scene.add(new THREE.AmbientLight(0xffffff, 0.1));
+// Three colored point lights illuminating a central sphere from different sides.
+const pl1 = new THREE.PointLight(0xff4444, 2.0, 0, 2);
+pl1.position.set(-2, 0, 1.5);
+scene.add(pl1);
+const pl2 = new THREE.PointLight(0x44ff44, 2.0, 0, 2);
+pl2.position.set(2, 0, 1.5);
+scene.add(pl2);
+const pl3 = new THREE.PointLight(0x4444ff, 2.0, 0, 2);
+pl3.position.set(0, 2.5, 0);
+scene.add(pl3);
+const sphere = new THREE.Mesh(
+    new THREE.SphereGeometry(1.0, 32, 16),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0 })
+);
+scene.add(sphere);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0.2, 3.5); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

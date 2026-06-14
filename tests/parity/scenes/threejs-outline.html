@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap;display:none"></div>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/RenderPass.js';
+import { OutlinePass } from 'https://unpkg.com/three@0.165.0/examples/jsm/postprocessing/OutlinePass.js';
+const errEl = document.getElementById('err');
+try {
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101418);
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+const cube = new THREE.Mesh(
+    new THREE.BoxGeometry(0.6, 0.6, 0.6),
+    new THREE.MeshBasicMaterial({ color: 0x66aaff })
+);
+cube.position.set(-0.5, 0, 0);
+scene.add(cube);
+const sphere = new THREE.Mesh(
+    new THREE.SphereGeometry(0.35, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xff9966 })
+);
+sphere.position.set(0.5, 0, 0);
+scene.add(sphere);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 100);
+cam.position.set(0, 0, 3); cam.lookAt(0, 0, 0);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+
+const composer = new EffectComposer(r);
+composer.addPass(new RenderPass(scene, cam));
+const outlinePass = new OutlinePass(new THREE.Vector2(800, 600), scene, cam);
+outlinePass.selectedObjects = [cube];
+outlinePass.edgeStrength = 5;
+outlinePass.edgeThickness = 2;
+outlinePass.pulsePeriod = 0;
+outlinePass.visibleEdgeColor.set(0xffffff);
+outlinePass.hiddenEdgeColor.set(0xffffff);
+composer.addPass(outlinePass);
+composer.render();
+document.body.dataset.ready = 'true';
+} catch (e) { errEl.style.display='block'; errEl.textContent = e?.stack || String(e); document.body.dataset.ready = 'error'; }
+</script></body></html>

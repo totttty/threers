@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { margin: 0; background: #202030; }
+        canvas { display: block; }
+        #err { position: absolute; top: 0; left: 0; padding: 12px; color: #fdd; background: #500; font-family: monospace; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+<canvas id="canvas" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+
+const errEl = document.getElementById('err');
+function showError(e) {
+    errEl.style.display = 'block';
+    errEl.textContent = (e && e.stack) ? e.stack : String(e);
+    document.body.dataset.ready = 'error';
+}
+
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+
+        const canvas = document.getElementById('canvas');
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x202030);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+        dl.position.set(3, 5, 2);
+        scene.add(dl);
+
+        const cube = new THREE.Mesh(
+            new THREE.BoxGeometry(1, 1, 1),
+            new THREE.MeshStandardMaterial({ color: 0xff6633, roughness: 0.4, metalness: 0.1 })
+        );
+        cube.rotation.set(0.5, 0.8, 0);
+        scene.add(cube);
+
+        const camera = new THREE.PerspectiveCamera(60, 800 / 600, 0.1, 100);
+        camera.position.set(2.5, 2.0, 3.5);
+        camera.lookAt(0, 0, 0);
+
+        const renderer = await THREE.WebGLRenderer.create(canvas);
+        renderer.setSize(800, 600);
+
+        renderer.render(scene, camera);
+        // Wait one frame for the GPU to flush before letting puppeteer capture.
+        await new Promise(r => requestAnimationFrame(() => r()));
+
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        showError(e);
+    }
+})();
+</script>
+</body>
+</html>

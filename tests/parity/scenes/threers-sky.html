@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#000}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        const scene = new THREE.Scene();
+        const sky = new THREE.Sky();
+        sky.scale.set(450000, 450000, 450000);
+        const uniforms = sky.material.uniforms;
+        uniforms.turbidity.value = 10;
+        uniforms.rayleigh.value = 3;
+        uniforms.mieCoefficient.value = 0.005;
+        uniforms.mieDirectionalG.value = 0.7;
+        // Sun just above the horizon (~2° elevation). Higher sun angles clip to
+        // white in the Preetham model without tone mapping (matches three.js Sky).
+        const phi = 88 * Math.PI / 180, theta = 180 * Math.PI / 180;
+        const sx = Math.sin(phi) * Math.sin(theta);
+        const sy = Math.cos(phi);
+        const sz = Math.sin(phi) * Math.cos(theta);
+        uniforms.sunPosition.value.set(sx, sy, sz);
+        scene.add(sky);
+        const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 2000000);
+        cam.position.set(0, 100, 0);
+        cam.lookAt(0, 100, -1);
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+    } catch (e) {
+        console.error(e);
+        errEl.style.display='block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

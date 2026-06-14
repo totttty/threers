@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#000}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { Sky } from 'https://unpkg.com/three@0.165.0/examples/jsm/objects/Sky.js';
+const scene = new THREE.Scene();
+const sky = new Sky();
+sky.scale.setScalar(450000);
+const uniforms = sky.material.uniforms;
+uniforms.turbidity.value = 10;
+uniforms.rayleigh.value = 3;
+uniforms.mieCoefficient.value = 0.005;
+uniforms.mieDirectionalG.value = 0.7;
+// Sun just above the horizon (~2° elevation). Higher angles clip to white without tone mapping.
+const phi = THREE.MathUtils.degToRad(88);
+const theta = THREE.MathUtils.degToRad(180);
+const sun = new THREE.Vector3();
+sun.setFromSphericalCoords(1, phi, theta);
+uniforms.sunPosition.value.copy(sun);
+scene.add(sky);
+const cam = new THREE.PerspectiveCamera(45, 800/600, 0.1, 2000000);
+cam.position.set(0, 100, 0);
+cam.lookAt(0, 100, -1);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false, alpha: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+</script></body></html>

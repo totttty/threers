@@ -1,0 +1,78 @@
+[package]
+name = "threers"
+version = "0.1.0"
+edition = "2021"
+description = "A three.js-inspired 3D library for Rust, built on wgpu"
+license = "MIT"
+readme = "README.md"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wgpu = "0.20"
+bytemuck = { version = "1.16", features = ["derive"] }
+log = "0.4"
+slotmap = "1.0"
+web-time = "0.2"
+
+# Native-only deps (winit + env_logger + pollster only make sense outside wasm).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+winit = "0.29"
+pollster = "0.3"
+env_logger = "0.11"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+futures-channel = "0.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies.web-sys]
+version = "0.3"
+features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Performance",
+    "console",
+]
+
+[[example]]
+name = "cube"
+path = "examples/cube.rs"
+
+[[example]]
+name = "scene_graph"
+path = "examples/scene_graph.rs"
+
+[[example]]
+name = "controls_orbit"
+path = "examples/controls_orbit.rs"
+
+[[example]]
+name = "lathe"
+path = "examples/lathe.rs"
+
+[[example]]
+name = "normal_map"
+path = "examples/normal_map.rs"
+
+[[example]]
+name = "colored_dir"
+path = "examples/colored_dir.rs"
+
+[[example]]
+name = "many_meshes"
+path = "examples/many_meshes.rs"
+
+[[example]]
+name = "physical"
+path = "examples/physical.rs"
+
+[[example]]
+name = "shadow"
+path = "examples/shadow.rs"

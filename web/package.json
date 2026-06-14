@@ -1,0 +1,44 @@
+{
+  "name": "threers",
+  "version": "0.1.0",
+  "description": "three.js-shaped Rust/wgpu renderer — browser shim + wasm",
+  "license": "MIT",
+  "type": "module",
+  "types": "./threejs-shim.d.ts",
+  "exports": {
+    ".": {
+      "types": "./threejs-shim.d.ts",
+      "default": "./threejs-shim.js"
+    },
+    "./threejs-shim.js": {
+      "types": "./threejs-shim.d.ts",
+      "default": "./threejs-shim.js"
+    },
+    "./pkg/threers.js": {
+      "types": "./pkg/threers.d.ts",
+      "default": "./pkg/threers.js"
+    },
+    "./pkg/threers_bg.wasm": "./pkg/threers_bg.wasm"
+  },
+  "files": [
+    "threejs-shim.js",
+    "threejs-shim.d.ts",
+    "pkg"
+  ],
+  "peerDependencies": {
+    "three": "^0.165.0"
+  },
+  "peerDependenciesMeta": {
+    "three": {
+      "optional": true
+    }
+  },
+  "scripts": {
+    "generate:types": "node scripts/generate-shim-types.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "three": "^0.165.0",
+    "typescript": "^5.8.0"
+  }
+}

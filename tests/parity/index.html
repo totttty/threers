@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:,">
+    <script src="/web/webgpu-limit-patch.js"></script>
+    <link rel="modulepreload" href="/web/threejs-shim.js">
+    <link rel="preload" href="/web/pkg/threers_bg.wasm" as="fetch" type="application/wasm" crossorigin>
+    <script>
+    (function () {
+        var KEY = 'parity-theme';
+        var mode = localStorage.getItem(KEY) || 'system';
+        var dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+        document.documentElement.dataset.themeMode = mode;
+    })();
+    </script>
+    <base href="/tests/parity/">
+    <style>
+        [data-theme="dark"] {
+            color-scheme: dark;
+            --bg: #0e1116;
+            --panel: #161b22;
+            --border: #30363d;
+            --text: #e6edf3;
+            --muted: #8b949e;
+            --accent: #58a6ff;
+            --good: #3fb950;
+            --ok: #79c0ff;
+            --warn: #d29922;
+            --bad: #f85149;
+            --btn-bg: #21262d;
+            --btn-hover: #30363d;
+            --btn-primary-bg: #238636;
+            --btn-primary-border: #238636;
+            --surface-hover: #21262d;
+            --active-bg: #388bfd26;
+            --active-border: #388bfd66;
+            --canvas-bg: #101418;
+            --canvas-chrome: #101418;
+            --code-bg: #0d1117;
+            --code-head: #161b22;
+            --code-text: #c9d1d9;
+            --pill-bg: #21262d;
+            --pill-ok-bg: #23863633;
+            --pill-bad-bg: #f8514933;
+            --pill-loading-bg: #d2992233;
+            --boot-error-bg: #3d1214;
+            --boot-error-text: #ffd7d5;
+            --kbd-bg: #21262d;
+            --sidebar-w: 240px;
+        }
+        [data-theme="light"] {
+            color-scheme: light;
+            --bg: #f6f8fa;
+            --panel: #ffffff;
+            --border: #d0d7de;
+            --text: #1f2328;
+            --muted: #656d76;
+            --accent: #0969da;
+            --good: #1a7f37;
+            --ok: #0969da;
+            --warn: #9a6700;
+            --bad: #cf222e;
+            --btn-bg: #f6f8fa;
+            --btn-hover: #eaeef2;
+            --btn-primary-bg: #1a7f37;
+            --btn-primary-border: #1a7f37;
+            --surface-hover: #f3f4f6;
+            --active-bg: #0969da1a;
+            --active-border: #0969da55;
+            --canvas-bg: #eaeef2;
+            --canvas-chrome: #101418;
+            --code-bg: #ffffff;
+            --code-head: #f6f8fa;
+            --code-text: #1f2328;
+            --pill-bg: #eaeef2;
+            --pill-ok-bg: #1a7f3726;
+            --pill-bad-bg: #cf222e26;
+            --pill-loading-bg: #9a670026;
+            --boot-error-bg: #ffebe9;
+            --boot-error-text: #82071e;
+            --kbd-bg: #eaeef2;
+            --sidebar-w: 240px;
+        }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; }
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+        }
+        header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+            background: var(--panel);
+            flex-shrink: 0;
+        }
+        header h1 {
+            font-size: 15px;
+            font-weight: 600;
+            margin: 0;
+            flex: 1;
+        }
+        header h1 span { color: var(--muted); font-weight: 400; }
+        .btn {
+            background: var(--btn-bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn:hover { background: var(--btn-hover); }
+        .btn.primary { background: var(--btn-primary-bg); border-color: var(--btn-primary-border); color: #fff; }
+        .theme-switch {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .theme-switch .theme-btn {
+            border: none;
+            border-radius: 0;
+            border-right: 1px solid var(--border);
+            padding: 6px 10px;
+            font-size: 12px;
+            background: var(--btn-bg);
+        }
+        .theme-switch .theme-btn:last-child { border-right: none; }
+        .theme-switch .theme-btn.active {
+            background: var(--active-bg);
+            color: var(--accent);
+            box-shadow: inset 0 0 0 1px var(--active-border);
+        }
+        .layout {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+        }
+        aside {
+            width: var(--sidebar-w);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            background: var(--panel);
+            flex-shrink: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+        #search {
+            margin: 10px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 13px;
+            flex-shrink: 0;
+        }
+        #scene-list {
+            list-style: none;
+            margin: 0;
+            padding: 0 6px 12px;
+            overflow-y: auto;
+            flex: 1;
+            min-height: 0;
+        }
+        .scene-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+            text-align: left;
+            padding: 6px 8px;
+            margin-bottom: 2px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text);
+            cursor: pointer;
+            font-size: 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+        .scene-item:hover { background: var(--surface-hover); }
+        .scene-item.active { background: var(--active-bg); outline: 1px solid var(--active-border); }
+        .scene-item .pct { color: var(--muted); font-size: 11px; }
+        .scene-item.tag-perfect .slug::before { content: '● '; color: var(--good); }
+        .scene-item.tag-identical .slug::before { content: '● '; color: var(--good); }
+        .scene-item.tag-match .slug::before { content: '● '; color: var(--ok); }
+        .scene-item.tag-warn .slug::before { content: '● '; color: var(--warn); }
+        .scene-item.tag-err .slug::before { content: '● '; color: var(--bad); }
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+        #view-single {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+            flex-wrap: wrap;
+        }
+        #scene-title {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 16px;
+            font-weight: 600;
+            margin: 0;
+        }
+        #scene-counter { color: var(--muted); font-size: 13px; }
+        .stat { font-size: 13px; margin-left: auto; }
+        .stat.perfect, .stat.good { color: var(--good); }
+        .stat.ok { color: var(--ok); }
+        .stat.bad { color: var(--bad); }
+        .stat.muted { color: var(--muted); }
+        #scene-apis {
+            width: 100%;
+            font-size: 12px;
+            color: var(--muted);
+            margin: 0;
+        }
+        .compare-wrap {
+            flex: 1;
+            display: flex;
+            gap: 12px;
+            padding: 12px 16px 16px;
+            min-height: 0;
+            overflow: auto;
+        }
+        .pane {
+            flex: 1;
+            min-width: 280px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .pane-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .pill {
+            font-size: 11px;
+            font-weight: 500;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: var(--pill-bg);
+            color: var(--muted);
+        }
+        .pill.ok { background: var(--pill-ok-bg); color: var(--good); }
+        .pill.bad { background: var(--pill-bad-bg); color: var(--bad); }
+        .pill.loading { background: var(--pill-loading-bg); color: var(--warn); }
+        .frame-box {
+            flex: 0 0 auto;
+            background: var(--canvas-bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: auto;
+        }
+        .frame-box iframe {
+            width: 800px;
+            height: 600px;
+            border: none;
+            display: block;
+            background: var(--canvas-chrome);
+        }
+        .code-box {
+            margin-top: 8px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 0;
+            min-height: 140px;
+            max-height: none;
+            background: var(--code-bg);
+            overflow: hidden;
+        }
+        .code-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border);
+            background: var(--code-head);
+            flex-shrink: 0;
+        }
+        .code-tabs {
+            display: flex;
+            gap: 4px;
+            padding: 6px 10px 0;
+            background: var(--code-head);
+            border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .code-tab {
+            background: transparent;
+            border: 1px solid transparent;
+            border-bottom: none;
+            color: var(--muted);
+            padding: 4px 10px;
+            border-radius: 6px 6px 0 0;
+            cursor: pointer;
+            font-size: 11px;
+            font-family: inherit;
+        }
+        .code-tab:hover { color: var(--text); }
+        .code-tab.active {
+            color: var(--text);
+            background: var(--code-bg);
+            border-color: var(--border);
+        }
+        .code-path {
+            flex: 1;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11px;
+            color: var(--muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .code-path a { color: var(--accent); text-decoration: none; }
+        .code-path a:hover { text-decoration: underline; }
+        .btn-sm {
+            padding: 3px 8px;
+            font-size: 11px;
+        }
+        .code-src {
+            margin: 0;
+            padding: 10px 12px;
+            overflow: auto;
+            flex: 1;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 11px;
+            line-height: 1.45;
+            tab-size: 2;
+            background: var(--code-bg);
+            color: var(--code-text);
+        }
+        .code-src code {
+            display: block;
+            white-space: pre;
+            font-family: inherit;
+            font-size: inherit;
+            line-height: inherit;
+            background: transparent !important;
+            padding: 0 !important;
+        }
+        .code-src code:not(.hljs) {
+            color: var(--code-text);
+        }
+        .code-src code.hljs {
+            color: var(--code-text);
+        }
+        /* GitHub light syntax (parity UI owns colors — no external hljs theme sheet) */
+        [data-theme="light"] .code-src code.hljs { color: #24292f; }
+        [data-theme="light"] .code-src .hljs-comment,
+        [data-theme="light"] .code-src .hljs-formula { color: #6a737d; font-style: italic; }
+        [data-theme="light"] .code-src .hljs-keyword,
+        [data-theme="light"] .code-src .hljs-doctag { color: #d73a49; }
+        [data-theme="light"] .code-src .hljs-string,
+        [data-theme="light"] .code-src .hljs-regexp { color: #032f62; }
+        [data-theme="light"] .code-src .hljs-number,
+        [data-theme="light"] .code-src .hljs-literal,
+        [data-theme="light"] .code-src .hljs-attr,
+        [data-theme="light"] .code-src .hljs-attribute,
+        [data-theme="light"] .code-src .hljs-variable.language_ { color: #005cc5; }
+        [data-theme="light"] .code-src .hljs-title,
+        [data-theme="light"] .code-src .hljs-title.function_,
+        [data-theme="light"] .code-src .hljs-title.class_ { color: #6f42c1; }
+        [data-theme="light"] .code-src .hljs-built_in,
+        [data-theme="light"] .code-src .hljs-type,
+        [data-theme="light"] .code-src .hljs-symbol,
+        [data-theme="light"] .code-src .hljs-variable { color: #e36209; }
+        [data-theme="light"] .code-src .hljs-name,
+        [data-theme="light"] .code-src .hljs-selector-tag { color: #22863a; }
+        [data-theme="light"] .code-src .hljs-meta { color: #6a737d; }
+        [data-theme="light"] .code-src .hljs-params,
+        [data-theme="light"] .code-src .hljs-punctuation,
+        [data-theme="light"] .code-src .hljs-subst { color: #24292f; }
+        /* GitHub dark syntax */
+        [data-theme="dark"] .code-src code.hljs { color: #c9d1d9; }
+        [data-theme="dark"] .code-src .hljs-keyword { color: #ff7b72; }
+        [data-theme="dark"] .code-src .hljs-string { color: #a5d6ff; }
+        [data-theme="dark"] .code-src .hljs-number { color: #79c0ff; }
+        [data-theme="dark"] .code-src .hljs-comment { color: #8b949e; font-style: italic; }
+        [data-theme="dark"] .code-src .hljs-title.function_ { color: #d2a8ff; }
+        [data-theme="dark"] .code-src .hljs-title.class_ { color: #d2a8ff; }
+        [data-theme="dark"] .code-src .hljs-built_in { color: #ffa657; }
+        [data-theme="dark"] .code-src .hljs-type { color: #ffa657; }
+        [data-theme="dark"] .code-src .hljs-meta { color: #8b949e; }
+        [data-theme="dark"] .code-src .hljs-literal { color: #79c0ff; }
+        [data-theme="dark"] .code-src .hljs-params { color: #c9d1d9; }
+        [data-theme="dark"] .code-src .hljs-attr { color: #79c0ff; }
+        [data-theme="dark"] .code-src .hljs-attribute { color: #79c0ff; }
+        [data-theme="dark"] .code-src .hljs-variable { color: #ffa657; }
+        [data-theme="dark"] .code-src .hljs-symbol { color: #79c0ff; }
+        [data-theme="dark"] .code-src .hljs-punctuation { color: #c9d1d9; }
+        .code-src.loading code {
+            color: var(--muted);
+            font-style: italic;
+        }
+        .code-src.is-error code {
+            color: var(--bad);
+            white-space: pre-wrap;
+        }
+        #view-grid {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 12px 16px 24px;
+        }
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 16px;
+        }
+        .grid-card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px;
+            cursor: pointer;
+            text-align: left;
+            color: var(--text);
+        }
+        .grid-card:hover { border-color: var(--accent); }
+        .grid-label {
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+        .grid-pair {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 4px;
+        }
+        .grid-pair iframe {
+            width: 100%;
+            height: 120px;
+            border: none;
+            background: var(--canvas-bg);
+            pointer-events: none;
+        }
+        .hint {
+            font-size: 12px;
+            color: var(--muted);
+            padding: 0 16px 10px;
+            flex-shrink: 0;
+            margin: 0;
+        }
+        .hint kbd {
+            background: var(--kbd-bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 1px 5px;
+            font-size: 11px;
+        }
+        [hidden] { display: none !important; }
+        #boot-error {
+            margin: 0;
+            padding: 10px 16px;
+            background: var(--boot-error-bg);
+            border-bottom: 1px solid var(--bad);
+            color: var(--boot-error-text);
+            font-family: ui-monospace, monospace;
+            font-size: 12px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <p id="boot-error" hidden></p>
+    <header>
+        <h1>threers <span>· three.js parity</span></h1>
+        <div class="theme-switch" role="group" aria-label="Color theme">
+            <button type="button" class="btn theme-btn" data-theme-mode="system" title="Match system appearance">System</button>
+            <button type="button" class="btn theme-btn" data-theme-mode="light" title="Light theme">Light</button>
+            <button type="button" class="btn theme-btn" data-theme-mode="dark" title="Dark theme">Dark</button>
+        </div>
+        <button type="button" class="btn" id="btn-single">Single</button>
+        <button type="button" class="btn" id="btn-grid">Grid overview</button>
+        <a class="btn" id="btn-open-scene" href="#" target="_blank" rel="noopener">Open three.js</a>
+    </header>
+    <div class="layout">
+        <aside>
+            <input id="search" type="search" placeholder="Filter scenes…" autocomplete="off">
+            <div id="scene-list" role="listbox" aria-label="Scenes"></div>
+        </aside>
+        <main>
+            <div id="view-single">
+                <div class="toolbar">
+                    <button type="button" class="btn" id="btn-prev" aria-label="Previous scene">◀</button>
+                    <button type="button" class="btn" id="btn-next" aria-label="Next scene">▶</button>
+                    <button type="button" class="btn" id="btn-reload" title="Reload (R)">↻</button>
+                    <h2 id="scene-title">—</h2>
+                    <span id="scene-counter">—</span>
+                    <span id="scene-stat" class="stat muted">—</span>
+                    <p id="scene-apis"></p>
+                </div>
+                <p class="hint">Navigate with <kbd>←</kbd> <kbd>→</kbd> or <kbd>J</kbd> <kbd>K</kbd> · reload <kbd>R</kbd> · run <code>node run.js</code> to refresh diff stats</p>
+                <div class="compare-wrap">
+                    <div class="pane">
+                        <div class="pane-head">
+                            <span>three.js r165</span>
+                            <span id="status-three" class="pill loading">—</span>
+                        </div>
+                        <div class="frame-box">
+                            <iframe id="frame-three" title="three.js reference" src="about:blank"></iframe>
+                        </div>
+                        <div class="code-box">
+                            <div class="code-tabs" id="tabs-three" role="tablist">
+                                <button type="button" class="code-tab active" data-lang="javascript" role="tab">JavaScript</button>
+                                <button type="button" class="code-tab" data-lang="typescript" role="tab">TypeScript</button>
+                            </div>
+                            <div class="code-head">
+                                <span class="code-path" id="code-path-three">—</span>
+                                <button type="button" class="btn btn-sm" id="btn-copy-three" title="Copy source">Copy</button>
+                            </div>
+                            <pre class="code-src loading" id="code-three"><code>Loading source…</code></pre>
+                        </div>
+                    </div>
+                    <div class="pane">
+                        <div class="pane-head">
+                            <span>threers (wasm / wgpu)</span>
+                            <span id="status-threers" class="pill loading">—</span>
+                        </div>
+                        <div class="frame-box">
+                            <iframe id="frame-threers" title="threers implementation" src="about:blank"></iframe>
+                        </div>
+                        <div class="code-box">
+                            <div class="code-tabs" id="tabs-threers" role="tablist">
+                                <button type="button" class="code-tab active" data-lang="javascript" role="tab">JavaScript</button>
+                                <button type="button" class="code-tab" data-lang="typescript" role="tab">TypeScript</button>
+                                <button type="button" class="code-tab" data-lang="rust" role="tab">Rust</button>
+                            </div>
+                            <div class="code-head">
+                                <span class="code-path" id="code-path-threers">—</span>
+                                <button type="button" class="btn btn-sm" id="btn-copy-threers" title="Copy source">Copy</button>
+                            </div>
+                            <pre class="code-src loading" id="code-threers"><code>Loading source…</code></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="view-grid" hidden>
+                <p class="hint">Click a card to open side-by-side compare. Grid loads scenes lazily — scroll for more.</p>
+                <div id="grid"></div>
+            </div>
+        </main>
+    </div>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/languages/javascript.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/languages/typescript.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/languages/rust.min.js"></script>
+    <script src="/tests/parity/compare-ui.js"></script>
+    <script>
+    if (location.protocol === 'file:') {
+        var boot = document.getElementById('boot-error');
+        boot.hidden = false;
+        boot.textContent = 'Open via the local server (not file://):\n\ncd tests/parity && node server.js\n\nThen visit http://localhost:8087/tests/parity/';
+    } else {
+        initCompare().catch(function (err) {
+            var boot = document.getElementById('boot-error');
+            boot.hidden = false;
+            boot.textContent = (err && err.stack) ? err.stack : String(err);
+        });
+    }
+    </script>
+</body>
+</html>

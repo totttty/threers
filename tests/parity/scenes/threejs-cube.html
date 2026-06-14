@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { margin: 0; background: #202030; }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+<canvas id="canvas" width="800" height="600"></canvas>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://unpkg.com/three@0.165.0/build/three.module.js"
+    }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const canvas = document.getElementById('canvas');
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x202030);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+const dl = new THREE.DirectionalLight(0xffffff, 1.0);
+dl.position.set(3, 5, 2);
+scene.add(dl);
+
+const cube = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshStandardMaterial({ color: 0xff6633, roughness: 0.4, metalness: 0.1 })
+);
+cube.rotation.set(0.5, 0.8, 0);
+scene.add(cube);
+
+const camera = new THREE.PerspectiveCamera(60, 800 / 600, 0.1, 100);
+camera.position.set(2.5, 2.0, 3.5);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+renderer.setSize(800, 600, false);
+renderer.setPixelRatio(1);
+
+renderer.render(scene, camera);
+
+// Mark complete so puppeteer knows it's safe to screenshot.
+document.body.dataset.ready = 'true';
+</script>
+</body>
+</html>
