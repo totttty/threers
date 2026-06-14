@@ -1185,6 +1185,7 @@ export class Mesh {
     constructor(geometry, material) {
         this.geometry = geometry;
         this.material = material;
+        this.isMesh = true;
         // BufferGeometry needs conversion to a WebGeometry handle before Mesh.
         const geom_w = _geomToWebGeom(geometry);
         // For multi-material meshes, use the first material as a placeholder.
@@ -1196,6 +1197,10 @@ export class Mesh {
         this.quaternion = new Quaternion();
         _bindRotationQuaternion(this);
         this.scale = new Vector3(1, 1, 1);
+        this.matrix = new Matrix4();
+        this.matrixWorld = new Matrix4();
+        this.matrixAutoUpdate = true;
+        this.matrixWorldNeedsUpdate = true;
         this.visible = true;
         this.name = '';
         this.layers = new Layers();
@@ -1652,19 +1657,32 @@ export class Points {
 export class Group {
     constructor() {
         this._isGroup = true;
+        this.isGroup = true;
         this.position = new Vector3();
         this.rotation = new Euler();
         this.scale = new Vector3(1, 1, 1);
         this._handle = null;
         this._children = [];
+        this.matrix = new Matrix4();
+        this.matrixWorld = new Matrix4();
+        this.matrixAutoUpdate = true;
+        this.matrixWorldNeedsUpdate = true;
     }
-    add(child) {
-        this._children.push(child);
-        // If group was already added to a scene, attach child immediately.
-        if (this._scene && this._handle && child instanceof Mesh) {
-            child._handle = this._scene._w.addMeshTo(this._handle, child._w);
-            this._scene._objects.push(child);
+    add(...children) {
+        for (const child of children) {
+            if (!child) continue;
+            this._children.push(child);
+            child.parent = this;
+            // If group was already added to a scene, attach child immediately.
+            if (this._scene && this._handle && child instanceof Mesh) {
+                child._handle = this._scene._w.addMeshTo(this._handle, child._w);
+                this._scene._objects.push(child);
+            }
         }
+        return this;
+    }
+    get children() {
+        return this._children;
     }
 }
 
@@ -2882,8 +2900,16 @@ export class Scene {
         }
         return undefined;
     }
-    add(obj) {
+    add(...objects) {
+        for (const obj of objects) {
+            if (!obj) continue;
+            this._addOne(obj);
+        }
+        return this;
+    }
+    _addOne(obj) {
         this.children.push(obj);
+        obj.parent = this;
         if (obj._isHelper) {
             const ax = obj._isHelper === 'axes' ? obj._w : undefined;
             const gr = obj._isHelper === 'grid' ? obj._w : undefined;
@@ -3103,6 +3129,10 @@ export class PerspectiveCamera {
     lookAt(x, y, z) {
         if (x instanceof Vector3) { this._lookAt.copy(x); this._w.lookAt(x.x, x.y, x.z); }
         else { this._lookAt.set(x, y, z); this._w.lookAt(x, y, z); }
+    }
+    updateMatrixWorld() {
+        this._sync();
+        return this;
     }
     updateProjectionMatrix() { this._w.setAspect(this.aspect); }
     _sync() {

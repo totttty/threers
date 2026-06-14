@@ -94,7 +94,7 @@ let threersRunnerBoot = null;
 /** Bust iframe cache after wasm/shim rebuilds (from build-id.txt or ↻ / R). */
 let iframeCacheBust = '';
 /** Bump when threers-runner.js changes (paired with wasm build-id for ?v= cache bust). */
-const THREERS_RUNNER_REV = 4;
+const THREERS_RUNNER_REV = 7;
 
 async function fetchAssetVersion() {
     try {

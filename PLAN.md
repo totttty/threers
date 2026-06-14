@@ -4,8 +4,11 @@ Roadmap and deferred work for the three.js-compatible Rust/wgpu stack (`web/thre
 
 ## Now
 
-- Core parity suite (91 scenes + generated edge cases)
+- Core parity suite (113 scenes + generated edge cases)
 - Post-processing pass parity (halftone + film perfect; glitch/dotscreen/fxaa approximate — see notes below)
+- **mesh-bvh v1** — opt-in Cargo/JS feature; 2 flagged parity scenes at 0% pixel diff (see below)
+- **mesh-bvh v2** — build strategies, refit, serialize, extended queries, StaticGeometryGenerator; 5 parity scenes at 0% pixel diff; `scripts/ci-mesh-bvh.sh`
+- Parity compare UI — orbit controls on all interactive scenes, **Sync orbit** on by default, mesh-bvh scenes in sidebar
 
 **Approximate postfx (SwiftShader parity run)**
 
@@ -22,10 +25,10 @@ Roadmap and deferred work for the three.js-compatible Rust/wgpu stack (`web/thre
 
 Optional compatibility with popular three.js add-ons, compiled only when enabled so default wasm stays lean.
 
-| Flag | Package | Purpose |
-|------|---------|---------|
-| `mesh-bvh` | [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh) | BVH-accelerated raycasting, shapecast, GPU picking helpers |
-| `bvh-csg` | [three-bvh-csg](https://github.com/gkjohnson/three-bvh-csg) | Boolean CSG on `BufferGeometry` (depends on `mesh-bvh`) |
+| Flag | Package | Purpose | Status |
+|------|---------|---------|--------|
+| `mesh-bvh` | [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh) | BVH-accelerated raycasting, shapecast, GPU picking helpers | **v2 shipped** (core + extended queries) |
+| `bvh-csg` | [three-bvh-csg](https://github.com/gkjohnson/three-bvh-csg) | Boolean CSG on `BufferGeometry` (depends on `mesh-bvh`) | Not started |
 
 **Approach**
 
@@ -40,7 +43,9 @@ Optional compatibility with popular three.js add-ons, compiled only when enabled
 - No requirement to ship the full three-mesh-bvh shader/debug visualization suite on day one.
 - No default enablement; apps opt in explicitly at build time.
 
-### mesh-bvh (implemented)
+---
+
+### mesh-bvh — v2 (shipped)
 
 Build wasm with BVH support:
 
@@ -61,4 +66,61 @@ geom.boundsTree = new MeshBVH(geom);
 
 Verify: `node web/scripts/check-mesh-bvh.mjs` (after `MESH_BVH=1` build).
 
-Flagged parity scenes: `tests/parity/scenes-manifest-mesh-bvh.json` — run via `node tests/parity/run-mesh-bvh.js` (after `MESH_BVH=1 web/build.sh`).
+**Implemented (Rust + wasm + `web/mesh-bvh-impl.js`)**
+
+| API | Notes |
+|-----|-------|
+| `MeshBVH` constructor | `CENTER` / `AVERAGE` / `SAH`; `offset` / `count` range build |
+| `raycast` / `raycastFirst` | Local-space; sorted hits; backface culling (matches three-mesh-bvh) |
+| `shapecast` | `NOT_INTERSECTED` / `INTERSECTED` / `CONTAINED`; JS traversal over wasm `nodeBuffer` |
+| `getBoundingBox` | Root AABB |
+| `refit` | Rebuild leaf bounds after position-only edits |
+| `serialize` / `deserialize` | Versioned binary round-trip |
+| `intersectsBox` / `intersectsSphere` | BVH overlap queries |
+| `closestPointToPoint` | Closest point on mesh surface |
+| `computeBoundsTree` / `disposeBoundsTree` | On `BufferGeometry`; invalidates on geometry edits |
+| `acceleratedRaycast` | Patches `Mesh.raycast`; respects `firstHitOnly`; uses `matrixWorld` |
+| `StaticGeometryGenerator` | World-space bake + `mergeGeometries`; built-in primitives via `toBufferGeometry()` |
+| `GenerateMeshBVHWorker` | Async API stub (main-thread yield; no real worker yet) |
+| `installMeshBvh(THREE)` | Prototype patches + `Raycaster.intersectObject` |
+| `Raycaster` fast path | `bounds_tree` on `BufferGeometry` when feature enabled |
+
+**Parity**
+
+- Manifest: `tests/parity/scenes-manifest-mesh-bvh.json` (5 scenes)
+- Runner: `node tests/parity/run-mesh-bvh.js` (requires `MESH_BVH=1 web/build.sh`)
+- CI: `scripts/ci-mesh-bvh.sh` (build + `check-mesh-bvh.mjs` + unit tests + parity)
+- Results: `tests/parity/out/compare-results-mesh-bvh.json`
+- Compare UI: scenes merged into sidebar; `threers-runner` + `threejs-runner` inject orbit controls; mesh-bvh addon loaded when `features.meshBvh`
+
+| Scene | Visual diff | Meta |
+|-------|-------------|------|
+| `mesh-bvh-raycast` | 0% | `hitCount` + `hitDistance` match |
+| `mesh-bvh-shapecast` | 0% | `shapecastHits` match (225) |
+| `mesh-bvh-multihit` | 0% | multi-object sorted hits |
+| `mesh-bvh-static-gen` | 0% | `StaticGeometryGenerator` merge + raycast |
+| `mesh-bvh-intersects` | 0% | `intersectsBox` / `intersectsSphere` |
+
+**Dev footguns**
+
+- Plain `web/build.sh` sets `features.meshBvh: false` — mesh-bvh scenes fail in compare UI until rebuild with `MESH_BVH=1`.
+- mesh-bvh parity is **not** in main `node tests/parity/run.js`; run `run-mesh-bvh.js` or `scripts/ci-mesh-bvh.sh`.
+
+---
+
+### mesh-bvh — v3 (deferred, full three-mesh-bvh parity)
+
+Remaining backlog for 100% three-mesh-bvh coverage:
+
+1. **Workers** — real `GenerateMeshBVHWorker` / `ParallelMeshBVHWorker` (Web Worker wasm build)
+2. **Extended queries** — `raycastObject3D`, `intersectsGeometry`, `closestPointToGeometry`, `bvhcast`
+3. **Other BVH types** — lines, points, skinned, batched / instanced (`ObjectBVH`, batched bounds trees)
+4. **GPU / debug** — `BVHShaderGLSL`, WebGPU/TSL compute raycast, `VertexAttributeTexture`, `MeshBVHHelper`
+5. **Parity** — `CONTAINED` shapecast edge case; merge mesh-bvh into main `run.js` CI (optional)
+6. **Downstream** — `bvh-csg` feature (implies `mesh-bvh`)
+
+---
+
+### bvh-csg (not started)
+
+Depends on stable `mesh-bvh` v2. See [three-bvh-csg](https://github.com/gkjohnson/three-bvh-csg). Add flagged parity scenes (union / subtract / intersect) when implemented.

@@ -3125,10 +3125,24 @@ impl WebMeshBvh {
         max_depth: u32,
         max_leaf_tris: u32,
     ) -> Result<WebMeshBvh, JsValue> {
+        Self::new_with_options_full(geometry, max_depth, max_leaf_tris, crate::mesh_bvh::CENTER, 0, 0)
+    }
+
+    #[wasm_bindgen(js_name = newWithOptionsFull)]
+    pub fn new_with_options_full(
+        geometry: &WebBufferGeometry,
+        max_depth: u32,
+        max_leaf_tris: u32,
+        strategy: u32,
+        offset: u32,
+        count: u32,
+    ) -> Result<WebMeshBvh, JsValue> {
         let options = crate::mesh_bvh::BuildOptions {
-            strategy: crate::mesh_bvh::CENTER,
+            strategy,
             max_depth,
             max_leaf_tris,
+            offset,
+            count,
         };
         let bvh = crate::mesh_bvh::MeshBvh::build(&geometry.inner, options)
             .ok_or_else(|| JsValue::from_str("failed to build MeshBVH"))?;
@@ -3151,7 +3165,7 @@ impl WebMeshBvh {
             crate::Vector3::new(ox, oy, oz),
             crate::Vector3::new(dx, dy, dz),
         );
-        let hits = self.inner.raycast(&ray, near, far, false);
+        let hits = self.inner.raycast(&ray, near, far, true);
         pack_hits(&hits)
     }
 
@@ -3172,7 +3186,7 @@ impl WebMeshBvh {
             crate::Vector3::new(ox, oy, oz),
             crate::Vector3::new(dx, dy, dz),
         );
-        match self.inner.raycast_first(&ray, near, far, false) {
+        match self.inner.raycast_first(&ray, near, far, true) {
             Some(h) => pack_hits(&[h]),
             None => Vec::new(),
         }
@@ -3215,6 +3229,66 @@ impl WebMeshBvh {
     pub fn triangle_order(&self) -> Vec<u32> {
         self.inner.triangle_order().iter().map(|&i| i as u32).collect()
     }
+
+    #[wasm_bindgen(js_name = refit)]
+    pub fn refit(&mut self, positions: &[f32]) {
+        Arc::make_mut(&mut self.inner).refit(positions);
+    }
+
+    #[wasm_bindgen(js_name = intersectsBox)]
+    pub fn intersects_box(&self, min_x: f32, min_y: f32, min_z: f32, max_x: f32, max_y: f32, max_z: f32) -> bool {
+        let b = crate::Box3::new(
+            crate::Vector3::new(min_x, min_y, min_z),
+            crate::Vector3::new(max_x, max_y, max_z),
+        );
+        self.inner.intersects_box(&b)
+    }
+
+    #[wasm_bindgen(js_name = intersectsSphere)]
+    pub fn intersects_sphere(&self, cx: f32, cy: f32, cz: f32, radius: f32) -> bool {
+        let s = crate::Sphere::new(crate::Vector3::new(cx, cy, cz), radius);
+        self.inner.intersects_sphere(&s)
+    }
+
+    /// Closest point: `[px, py, pz, distance, face_index]`.
+    #[wasm_bindgen(js_name = closestPointToPoint)]
+    pub fn closest_point_to_point(&self, px: f32, py: f32, pz: f32) -> Vec<f32> {
+        let (point, dist, tri) = self.inner.closest_point_to_point(crate::Vector3::new(px, py, pz));
+        vec![point.x, point.y, point.z, dist, tri as f32]
+    }
+
+    /// Serialize to flat arrays for JS: version, nodeBuffer, triangleOrder, triangleIndices, positions.
+    #[wasm_bindgen(js_name = serialize)]
+    pub fn serialize(&self) -> js_sys::Array {
+        let data = self.inner.serialize();
+        let arr = js_sys::Array::new();
+        arr.push(&JsValue::from_f64(data.version as f64));
+        arr.push(&js_sys::Float32Array::from(data.node_buffer.as_slice()).into());
+        arr.push(&js_sys::Uint32Array::from(data.triangle_order.as_slice()).into());
+        arr.push(&js_sys::Uint32Array::from(data.triangle_indices.as_slice()).into());
+        arr.push(&js_sys::Float32Array::from(data.positions.as_slice()).into());
+        arr
+    }
+
+    #[wasm_bindgen(js_name = deserialize)]
+    pub fn deserialize(
+        version: u32,
+        node_buffer: &[f32],
+        triangle_order: &[u32],
+        triangle_indices: &[u32],
+        positions: &[f32],
+    ) -> Result<WebMeshBvh, JsValue> {
+        let data = crate::mesh_bvh::SerializedMeshBvh {
+            version,
+            node_buffer: node_buffer.to_vec(),
+            triangle_order: triangle_order.to_vec(),
+            triangle_indices: triangle_indices.to_vec(),
+            positions: positions.to_vec(),
+        };
+        let bvh = crate::mesh_bvh::MeshBvh::deserialize(data)
+            .ok_or_else(|| JsValue::from_str("failed to deserialize MeshBVH"))?;
+        Ok(WebMeshBvh { inner: Arc::new(bvh) })
+    }
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "mesh-bvh"))]
@@ -3241,10 +3315,24 @@ impl WebBufferGeometry {
         max_depth: u32,
         max_leaf_tris: u32,
     ) -> Result<WebMeshBvh, JsValue> {
+        self.compute_bounds_tree_full(max_depth, max_leaf_tris, crate::mesh_bvh::CENTER, 0, 0)
+    }
+
+    #[wasm_bindgen(js_name = computeBoundsTreeFull)]
+    pub fn compute_bounds_tree_full(
+        &mut self,
+        max_depth: u32,
+        max_leaf_tris: u32,
+        strategy: u32,
+        offset: u32,
+        count: u32,
+    ) -> Result<WebMeshBvh, JsValue> {
         let options = crate::mesh_bvh::BuildOptions {
-            strategy: crate::mesh_bvh::CENTER,
+            strategy,
             max_depth,
             max_leaf_tris,
+            offset,
+            count,
         };
         let bvh = Arc::make_mut(&mut self.inner)
             .compute_bounds_tree(options)

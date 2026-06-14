@@ -155,4 +155,4 @@ pub use scene::Scene;
 pub use renderer::{Renderer, RenderTarget};
 
 #[cfg(feature = "mesh-bvh")]
-pub use mesh_bvh::{MeshBvh, BvhHit, BuildOptions as MeshBvhBuildOptions, CENTER, NOT_INTERSECTED, INTERSECTED, CONTAINED};
+pub use mesh_bvh::{MeshBvh, BvhHit, BuildOptions as MeshBvhBuildOptions, SerializedMeshBvh, AVERAGE, CENTER, SAH, NOT_INTERSECTED, INTERSECTED, CONTAINED};
