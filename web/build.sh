@@ -19,7 +19,10 @@ fi
 
 echo "==> Building threers ($PROFILE) for wasm32-unknown-unknown..."
 FEATURES=""
-if [ "${MESH_BVH:-}" = "1" ]; then
+if [ "${BVH_CSG:-}" = "1" ]; then
+    FEATURES="--features bvh-csg"
+    echo "    (bvh-csg feature enabled — includes mesh-bvh)"
+elif [ "${MESH_BVH:-}" = "1" ]; then
     FEATURES="--features mesh-bvh"
     echo "    (mesh-bvh feature enabled)"
 fi

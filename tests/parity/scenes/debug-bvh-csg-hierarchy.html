@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>bvh-csg-hierarchy debug</title>
+<style>
+body { margin: 0; background: #101418; color: #cde; font: 12px/1.4 ui-monospace, Menlo, monospace; }
+#hud { position: fixed; top: 0; left: 0; right: 0; z-index: 2; padding: 10px 12px; background: rgba(0,0,0,.72); }
+#hud b { color: #8cf; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 88px 8px 8px; }
+.panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+.panel h2 { margin: 0; padding: 8px 10px; font-size: 12px; border-bottom: 1px solid #30363d; }
+canvas { display: block; width: 100%; height: auto; background: #101418; }
+.stats { padding: 8px 10px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <div><b>hierarchy debug</b> — proves winFrame geometry exists in CSG output; compares renders at the slab-view camera.</div>
+  <div id="summary">loading…</div>
+</div>
+<div class="grid">
+  <div class="panel"><h2>three.js CSG</h2><canvas id="c-three" width="640" height="480"></canvas><div class="stats" id="s-three"></div></div>
+  <div class="panel"><h2>threers CSG + wasm render</h2><canvas id="c-threers" width="640" height="480"></canvas><div class="stats" id="s-threers"></div></div>
+</div>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js","three-bvh-csg":"https://unpkg.com/three-bvh-csg@0.0.16/build/index.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { Brush, Evaluator, Operation, OperationGroup, ADDITION, SUBTRACTION } from 'three-bvh-csg';
+import THREERS, { initThreers, geometryToBufferGeometry } from '/web/threejs-shim.js';
+import { installBvhCsg } from '/web/bvh-csg-addon.js';
+
+const SLAB_CAM = { pos: [-3.8, 2.9, 1.25], target: [0, 0, 0] };
+
+function buildHierarchy(THREE, geoFn) {
+    const mat = new THREE.MeshStandardMaterial({ color: 0x4488cc, roughness: 0.45, metalness: 0.1 });
+    const evaluator = new Evaluator();
+    evaluator.useGroups = false;
+    const root = new Operation(geoFn(new THREE.BoxGeometry(4, 2.5, 2.5)), mat);
+    root.operation = ADDITION;
+    const cut = new Operation(geoFn(new THREE.BoxGeometry(3.6, 2.1, 2.1)), mat);
+    cut.operation = SUBTRACTION;
+    const sphere = new Operation(geoFn(new THREE.SphereGeometry(0.55, 24, 12)), mat);
+    sphere.operation = ADDITION;
+    sphere.position.set(-1.1, 0.2, 1.35);
+    const windowGroup = new OperationGroup();
+    const winCut = new Operation(geoFn(new THREE.BoxGeometry(1.2, 1.0, 0.5)), mat);
+    winCut.operation = SUBTRACTION;
+    const winFrame = new Operation(geoFn(new THREE.BoxGeometry(1.2, 1.0, 0.12)), mat);
+    winFrame.operation = ADDITION;
+    windowGroup.add(winCut, winFrame);
+    windowGroup.position.set(0.8, 0.15, 1.35);
+    root.add(cut, sphere, windowGroup);
+    root.updateMatrixWorld(true);
+    const result = new Brush();
+    evaluator.evaluateHierarchy(root, result);
+    result.geometry.computeVertexNormals();
+    return { result, mat };
+}
+
+function analyzeGeometry(geometry) {
+    const pos = geometry.attributes.position;
+    const count = pos.count;
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < count; i++) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
+    }
+    const wfMin = { x: 0.8 - 0.6, y: 0.15 - 0.5, z: 1.35 - 0.06 };
+    const wfMax = { x: 0.8 + 0.6, y: 0.15 + 0.5, z: 1.35 + 0.06 };
+    let winFrameVerts = 0;
+    for (let i = 0; i < count; i++) {
+        const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+        if (x >= wfMin.x - 0.05 && x <= wfMax.x + 0.05 && y >= wfMin.y - 0.05 && y <= wfMax.y + 0.05 && z >= wfMin.z - 0.05 && z <= wfMax.z + 0.05) winFrameVerts++;
+    }
+    return {
+        triCount: Math.floor(count / 3),
+        bbox: { min: { x: minX, y: minY, z: minZ }, max: { x: maxX, y: maxY, z: maxZ } },
+        winFrameVerts,
+    };
+}
+
+async function renderThree() {
+    const canvas = document.getElementById('c-three');
+    const { result, mat } = buildHierarchy(THREE, g => g.toNonIndexed());
+    const stats = analyzeGeometry(result.geometry);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x101418);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+    const dl = new THREE.DirectionalLight(0xffffff, 1);
+    dl.position.set(3, 5, 2);
+    scene.add(dl);
+    scene.add(new THREE.Mesh(result.geometry, mat));
+    const cam = new THREE.PerspectiveCamera(50, 640 / 480, 0.1, 100);
+    cam.position.set(...SLAB_CAM.pos);
+    cam.lookAt(...SLAB_CAM.target);
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setSize(640, 480, false);
+    renderer.render(scene, cam);
+    document.getElementById('s-three').textContent = JSON.stringify(stats, null, 2);
+    return stats;
+}
+
+async function renderThreers() {
+    await initThreers('/web/pkg/threers_bg.wasm');
+    installBvhCsg(THREERS);
+    const canvas = document.getElementById('c-threers');
+    const { result, mat } = buildHierarchy(THREERS, g => geometryToBufferGeometry(g));
+    const stats = analyzeGeometry(result.geometry);
+    const scene = new THREERS.Scene();
+    scene.background = new THREERS.Color(0x101418);
+    scene.add(new THREERS.AmbientLight(0xffffff, 0.45));
+    const dl = new THREERS.DirectionalLight(0xffffff, 1);
+    dl.position.set(3, 5, 2);
+    scene.add(dl);
+    scene.add(new THREERS.Mesh(result.geometry, mat));
+    const cam = new THREERS.PerspectiveCamera(50, 640 / 480, 0.1, 100);
+    cam.position.set(...SLAB_CAM.pos);
+    cam.lookAt(...SLAB_CAM.target);
+    const renderer = await THREERS.WebGLRenderer.create(canvas);
+    renderer.setSize(640, 480);
+    renderer.render(scene, cam);
+    document.getElementById('s-threers').textContent = JSON.stringify(stats, null, 2);
+    return stats;
+}
+
+const [a, b] = await Promise.all([renderThree(), renderThreers()]);
+const ok = a.winFrameVerts > 0 && b.winFrameVerts > 0;
+document.getElementById('summary').innerHTML =
+    `${ok ? '✓ winFrame geometry present in BOTH CSG outputs' : '✗ winFrame missing in CSG'}`
+    + ` — three winFrameVerts=${a.winFrameVerts}, threers winFrameVerts=${b.winFrameVerts}. `
+    + `Camera fixed to slab-view ${JSON.stringify(SLAB_CAM.pos)}. `
+    + `If compare UI looks wrong, orbit sync was desyncing the camera (not missing CSG).`;
+</script>
+</body>
+</html>

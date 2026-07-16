@@ -89,6 +89,11 @@ export async function initThreers(wasmUrl) {
     return _wasmReady;
 }
 
+// Material.side (exported early — csg/mesh-bvh import these by name).
+export const FrontSide = 0;
+export const BackSide = 1;
+export const DoubleSide = 2;
+
 // three.js texture type constants (also exported on default THREE object below).
 const UnsignedByteType = 1009;
 const HalfFloatType = 1016;
@@ -230,6 +235,11 @@ export class Vector3 {
     normalize() { const l = this.length() || 1; this.x /= l; this.y /= l; this.z /= l; return this; }
     setLength(l) { return this.normalize().multiplyScalar(l); }
     dot(v) { return this.x*v.x + this.y*v.y + this.z*v.z; }
+    angleTo(v) {
+        const denom = Math.sqrt(this.lengthSq() * v.lengthSq());
+        if (denom === 0) return Math.PI / 2;
+        return Math.acos(Math.min(1, Math.max(-1, this.dot(v) / denom)));
+    }
     cross(v) {
         const ax = this.x, ay = this.y, az = this.z;
         this.x = ay*v.z - az*v.y; this.y = az*v.x - ax*v.z; this.z = ax*v.y - ay*v.x;
@@ -283,6 +293,9 @@ export class Vector3 {
         this.z = e[2]*x + e[6]*y + e[10]*z;
         return this.normalize();
     }
+    applyNormalMatrix(m) {
+        return this.applyMatrix3(m).normalize();
+    }
     setFromMatrixPosition(m) {
         const e = m.elements || m._w?.elements?.() || m;
         this.x = e[12]; this.y = e[13]; this.z = e[14]; return this;
@@ -295,6 +308,10 @@ export class Vector3 {
     project(camera) { return this.applyMatrix4(camera.matrixWorldInverse).applyMatrix4(camera.projectionMatrix); }
     unproject(camera) { return this.applyMatrix4(camera.projectionMatrixInverse).applyMatrix4(camera.matrixWorld); }
     fromArray(arr, off = 0) { this.x = arr[off]; this.y = arr[off+1]; this.z = arr[off+2]; return this; }
+    fromBufferAttribute(attr, index) {
+        const i = index * attr.itemSize;
+        return this.fromArray(attr.array, i);
+    }
     toArray(arr = [], off = 0) { arr[off] = this.x; arr[off+1] = this.y; arr[off+2] = this.z; return arr; }
     *[Symbol.iterator]() { yield this.x; yield this.y; yield this.z; }
     _w() { return new WebVector3(this.x, this.y, this.z); }
@@ -303,6 +320,25 @@ export class Vector3 {
 export class Vector4 {
     constructor(x = 0, y = 0, z = 0, w = 1) { this.x = x; this.y = y; this.z = z; this.w = w; }
     set(x, y, z, w) { this.x = x; this.y = y; this.z = z; this.w = w; return this; }
+    copy(v) { this.x = v.x; this.y = v.y; this.z = v.z; this.w = v.w ?? 1; return this; }
+    multiplyScalar(s) { this.x *= s; this.y *= s; this.z *= s; this.w *= s; return this; }
+    addScaledVector(v, s) {
+        this.x += v.x * s;
+        this.y += v.y * s;
+        this.z += (v.z ?? 0) * s;
+        this.w += (v.w ?? 0) * s;
+        return this;
+    }
+    fromArray(arr, off = 0) { this.x = arr[off]; this.y = arr[off+1]; this.z = arr[off+2]; this.w = arr[off+3]; return this; }
+    fromBufferAttribute(attr, index) {
+        const i = index * attr.itemSize;
+        return this.fromArray(attr.array, i);
+    }
+    normalize() {
+        const len = Math.hypot(this.x, this.y, this.z, this.w) || 1;
+        this.x /= len; this.y /= len; this.z /= len; this.w /= len;
+        return this;
+    }
     _w() { return new WebVector4(this.x, this.y, this.z, this.w); }
 }
 
@@ -404,7 +440,65 @@ export class Quaternion {
 }
 
 export class Matrix3 {
-    constructor() { this._w = new WebMatrix3(); this.elements = this._w.elements(); }
+    constructor() {
+        this.elements = [
+            1, 0, 0,
+            0, 1, 0,
+            0, 0, 1,
+        ];
+    }
+    setFromMatrix4(m) {
+        const e = m.elements;
+        const me = this.elements;
+        me[0] = e[0]; me[1] = e[1]; me[2] = e[2];
+        me[3] = e[4]; me[4] = e[5]; me[5] = e[6];
+        me[6] = e[8]; me[7] = e[9]; me[8] = e[10];
+        return this;
+    }
+    getNormalMatrix(matrix) {
+        return this.setFromMatrix4(matrix).invert().transpose();
+    }
+    invert() {
+        const te = this.elements;
+        const n11 = te[0], n21 = te[1], n31 = te[2];
+        const n12 = te[3], n22 = te[4], n32 = te[5];
+        const n13 = te[6], n23 = te[7], n33 = te[8];
+        const t11 = n33 * n22 - n32 * n23;
+        const t12 = n32 * n13 - n33 * n12;
+        const t13 = n23 * n12 - n22 * n13;
+        const det = n11 * t11 + n21 * t12 + n31 * t13;
+        if (det === 0) return this;
+        const detInv = 1 / det;
+        te[0] = t11 * detInv;
+        te[1] = (n31 * n23 - n33 * n21) * detInv;
+        te[2] = (n32 * n21 - n31 * n22) * detInv;
+        te[3] = t12 * detInv;
+        te[4] = (n33 * n11 - n31 * n13) * detInv;
+        te[5] = (n31 * n12 - n32 * n11) * detInv;
+        te[6] = t13 * detInv;
+        te[7] = (n21 * n13 - n23 * n11) * detInv;
+        te[8] = (n22 * n11 - n21 * n12) * detInv;
+        return this;
+    }
+    transpose() {
+        const te = this.elements;
+        let tmp;
+        tmp = te[1]; te[1] = te[3]; te[3] = tmp;
+        tmp = te[2]; te[2] = te[6]; te[6] = tmp;
+        tmp = te[5]; te[5] = te[7]; te[7] = tmp;
+        return this;
+    }
+    multiplyScalar(s) {
+        const te = this.elements;
+        for (let i = 0; i < 9; i++) te[i] *= s;
+        return this;
+    }
+    _w() {
+        const m = new WebMatrix3();
+        const e = m.elements();
+        for (let i = 0; i < 9; i++) e[i] = this.elements[i];
+        return m;
+    }
 }
 
 export class Matrix4 {
@@ -658,7 +752,6 @@ export class Ray {
     constructor(origin = new Vector3(), direction = new Vector3(0, 0, -1)) {
         this.origin = origin.clone ? origin.clone() : new Vector3(origin.x || 0, origin.y || 0, origin.z || 0);
         this.direction = direction.clone ? direction.clone() : new Vector3(direction.x || 0, direction.y || 0, direction.z || -1);
-        this._w = new WebRay(this.origin._w(), this.direction._w());
     }
     set(origin, direction) { this.origin.copy(origin); this.direction.copy(direction); return this; }
     copy(r) { this.origin.copy(r.origin); this.direction.copy(r.direction); return this; }
@@ -671,22 +764,144 @@ export class Ray {
         );
     }
     lookAt(v) { this.direction.copy(v).sub(this.origin).normalize(); return this; }
+    _w() { return new WebRay(this.origin._w(), this.direction._w()); }
 }
 
 export class Plane {
     constructor(normal, constant) {
-        this._w = new WebPlane((normal || new Vector3(1,0,0))._w(), constant || 0);
+        this.normal = normal ? normal.clone() : new Vector3(1, 0, 0);
+        this.constant = constant ?? 0;
     }
-    distanceToPoint(p) { return this._w.distanceToPoint(p._w()); }
+    set(normal, constant) {
+        this.normal.copy(normal);
+        this.constant = constant;
+        return this;
+    }
+    setFromNormalAndCoplanarPoint(normal, point) {
+        this.normal.copy(normal);
+        this.constant = -this.normal.dot(point);
+        return this;
+    }
+    distanceToPoint(p) {
+        return this.normal.dot(p) + this.constant;
+    }
+    intersectLine(line, target = new Vector3()) {
+        const start = line.start || line;
+        const end = line.end;
+        const d1 = this.distanceToPoint(start);
+        const d2 = this.distanceToPoint(end);
+        if (d1 * d2 < 0) {
+            const t = d1 / (d1 - d2);
+            target.lerpVectors(start, end, t);
+            return target;
+        }
+        if (Math.abs(d1) < 1e-10) {
+            target.copy(start);
+            return target;
+        }
+        return null;
+    }
+    _w() {
+        return new WebPlane(this.normal._w(), this.constant);
+    }
 }
 
 export class Triangle {
     constructor(a, b, c) {
-        this._w = new WebTriangle(
-            (a || new Vector3())._w(), (b || new Vector3())._w(), (c || new Vector3())._w(),
-        );
+        this.a = a ? a.clone() : new Vector3();
+        this.b = b ? b.clone() : new Vector3();
+        this.c = c ? c.clone() : new Vector3();
     }
-    area() { return this._w.area(); }
+    set(a, b, c) {
+        this.a.copy(a);
+        this.b.copy(b);
+        this.c.copy(c);
+        return this;
+    }
+    copy(t) {
+        this.a.copy(t.a);
+        this.b.copy(t.b);
+        this.c.copy(t.c);
+        return this;
+    }
+    clone() {
+        return new Triangle(this.a, this.b, this.c);
+    }
+    getMidpoint(target = new Vector3()) {
+        return target.addVectors(this.a, this.b).add(this.c).multiplyScalar(1 / 3);
+    }
+    getNormal(target = new Vector3()) {
+        const ab = new Vector3().subVectors(this.b, this.a);
+        const ac = new Vector3().subVectors(this.c, this.a);
+        return target.crossVectors(ab, ac).normalize();
+    }
+    getBarycoord(point, target = new Vector3()) {
+        const v0 = new Vector3().subVectors(this.c, this.a);
+        const v1 = new Vector3().subVectors(this.b, this.a);
+        const v2 = new Vector3().subVectors(point, this.a);
+        const dot00 = v0.dot(v0);
+        const dot01 = v0.dot(v1);
+        const dot02 = v0.dot(v2);
+        const dot11 = v1.dot(v1);
+        const dot12 = v1.dot(v2);
+        const denom = dot00 * dot11 - dot01 * dot01;
+        if (denom === 0) return target.set(-2, -1, -1);
+        const inv = 1 / denom;
+        const u = (dot11 * dot02 - dot01 * dot12) * inv;
+        const v = (dot00 * dot12 - dot01 * dot02) * inv;
+        return target.set(1 - u - v, v, u);
+    }
+    getPlane(target = new Plane()) {
+        const n = this.getNormal(new Vector3());
+        return target.setFromNormalAndCoplanarPoint(n, this.a);
+    }
+    fromBufferAttribute(attr, index) {
+        const i = index * attr.itemSize;
+        const arr = attr.array;
+        this.a.fromArray(arr, i);
+        return this;
+    }
+    area() {
+        const ab = new Vector3().subVectors(this.b, this.a);
+        const ac = new Vector3().subVectors(this.c, this.a);
+        return ab.cross(ac).length() * 0.5;
+    }
+    get plane() {
+        return this.getPlane(new Plane());
+    }
+    intersectsTriangle(other, targetEdge = new Line3(), coplanar = false) {
+        const plane = this.getPlane(new Plane());
+        const dA = plane.distanceToPoint(other.a);
+        const dB = plane.distanceToPoint(other.b);
+        const dC = plane.distanceToPoint(other.c);
+        const eps = 1e-10;
+        if (dA > eps && dB > eps && dC > eps) return false;
+        if (dA < -eps && dB < -eps && dC < -eps) return false;
+        const plane2 = other.getPlane(new Plane());
+        const eA = plane2.distanceToPoint(this.a);
+        const eB = plane2.distanceToPoint(this.b);
+        const eC = plane2.distanceToPoint(this.c);
+        if (eA > eps && eB > eps && eC > eps) return false;
+        if (eA < -eps && eB < -eps && eC < -eps) return false;
+        const edge = targetEdge;
+        const pts = [other.a, other.b, other.c];
+        let hits = 0;
+        for (let i = 0; i < 3; i++) {
+            const s = pts[i];
+            const e = pts[(i + 1) % 3];
+            const line = new Line3(s, e);
+            const hit = plane.intersectLine(line, new Vector3());
+            if (hit && hit.distanceTo(e) > eps) {
+                if (hits === 0) edge.start.copy(hit);
+                else edge.end.copy(hit);
+                hits++;
+            }
+        }
+        return hits >= 2 || coplanar;
+    }
+    _w() {
+        return new WebTriangle(this.a._w(), this.b._w(), this.c._w());
+    }
 }
 
 export class Frustum {
@@ -705,9 +920,26 @@ export class Cylindrical {
 
 export class Line3 {
     constructor(start, end) {
-        this._w = new WebLine3((start || new Vector3())._w(), (end || new Vector3())._w());
+        this.start = start ? start.clone() : new Vector3();
+        this.end = end ? end.clone() : new Vector3();
     }
-    distance() { return this._w.distance(); }
+    set(start, end) {
+        this.start.copy(start);
+        this.end.copy(end);
+        return this;
+    }
+    copy(line) {
+        this.start.copy(line.start);
+        this.end.copy(line.end);
+        return this;
+    }
+    delta(target = new Vector3()) {
+        return target.subVectors(this.end, this.start);
+    }
+    distance() {
+        return this.start.distanceTo(this.end);
+    }
+    _w() { return new WebLine3(this.start._w(), this.end._w()); }
 }
 
 // ---- Geometries ----
@@ -1182,16 +1414,19 @@ function _bindRotationQuaternion(obj) {
 
 // ---- Mesh / Object3D ----
 export class Mesh {
-    constructor(geometry, material) {
+    constructor(geometry = new BufferGeometry(), material = new MeshBasicMaterial()) {
         this.geometry = geometry;
         this.material = material;
         this.isMesh = true;
-        // BufferGeometry needs conversion to a WebGeometry handle before Mesh.
-        const geom_w = _geomToWebGeom(geometry);
-        // For multi-material meshes, use the first material as a placeholder.
-        // Scene.add() detects the array + groups and builds real sub-meshes.
-        const matForWasm = Array.isArray(material) ? material[0] : material;
-        this._w = new WebMesh(geom_w, matForWasm._w);
+        if (geometry && material) {
+            const isEmptyUser = geometry._isUserGeometry
+                && !(geometry.attributes?.position?.array?.length > 0);
+            const geom_w = isEmptyUser ? null : _geomToWebGeom(geometry);
+            const matForWasm = Array.isArray(material) ? material[0] : material;
+            if (geom_w && matForWasm?._w) {
+                this._w = new WebMesh(geom_w, matForWasm._w);
+            }
+        }
         this.position = new Vector3();
         this.rotation = new Euler();
         this.quaternion = new Quaternion();
@@ -1203,6 +1438,8 @@ export class Mesh {
         this.matrixWorldNeedsUpdate = true;
         this.visible = true;
         this.name = '';
+        this.parent = null;
+        this.children = [];
         this.layers = new Layers();
         this._handle = null;
         // Morph target state. `morphTargetInfluences[i]` is the weight of
@@ -1218,6 +1455,41 @@ export class Mesh {
         }
     }
     raycast(raycaster, intersects) { _raycastMesh(raycaster, this, intersects); }
+    add(...children) {
+        for (const child of children) {
+            if (child.parent) child.parent.remove(child);
+            child.parent = this;
+            this.children.push(child);
+        }
+        return this;
+    }
+    remove(child) {
+        const i = this.children.indexOf(child);
+        if (i !== -1) {
+            child.parent = null;
+            this.children.splice(i, 1);
+        }
+        return this;
+    }
+    updateMatrix() {
+        const q = this.quaternion || new Quaternion().setFromEuler(this.rotation);
+        this.matrix.compose(this.position, q, this.scale);
+        this.matrixWorldNeedsUpdate = true;
+    }
+    updateMatrixWorld(force = false) {
+        if (this.matrixAutoUpdate) this.updateMatrix();
+        if (this.matrixWorldNeedsUpdate || force) {
+            if (this.parent?.matrixWorld) {
+                this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
+            } else {
+                this.matrixWorld.copy(this.matrix);
+            }
+            this.matrixWorldNeedsUpdate = false;
+            for (const c of this.children) c.updateMatrixWorld?.(true);
+        } else {
+            for (const c of this.children) c.updateMatrixWorld?.(force);
+        }
+    }
     // When influences change, set `_morphDirty` so the next scene sync
     // recomputes positions and re-creates the WebMesh handle.
     updateMorphTargets() {
@@ -1273,24 +1545,70 @@ export class BufferAttribute {
         this.array = arr;
         this.itemSize = itemSize;
         this.count = arr.length / itemSize | 0;
+        this.normalized = false;
+    }
+    getX(index) { return this.array[index * this.itemSize]; }
+    getY(index) { return this.array[index * this.itemSize + 1]; }
+    getZ(index) { return this.array[index * this.itemSize + 2]; }
+    getW(index) { return this.array[index * this.itemSize + 3]; }
+    fromBufferAttribute(attr, index) {
+        const i = index * attr.itemSize;
+        for (let k = 0; k < attr.itemSize; k++) this.array[k] = attr.array[i + k];
+        return this;
     }
 }
 export class BufferGeometry {
     constructor() {
-        this._w = new WebBufferGeometry();
         this._isUserGeometry = true;
         this.attributes = {};
+        this.drawRange = { start: 0, count: Infinity };
+        this.groups = [];
+    }
+    _syncWasmFromJs() {
+        this._w = new WebBufferGeometry();
+        for (const [name, attr] of Object.entries(this.attributes)) {
+            const a = attr?.array;
+            if (!a?.length) continue;
+            const arr = a instanceof Float32Array ? a : new Float32Array(a);
+            this._w.setAttribute(name, new WebBufferAttribute(arr, attr.itemSize || 3));
+        }
+        const idx = this._indexAttr?.array || this.index?.array;
+        if (idx?.length) {
+            this._w.setIndex(idx instanceof Uint32Array ? idx : new Uint32Array(idx));
+        }
+        delete this._geom;
+        return this._w;
     }
     setAttribute(name, attr) {
-        // Mirror three.js's attribute store, plus push into the wasm geometry.
         this.attributes[name] = attr;
-        this._w.setAttribute(name, attr._w);
         return this;
     }
-    setIndex(arr) {
-        const u32 = (arr instanceof Uint32Array) ? arr : new Uint32Array(arr);
-        this._w.setIndex(u32);
-        this._indexAttr = { array: u32, count: u32.length };
+    setIndex(index) {
+        let u32;
+        let indexAttr;
+        if (index?.array) {
+            const arr = index.array;
+            u32 = arr instanceof Uint32Array ? arr : new Uint32Array(arr);
+            indexAttr = index;
+        } else {
+            u32 = index instanceof Uint32Array ? index : new Uint32Array(index);
+            indexAttr = new BufferAttribute(u32, 1);
+        }
+        this._indexAttr = indexAttr;
+        return this;
+    }
+    setDrawRange(start, count) {
+        this.drawRange = { start, count };
+        return this;
+    }
+    deleteAttribute(name) {
+        delete this.attributes[name];
+        return this;
+    }
+    dispose() {
+        this.boundsTree = null;
+        this.halfEdges = null;
+        this.groupIndices = null;
         return this;
     }
     translate(x, y, z) {
@@ -1338,7 +1656,15 @@ export class BufferGeometry {
         this.setAttribute('position', new BufferAttribute(a, p.itemSize));
         return this;
     }
-    computeVertexNormals() { this._w.computeVertexNormals(); return this; }
+    computeVertexNormals() {
+        this._syncWasmFromJs();
+        this._w.computeVertexNormals();
+        const normal = this._w.getAttributeArray?.('normal');
+        if (normal?.length) {
+            this.attributes.normal = new BufferAttribute(new Float32Array(normal), 3);
+        }
+        return this;
+    }
     applyMatrix4(m) {
         const p = this.attributes.position;
         if (!p) return this;
@@ -1445,9 +1771,40 @@ export class BufferGeometry {
     // available as a plain method (not just a getter) so subclasses that
     // copy via Object.assign still find it.
     get _asGeometry() {
-        if (!this._geom) this._geom = WebGeometry.fromBufferGeometry(this._w);
+        this._syncWasmFromJs();
+        this._geom = WebGeometry.fromBufferGeometry(this._w);
         return this._geom;
     }
+}
+
+/** Convert built-in wasm geometry or BufferGeometry to non-indexed BufferGeometry (for CSG). */
+export function geometryToBufferGeometry(geometry) {
+    if (geometry?.attributes?.position) {
+        return geometry.index ? geometry.toNonIndexed() : geometry;
+    }
+    if (geometry?._w?.toBufferGeometry) {
+        const wasm = geometry._w.toBufferGeometry();
+        const out = new BufferGeometry();
+        const pos = wasm.getAttributeArray('position');
+        if (pos) {
+            const itemSize = wasm.getAttributeItemSize('position') || 3;
+            out.setAttribute('position', new BufferAttribute(new Float32Array(pos), itemSize));
+        }
+        const normal = wasm.getAttributeArray('normal');
+        if (normal) {
+            const itemSize = wasm.getAttributeItemSize('normal') || 3;
+            out.setAttribute('normal', new BufferAttribute(new Float32Array(normal), itemSize));
+        }
+        const uv = wasm.getAttributeArray('uv');
+        if (uv) {
+            const itemSize = wasm.getAttributeItemSize('uv') || 2;
+            out.setAttribute('uv', new BufferAttribute(new Float32Array(uv), itemSize));
+        }
+        const index = wasm.getIndexArray?.();
+        if (index?.length) out.setIndex(new Uint32Array(index));
+        return out.toNonIndexed();
+    }
+    throw new Error('geometryToBufferGeometry: unsupported geometry');
 }
 
 // Backfill `_asGeometry` for user geometries built by Object.assign(this, bg)
@@ -1535,7 +1892,12 @@ function _buildSubMeshes(parent) {
 function _geomToWebGeom(g) {
     if (!g) return g;
     if (g._isUserGeometry) {
-        if (!g._geom) g._geom = WebGeometry.fromBufferGeometry(g._w);
+        if (!g.attributes?.position?.array?.length) return null;
+        if (typeof g._syncWasmFromJs === 'function') g._syncWasmFromJs();
+        if (!(g._w instanceof WebBufferGeometry)) {
+            throw new Error('BufferGeometry: wasm sync failed');
+        }
+        g._geom = WebGeometry.fromBufferGeometry(g._w);
         return g._geom;
     }
     if (g._w) return g._w;
@@ -1660,9 +2022,12 @@ export class Group {
         this.isGroup = true;
         this.position = new Vector3();
         this.rotation = new Euler();
+        this.quaternion = new Quaternion();
+        _bindRotationQuaternion(this);
         this.scale = new Vector3(1, 1, 1);
         this._handle = null;
         this._children = [];
+        this.parent = null;
         this.matrix = new Matrix4();
         this.matrixWorld = new Matrix4();
         this.matrixAutoUpdate = true;
@@ -1671,6 +2036,7 @@ export class Group {
     add(...children) {
         for (const child of children) {
             if (!child) continue;
+            if (child.parent) child.parent.remove?.(child);
             this._children.push(child);
             child.parent = this;
             // If group was already added to a scene, attach child immediately.
@@ -1680,6 +2046,33 @@ export class Group {
             }
         }
         return this;
+    }
+    remove(child) {
+        const i = this._children.indexOf(child);
+        if (i !== -1) {
+            child.parent = null;
+            this._children.splice(i, 1);
+        }
+        return this;
+    }
+    updateMatrix() {
+        const q = this.quaternion || new Quaternion().setFromEuler(this.rotation);
+        this.matrix.compose(this.position, q, this.scale);
+        this.matrixWorldNeedsUpdate = true;
+    }
+    updateMatrixWorld(force = false) {
+        if (this.matrixAutoUpdate) this.updateMatrix();
+        if (this.matrixWorldNeedsUpdate || force) {
+            if (this.parent?.matrixWorld) {
+                this.matrixWorld.multiplyMatrices(this.parent.matrixWorld, this.matrix);
+            } else {
+                this.matrixWorld.copy(this.matrix);
+            }
+            this.matrixWorldNeedsUpdate = false;
+            for (const c of this._children) c.updateMatrixWorld?.(true);
+        } else {
+            for (const c of this._children) c.updateMatrixWorld?.(force);
+        }
     }
     get children() {
         return this._children;
@@ -2352,9 +2745,14 @@ export class AnimationMixer {
 }
 
 // ---- Controls ----
+function _controlViewport(domElement) {
+    const w = domElement?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 800);
+    const h = domElement?.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 600);
+    return [Math.max(1, w), Math.max(1, h)];
+}
+
 export class OrbitControls {
     constructor(camera, domElement) {
-        this._w = new WebOrbitControls(camera._w);
         this._camera = camera;
         this.domElement = domElement;
         this.enabled = true;
@@ -2362,34 +2760,87 @@ export class OrbitControls {
         this._panning = false;
         this._lastX = 0;
         this._lastY = 0;
+        this._dragPointerId = null;
+        // Push JS camera pose into wasm before seeding orbit spherical state.
+        if (typeof camera._sync === 'function') camera._sync();
+        if (camera._lookAt) camera._w.lookAt(camera._lookAt.x, camera._lookAt.y, camera._lookAt.z);
+        this._w = new WebOrbitControls(camera._w);
+        camera._orbitControlled = true;
+
+        this._onContextMenu = (e) => e.preventDefault();
+        this._onPointerDown = (e) => {
+            if (!this.enabled || (e.button !== 0 && e.button !== 2)) return;
+            const root = this.domElement;
+            if (!root) return;
+            e.preventDefault();
+            this._dragPointerId = e.pointerId;
+            this._rotating = e.button === 0;
+            this._panning = e.button === 2;
+            this._lastX = e.clientX;
+            this._lastY = e.clientY;
+            root.setPointerCapture?.(e.pointerId);
+            const doc = root.ownerDocument || (typeof document !== 'undefined' ? document : null);
+            if (doc) {
+                doc.addEventListener('pointermove', this._onPointerMove);
+                doc.addEventListener('pointerup', this._onPointerUp);
+                doc.addEventListener('pointercancel', this._onPointerUp);
+            }
+        };
+        this._onPointerMove = (e) => {
+            if (!this.enabled || e.pointerId !== this._dragPointerId) return;
+            if (!this._rotating && !this._panning) return;
+            const dx = e.clientX - this._lastX;
+            const dy = e.clientY - this._lastY;
+            this._lastX = e.clientX;
+            this._lastY = e.clientY;
+            if (dx || dy) this.update(dx, dy, 0, this._rotating, this._panning);
+        };
+        this._onPointerUp = (e) => {
+            if (this._dragPointerId != null && e.pointerId !== this._dragPointerId) return;
+            this._endDrag();
+        };
+        this._onWheel = (e) => {
+            if (!this.enabled) return;
+            e.preventDefault();
+            this.update(0, 0, e.deltaY, false, false);
+        };
+
         if (domElement?.addEventListener) {
-            domElement.addEventListener('pointerdown', (e) => {
-                this._rotating = e.button === 0;
-                this._panning = e.button === 2;
-                this._lastX = e.clientX;
-                this._lastY = e.clientY;
-            });
-            domElement.addEventListener('pointermove', (e) => {
-                if (!this.enabled || (!this._rotating && !this._panning)) return;
-                const dx = e.clientX - this._lastX;
-                const dy = e.clientY - this._lastY;
-                this._lastX = e.clientX;
-                this._lastY = e.clientY;
-                this.update(dx, dy, 0, this._rotating, this._panning);
-            });
-            domElement.addEventListener('pointerup', () => { this._rotating = false; this._panning = false; });
-            domElement.addEventListener('wheel', (e) => {
-                if (!this.enabled) return;
-                e.preventDefault();
-                this.update(0, 0, e.deltaY, false, false);
-            }, { passive: false });
+            domElement.addEventListener('contextmenu', this._onContextMenu);
+            domElement.addEventListener('pointerdown', this._onPointerDown);
+            domElement.addEventListener('wheel', this._onWheel, { passive: false });
+            if (!domElement.style.touchAction) domElement.style.touchAction = 'none';
         }
     }
+    _endDrag() {
+        const root = this.domElement;
+        if (root && this._dragPointerId != null) {
+            root.releasePointerCapture?.(this._dragPointerId);
+            const doc = root.ownerDocument || (typeof document !== 'undefined' ? document : null);
+            if (doc) {
+                doc.removeEventListener('pointermove', this._onPointerMove);
+                doc.removeEventListener('pointerup', this._onPointerUp);
+                doc.removeEventListener('pointercancel', this._onPointerUp);
+            }
+        }
+        this._dragPointerId = null;
+        this._rotating = false;
+        this._panning = false;
+    }
+    dispose() {
+        this._endDrag();
+        const root = this.domElement;
+        if (root?.removeEventListener) {
+            root.removeEventListener('contextmenu', this._onContextMenu);
+            root.removeEventListener('pointerdown', this._onPointerDown);
+            root.removeEventListener('wheel', this._onWheel);
+        }
+        if (this._camera) this._camera._orbitControlled = false;
+    }
     update(dx = 0, dy = 0, wheel = 0, rotating = false, panning = false) {
-        const w = this.domElement?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 800);
-        const h = this.domElement?.clientHeight || (typeof window !== 'undefined' ? window.innerHeight : 600);
+        const [w, h] = _controlViewport(this.domElement);
         this._w.update(this._camera._w, dx, dy, wheel, rotating, panning, w, h);
-        if (dx || dy || wheel || rotating || panning) this._syncFromWasm();
+        this._syncFromWasm();
     }
     _syncFromWasm() {
         const p = this._camera._w.readPosition();
@@ -2398,7 +2849,12 @@ export class OrbitControls {
         this._camera._lookAt.set(t.x, t.y, t.z);
     }
     resetFromCamera() {
-        this._w = new WebOrbitControls(this._camera._w);
+        if (typeof this._camera._sync === 'function') this._camera._sync();
+        if (typeof this._w?.reseedFromCamera === 'function') {
+            this._w.reseedFromCamera(this._camera._w);
+        } else {
+            this._w = new WebOrbitControls(this._camera._w);
+        }
     }
 }
 export class TrackballControls {
@@ -3033,6 +3489,26 @@ export class Scene {
         }
         this._objects.push(obj);
     }
+    remove(...objects) {
+        for (const obj of objects.flat()) {
+            if (!obj) continue;
+            const ci = this.children.indexOf(obj);
+            if (ci >= 0) this.children.splice(ci, 1);
+            const oi = this._objects.indexOf(obj);
+            if (oi >= 0) this._objects.splice(oi, 1);
+            if (obj._subMeshes) {
+                for (const sub of obj._subMeshes) {
+                    if (sub._handle != null) this._w.remove(sub._handle);
+                    const si = this._objects.indexOf(sub);
+                    if (si >= 0) this._objects.splice(si, 1);
+                }
+            }
+            if (obj._handle != null) this._w.remove(obj._handle);
+            obj.parent = null;
+            obj._scene = null;
+        }
+        return this;
+    }
     _syncTransforms(camera) { return this._doSyncTransforms(camera); }
     _doSyncTransforms(camera) {
         const camMask = camera?.layers?.mask ?? 1;
@@ -3173,6 +3649,7 @@ export class WebGLRenderer {
         r.shadowMap = { enabled: true, type: 2 };
         return r;
     }
+    get domElement() { return this._canvas; }
     setSize(w, h, updateStyle = true) {
         this._canvas.width = w;
         this._canvas.height = h;
@@ -3259,6 +3736,8 @@ export class WebGLRenderer {
         return this._w.readRenderTargetF16(target._w.id, x, y, width, height);
     }
     render(scene, camera) {
+        // Orbit/trackball controls own the wasm camera pose — don't push stale JS over it.
+        if (!camera?._orbitControlled && typeof camera?._sync === 'function') camera._sync();
         // Fire material.onBeforeCompile once per material on first render, and
         // give materials a chance to re-upload mutated uniforms (e.g. Sky).
         for (const o of scene._objects || []) {
@@ -3289,7 +3768,7 @@ export class WebGLRenderer {
             this._inRender = false;
         }
         scene._syncTransforms(camera);
-        camera._sync();
+        if (!camera?._orbitControlled) camera._sync();
         this._w.render(scene._w, camera._w);
     }
 }
@@ -6949,6 +7428,8 @@ export class ArcCurve {
     }
 }
 
+// Side constants re-exported at top of module (see FrontSide/BackSide/DoubleSide above).
+
 // ---- Pass 9: constants + MathUtils ----
 export const MathUtils = {
     DEG2RAD: Math.PI / 180, RAD2DEG: 180 / Math.PI,
@@ -8821,7 +9302,7 @@ const THREE = {
     OBB, Capsule, ImprovedNoise, ConvexHull,
     RoundedBoxGeometry, TeapotGeometry, ParametricGeometries,
     LineMaterial, LineGeometry, LineSegmentsGeometry, Line2, LineSegments2, Wireframe,
-    BufferGeometryUtils, SceneUtils, SkeletonUtils, RoomEnvironment,
+    BufferGeometryUtils, geometryToBufferGeometry, SceneUtils, SkeletonUtils, RoomEnvironment,
     MTLLoader, OBJExporter, STLExporter, PLYExporter, GLTFExporter, MeshoptDecoder,
     Reflector, Refractor, Water, Sky, Lensflare,
     VRButton, ARButton, XRControllerModelFactory, XRHandModelFactory,

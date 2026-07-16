@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js","three-mesh-bvh":"https://unpkg.com/three-mesh-bvh@0.7.6/build/index.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { MeshBVH, StaticGeometryGenerator, acceleratedRaycast } from 'three-mesh-bvh';
+const root = new THREE.Group();
+const m1 = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), new THREE.MeshStandardMaterial({ color: 0x5588cc }));
+m1.position.set(-0.4, 0, 0);
+const m2 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshStandardMaterial({ color: 0x88aa55 }));
+m2.position.set(0.5, 0.2, 0);
+root.add(m1, m2);
+const gen = new StaticGeometryGenerator(root);
+const merged = gen.generate();
+merged.boundsTree = new MeshBVH(merged);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101418);
+const mesh = new THREE.Mesh(merged, new THREE.MeshStandardMaterial({ color: 0x7788aa, roughness: 0.5 }));
+mesh.raycast = acceleratedRaycast;
+scene.add(mesh);
+const cam = new THREE.PerspectiveCamera(50, 800/600, 0.1, 100);
+cam.position.set(0, 0.3, 2.5); cam.lookAt(0, 0, 0);
+cam.updateMatrixWorld(true);
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false); r.setPixelRatio(1);
+const raycaster = new THREE.Raycaster();
+raycaster.setFromCamera(new THREE.Vector2(0, 0), cam);
+const hits = raycaster.intersectObject(mesh);
+if (hits.length) {
+    const marker = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff2222 }));
+    marker.position.copy(hits[0].point);
+    scene.add(marker);
+}
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+document.body.dataset.hitCount = String(hits.length);
+document.body.dataset.triCount = String(merged.index ? merged.index.count / 3 : merged.attributes.position.count / 3);
+</script></body></html>

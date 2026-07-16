@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>body{margin:0;background:#101418}canvas{display:block;cursor:grab;touch-action:none}canvas:active{cursor:grabbing}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers, geometryToBufferGeometry } from '/web/threejs-shim.js';
+import { installBvhCsg, Brush, Evaluator, Operation, OperationGroup, ADDITION, SUBTRACTION } from '/web/bvh-csg-addon.js';
+
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        installBvhCsg(THREE);
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x101418);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+        const dl = new THREE.DirectionalLight(0xffffff, 1);
+        dl.position.set(3, 5, 2);
+        scene.add(dl);
+        const mat = new THREE.MeshStandardMaterial({ color: 0x4488cc, roughness: 0.45, metalness: 0.1 });
+        const evaluator = new Evaluator();
+        evaluator.useGroups = false;
+        const root = new Operation(geometryToBufferGeometry(new THREE.BoxGeometry(4, 2.5, 2.5)), mat);
+        root.operation = ADDITION;
+        const cut = new Operation(geometryToBufferGeometry(new THREE.BoxGeometry(3.6, 2.1, 2.1)), mat);
+        cut.operation = SUBTRACTION;
+        const sphere = new Operation(geometryToBufferGeometry(new THREE.SphereGeometry(0.55, 24, 12)), mat);
+        sphere.operation = ADDITION;
+        sphere.position.set(-1.1, 0.2, 1.35);
+        const windowGroup = new OperationGroup();
+        const winCut = new Operation(geometryToBufferGeometry(new THREE.BoxGeometry(1.2, 1.0, 0.5)), mat);
+        winCut.operation = SUBTRACTION;
+        const winFrame = new Operation(geometryToBufferGeometry(new THREE.BoxGeometry(1.2, 1.0, 0.12)), mat);
+        winFrame.operation = ADDITION;
+        windowGroup.add(winCut, winFrame);
+        windowGroup.position.set(0.8, 0.15, 1.35);
+        root.add(cut, sphere, windowGroup);
+        root.updateMatrixWorld(true);
+        const result = new Brush();
+        evaluator.evaluateHierarchy(root, result);
+        result.geometry.computeVertexNormals();
+        scene.add(new THREE.Mesh(result.geometry, mat));
+        const cam = new THREE.PerspectiveCamera(50, 800/600, 0.1, 100);
+        cam.position.set(-3.8, 2.9, 1.25);
+        cam.lookAt(0, 0, 0);
+        cam.updateMatrixWorld(true);
+        const renderer = await THREE.WebGLRenderer.create(canvas);
+        renderer.setSize(800, 600);
+        renderer.render(scene, cam);
+        await new Promise(r => requestAnimationFrame(r));
+        document.body.dataset.ready = 'true';
+        document.body.dataset.triCount = String(((result.geometry.drawRange.count !== Infinity ? result.geometry.drawRange.count : result.geometry.attributes.position.count) / 3) | 0);
+
+        const { installOrbitSyncBridge } = await import('/tests/parity/parity-orbit-sync.js');
+        installOrbitSyncBridge();
+        const controls = new THREE.OrbitControls(cam, canvas);
+        window.__parityOrbit = controls;
+        window.__parityOrbitCtx = { side: 'threers', orbit: controls, cam, render: () => renderer.render(scene, cam) };
+        if (typeof window.__parityPrimeOrbitCtx === 'function') window.__parityPrimeOrbitCtx(window.__parityOrbitCtx);
+        (function orbitLoop() {
+            // When sync is on and this pane is not being dragged, keep the camera
+            // pose from the peer — do not re-derive it from stale local spherical.
+            const syncPassive = window.__parityOrbitSyncEnabled && !window.__parityOrbitInteracting;
+            if (!window.__parityCaptureLock && !syncPassive) controls.update();
+            renderer.render(scene, cam);
+            if (window.__parityOrbitSyncHook) window.__parityOrbitSyncHook();
+            requestAnimationFrame(orbitLoop);
+        })();
+    } catch (e) {
+        errEl.style.display = 'block';
+        errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script>
+</body>
+</html>

@@ -1,10 +1,16 @@
 [package]
 name = "threers"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2021"
-description = "A three.js-inspired 3D library for Rust, built on wgpu"
+authors = ["Eugene Hauptmann"]
+description = "Drop-in three.js replacement for Rust and WebAssembly (wgpu) — THREE.* API, scene graph, PBR, post-fx, mesh BVH, and CSG"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/eugenehp/threers"
+homepage = "https://github.com/eugenehp/threers"
+documentation = "https://docs.rs/threers"
+keywords = ["three-js", "wgpu", "webgpu", "graphics", "wasm"]
+categories = ["graphics", "rendering", "wasm", "game-development"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -12,6 +18,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 mesh-bvh = []
+bvh-csg = ["mesh-bvh"]
 
 [dependencies]
 wgpu = "0.20"
@@ -85,3 +92,13 @@ path = "examples/shadow.rs"
 name = "mesh_bvh_picking"
 path = "examples/mesh_bvh_picking.rs"
 required-features = ["mesh-bvh"]
+
+[[example]]
+name = "bvh_csg_hierarchy"
+path = "examples/bvh_csg_hierarchy.rs"
+required-features = ["bvh-csg"]
+
+[[example]]
+name = "bvh_csg_steps"
+path = "examples/bvh_csg_steps.rs"
+required-features = ["bvh-csg"]

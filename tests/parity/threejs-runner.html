@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<script>
+// Legacy runner URL — redirect to static parity scene (has built-in orbit + sync).
+(function () {
+    const params = new URLSearchParams(location.search);
+    const slug = params.get('slug');
+    if (!slug) return;
+    const v = params.get('v');
+    const qs = new URLSearchParams();
+    if (v) qs.set('v', v);
+    const tail = qs.toString() ? `?${qs}` : '';
+    location.replace(`/tests/parity/scenes/threejs-${encodeURIComponent(slug)}.html${tail}`);
+})();
+</script>
+<style>
+html,body{margin:0;background:#101418;color:#8a9bb0;font:13px/1.4 ui-monospace,monospace;padding:12px}
+</style>
+</head>
+<body>
+<p>Redirecting to parity scene…</p>
+<p>If this page does not redirect, open <a id="link" href="/tests/parity/">parity compare</a>.</p>
+<script>
+const slug = new URLSearchParams(location.search).get('slug');
+if (slug) document.getElementById('link').href = `/tests/parity/scenes/threejs-${slug}.html`;
+</script>
+</body></html>

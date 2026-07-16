@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>body{margin:0;background:#101418}canvas{display:block;cursor:grab;touch-action:none}canvas:active{cursor:grabbing}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js","three-mesh-bvh":"https://unpkg.com/three-mesh-bvh@0.7.6/build/index.module.js","three-bvh-csg":"https://unpkg.com/three-bvh-csg@0.0.16/build/index.module.js"}}</script>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import * as THREE from 'three';
+import { acceleratedRaycast } from 'three-mesh-bvh';
+import { Brush, Evaluator, ADDITION, SUBTRACTION, INTERSECTION } from 'three-bvh-csg';
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x101418);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+        const dl = new THREE.DirectionalLight(0xffffff, 1);
+        dl.position.set(3, 5, 2);
+        scene.add(dl);
+        const red = new THREE.MeshStandardMaterial({ color: 0xff1744, roughness: 0.25 });
+        const green = new THREE.MeshStandardMaterial({ color: 0x76ff03, roughness: 0.25 });
+        const blue = new THREE.MeshStandardMaterial({ color: 0x2979ff, roughness: 0.25 });
+        const evaluator = new Evaluator();
+        const c1 = new Brush(new THREE.BoxGeometry(0.9, 6, 0.9).toNonIndexed(), blue);
+        const c2 = new Brush(new THREE.BoxGeometry(6, 0.9, 0.9).toNonIndexed(), blue);
+        const c3 = new Brush(new THREE.BoxGeometry(0.9, 0.9, 6).toNonIndexed(), blue);
+        const sphere = new Brush(new THREE.SphereGeometry(1, 32, 16).toNonIndexed(), green);
+        const box = new Brush(new THREE.BoxGeometry(1.5, 1.5, 1.5).toNonIndexed(), red);
+        [c1,c2,c3,sphere,box].forEach(b => b.updateMatrixWorld(true));
+        let result = evaluator.evaluate(c1, c2, ADDITION);
+        result = evaluator.evaluate(result, c3, ADDITION);
+        result = evaluator.evaluate(sphere, result, SUBTRACTION);
+        result = evaluator.evaluate(box, result, INTERSECTION);
+        result.geometry.computeVertexNormals();
+        scene.add(new THREE.Mesh(result.geometry, result.material));
+        const cam = new THREE.PerspectiveCamera(50, 800/600, 0.1, 100);
+        cam.position.set(0, 0, 5);
+        cam.lookAt(0, 0, 0);
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setSize(800, 600, false);
+        renderer.render(scene, cam);
+        await new Promise(r => requestAnimationFrame(r));
+        document.body.dataset.ready = 'true';
+        document.body.dataset.triCount = String(((result.geometry.drawRange.count !== Infinity ? result.geometry.drawRange.count : result.geometry.attributes.position.count) / 3) | 0);
+
+        const { installOrbitSyncBridge } = await import('/tests/parity/parity-orbit-sync.js');
+        installOrbitSyncBridge();
+        const { OrbitControls } = await import('https://unpkg.com/three@0.165.0/examples/jsm/controls/OrbitControls.js');
+        const controls = new OrbitControls(cam, renderer.domElement);
+        window.__parityOrbit = controls;
+        window.__parityOrbitCtx = { side: 'three', orbit: controls, cam, render: () => renderer.render(scene, cam) };
+        if (typeof window.__parityPrimeOrbitCtx === 'function') window.__parityPrimeOrbitCtx(window.__parityOrbitCtx);
+        (function orbitLoop() {
+            const syncPassive = window.__parityOrbitSyncEnabled && !window.__parityOrbitInteracting;
+            if (!window.__parityCaptureLock && !syncPassive) controls.update();
+            renderer.render(scene, cam);
+            if (window.__parityOrbitSyncHook) window.__parityOrbitSyncHook();
+            requestAnimationFrame(orbitLoop);
+        })();
+    } catch (e) {
+        errEl.style.display = 'block';
+        errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script>
+</body>
+</html>

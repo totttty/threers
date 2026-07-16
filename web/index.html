@@ -55,7 +55,7 @@
             camera.position.set(2.5, 2.0, 3.5);
             camera.lookAt(0, 0, 0);
 
-            const controls = new THREE.OrbitControls(camera, canvas);
+            const controls = new THREE.OrbitControls(camera, renderer.domElement);
 
             window.addEventListener('resize', () => {
                 const dpr = Math.min(window.devicePixelRatio || 1, 2);

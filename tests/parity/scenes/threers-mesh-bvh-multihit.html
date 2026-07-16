@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>body{margin:0;background:#101418}canvas{display:block}#err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap}</style></head>
+<body><canvas id="c" width="800" height="600"></canvas><div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+import { installMeshBvh, MeshBVH } from '/web/mesh-bvh-addon.js';
+const errEl = document.getElementById('err');
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        installMeshBvh(THREE);
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x101418);
+        const a = new THREE.Mesh(new THREE.SphereGeometry(0.4, 32, 16), new THREE.MeshStandardMaterial({ color: 0x4488cc }));
+        a.position.x = -0.6;
+        const b = new THREE.Mesh(new THREE.SphereGeometry(0.35, 32, 16), new THREE.MeshStandardMaterial({ color: 0x66aa88 }));
+        b.position.x = 0.6;
+        scene.add(a, b);
+        a.geometry.boundsTree = new MeshBVH(a.geometry);
+        b.geometry.boundsTree = new MeshBVH(b.geometry);
+        const cam = new THREE.PerspectiveCamera(50, 800/600, 0.1, 100);
+        cam.position.set(0, 0, 4); cam.lookAt(0, 0, 0);
+        const raycaster = new THREE.Raycaster();
+        raycaster.set(new THREE.Vector3(-2, 0, 0), new THREE.Vector3(1, 0, 0));
+        const hits = raycaster.intersectObjects([a, b], false);
+        for (const h of hits) {
+            const m = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), new THREE.MeshBasicMaterial({ color: 0xff3333 }));
+            m.position.copy(h.point);
+            scene.add(m);
+        }
+        const r = await THREE.WebGLRenderer.create(document.getElementById('c'));
+        r.setSize(800, 600);
+        r.render(scene, cam);
+        await new Promise(rs => requestAnimationFrame(() => rs()));
+        document.body.dataset.ready = 'true';
+        document.body.dataset.hitCount = String(hits.length);
+        if (hits.length >= 2) document.body.dataset.hitDistance = hits.map(h => h.distance.toFixed(3)).join(',');
+    } catch (e) {
+        errEl.style.display = 'block'; errEl.textContent = e?.stack || String(e);
+        document.body.dataset.ready = 'error';
+    }
+})();
+</script></body></html>

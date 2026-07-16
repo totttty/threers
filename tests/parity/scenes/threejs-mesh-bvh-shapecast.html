@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>body{margin:0;background:#101418}canvas{display:block}</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js","three-mesh-bvh":"https://unpkg.com/three-mesh-bvh@0.7.6/build/index.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { MeshBVH, NOT_INTERSECTED, INTERSECTED } from 'three-mesh-bvh';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101418);
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+const geom = new THREE.TorusKnotGeometry(1, 0.35, 64, 16);
+const bvh = new MeshBVH(geom);
+geom.boundsTree = bvh;
+
+const sphere = new THREE.Sphere(new THREE.Vector3(0.3, 0.2, 0), 0.55);
+const queryBox = new THREE.Box3().setFromCenterAndSize(
+    sphere.center,
+    new THREE.Vector3(sphere.radius * 2, sphere.radius * 2, sphere.radius * 2),
+);
+
+const markerGeom = new THREE.SphereGeometry(0.04, 8, 8);
+const markerMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+const hitCentroids = [];
+
+let hitCount = 0;
+bvh.shapecast({
+    intersectsBounds: (box) => {
+        const tmp = new THREE.Box3(
+            new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+            new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+        );
+        return tmp.intersectsBox(queryBox) ? INTERSECTED : NOT_INTERSECTED;
+    },
+    intersectsTriangle: (tri) => {
+        if (sphere.containsPoint(tri.a) || sphere.containsPoint(tri.b) || sphere.containsPoint(tri.c)) {
+            hitCount++;
+            hitCentroids.push(new THREE.Vector3().addVectors(tri.a, tri.b).add(tri.c).multiplyScalar(1 / 3));
+        }
+        return false;
+    },
+});
+
+const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x335588, roughness: 0.6 }));
+scene.add(mesh);
+
+for (const c of hitCentroids) {
+    const m = new THREE.Mesh(markerGeom, markerMat);
+    m.position.copy(c);
+    scene.add(m);
+}
+
+const cam = new THREE.PerspectiveCamera(50, 800 / 600, 0.1, 100);
+cam.position.set(2.5, 1.5, 3.5);
+cam.lookAt(0, 0, 0);
+
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: false });
+r.setSize(800, 600, false);
+r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+document.body.dataset.shapecastHits = String(hitCount);
+</script>
+</body>
+</html>

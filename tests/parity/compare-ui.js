@@ -78,6 +78,7 @@ let APPROXIMATE_SCENES = [];
 let FEATURE_SCENES = new Map();
 /** @type {string | null} */
 let meshBvhBuildEnabled = null;
+let bvhCsgBuildEnabled = null;
 
 let stats = new Map();
 /** Latest iframe boot/render result — overrides stale compare-results device errors. */
@@ -86,22 +87,35 @@ const liveSceneStatus = new Map();
 let index = 0;
 let gridMode = false;
 let syncOrbitEnabled = true;
+/** @type {'three' | 'threers'} */
+let activeOrbitSide = 'three';
+let orbitSyncRaf = 0;
+
+function orbitStateKey(state) {
+    if (!state?.position || !state?.target) return '';
+    const p = state.position;
+    const t = state.target;
+    return `${p.x.toFixed(4)},${p.y.toFixed(4)},${p.z.toFixed(4)}|${t.x.toFixed(4)},${t.y.toFixed(4)},${t.z.toFixed(4)}`;
+}
+
+const DEFAULT_ORBIT_STATE = {
+    position: { x: 0, y: 0, z: 5 },
+    target: { x: 0, y: 0, z: 0 },
+};
+
 /** @type {string} */
 let lastOrbitRelayKey = '';
-/** Persistent threers runner — wasm/WebGPU init once per compare session. */
-let threersRunnerReady = false;
-let threersRunnerBoot = null;
-/** Bust iframe cache after wasm/shim rebuilds (from build-id.txt or ↻ / R). */
+/** @type {string} */
 let iframeCacheBust = '';
-/** Bump when threers-runner.js changes (paired with wasm build-id for ?v= cache bust). */
-const THREERS_RUNNER_REV = 7;
+/** Bump when compare scene iframes need a cache bust (shim, scenes, orbit sync). */
+const SCENE_CACHE_REV = 24;
 
 async function fetchAssetVersion() {
     try {
         const res = await fetch('/web/pkg/build-id.txt', { cache: 'no-store' });
-        if (res.ok) return `${(await res.text()).trim()}-r${THREERS_RUNNER_REV}`;
+        if (res.ok) return `${(await res.text()).trim()}-r${SCENE_CACHE_REV}`;
     } catch (_) { /* optional */ }
-    return `${Date.now()}-r${THREERS_RUNNER_REV}`;
+    return `${Date.now()}-r${SCENE_CACHE_REV}`;
 }
 /** @type {Map<string, { path: string, display: string, full: string, url?: string }>} */
 const sourceCache = new Map();
@@ -294,11 +308,48 @@ function setCodeTabsActive(tabsEl, lang) {
     });
 }
 
+function rustStubForFeatureScene(slug, feature) {
+    if (slug === 'bvh-csg-hierarchy') return null;
+    if (feature === 'bvh-csg') {
+        return `//! Parity scene \`${slug}\` — CSG is JavaScript, not native Rust.
+//!
+//! Boolean evaluation: \`web/csg/\` (port of three-bvh-csg@0.0.16)
+//!   Evaluator.evaluate / evaluateHierarchy on JS BufferGeometry
+//! BVH acceleration: wasm mesh-bvh (\`web/mesh-bvh-impl.js\`)
+//! Final draw: threers wgpu renderer uploads mesh via BufferGeometry._syncWasmFromJs()
+//!
+//! There is no \`examples/${slug}.rs\` — use the JavaScript tab:
+//!   scenes/threers-${slug}.html
+//! Hierarchy ops: web/csg/core/operations/Operation.js, OperationGroup.js
+//!                 web/csg/core/Evaluator.js (evaluateHierarchy)
+
+// CSG runs in the browser; wasm only renders the evaluated triangle soup.
+`;
+    }
+    if (feature === 'mesh-bvh') {
+        return `//! Parity scene \`${slug}\` — scene graph is JavaScript; BVH queries are wasm.
+//!
+//! See scenes/threers-${slug}.html and web/mesh-bvh-impl.js
+//! Native Rust example generation does not apply to mesh-bvh parity scenes.
+
+`;
+    }
+    return null;
+}
+
 async function fetchRustSceneSource(slug) {
     const rel = `scenes/rust/${slug}.rs`;
     const url = `${BASE}/rust/${slug}.rs`;
     const cacheKey = url;
     if (sourceCache.has(cacheKey)) return sourceCache.get(cacheKey);
+
+    const feature = FEATURE_SCENES.get(slug);
+    const stub = feature ? rustStubForFeatureScene(slug, feature) : null;
+    if (stub) {
+        const entry = { path: rel, url, full: stub, display: stub, stub: true };
+        sourceCache.set(cacheKey, entry);
+        return entry;
+    }
 
     const res = await fetch(url);
     if (!res.ok) throw new Error(`not found: ${rel} — run node generate-rust-scenes.js`);
@@ -441,7 +492,7 @@ function renderList(filter = '') {
         li.dataset.index = String(i);
         const r = stats.get(slug);
         const pct = r && r.pct != null ? `${r.pct.toFixed(2)}%` : '—';
-        const feat = FEATURE_SCENES.has(slug) ? ' · mesh-bvh' : '';
+        const feat = FEATURE_SCENES.has(slug) ? ` · ${FEATURE_SCENES.get(slug)}` : '';
         li.innerHTML = `<span class="slug">${slug}${feat}</span><span class="pct">${pct}</span>`;
         li.addEventListener('click', () => goTo(i));
         els.list.appendChild(li);
@@ -463,7 +514,14 @@ function renderGrid(filter = '') {
                 <iframe loading="lazy" title="threers ${slug}" src="${BASE}/threers-${slug}.html"></iframe>
             </div>`;
         card.querySelectorAll('iframe').forEach((frame) => {
-            frame.addEventListener('load', () => applyIframeChrome(frame));
+            frame.addEventListener('load', () => {
+                applyIframeChrome(frame);
+                if (syncOrbitEnabled) {
+                    try {
+                        frame.contentWindow?.postMessage({ type: 'parity-orbit-sync-enabled', enabled: true }, '*');
+                    } catch (_) { /* not ready */ }
+                }
+            });
         });
         card.addEventListener('click', () => { gridMode = false; syncViewMode(); goTo(i); });
         els.grid.appendChild(card);
@@ -476,11 +534,68 @@ function syncViewMode() {
     document.body.classList.toggle('mode-grid', gridMode);
 }
 
-function broadcastOrbitSyncEnabled(enabled, seedState = null) {
+function broadcastOrbitSyncEnabled(enabled) {
     const msg = { type: 'parity-orbit-sync-enabled', enabled };
-    if (seedState) msg.seedState = seedState;
-    try { els.threeFrame?.contentWindow?.postMessage(msg, '*'); } catch (_) { /* not ready */ }
-    try { els.threersFrame?.contentWindow?.postMessage(msg, '*'); } catch (_) { /* not ready */ }
+    const frames = gridMode
+        ? [...document.querySelectorAll('.grid-pair iframe')]
+        : [els.threeFrame, els.threersFrame].filter(Boolean);
+    for (const frame of frames) {
+        try { frame?.contentWindow?.postMessage(msg, '*'); } catch (_) { /* not ready */ }
+    }
+}
+
+function pushOrbitSyncToPeer(sourceSide, state) {
+    if (!syncOrbitEnabled || gridMode || !state) return;
+    const targetFrame = sourceSide === 'three' ? els.threersFrame : els.threeFrame;
+    try {
+        targetFrame?.contentWindow?.postMessage({
+            type: 'parity-orbit-sync',
+            from: sourceSide,
+            state,
+        }, '*');
+    } catch (_) { /* not ready */ }
+}
+
+function readOrbitStateFromFrame(frame) {
+    try {
+        const win = frame?.contentWindow;
+        const ctx = win?.__parityOrbitCtx;
+        const fn = win?.__parityExportOrbitState;
+        if (ctx && typeof fn === 'function') return fn(ctx);
+    } catch (_) { /* not ready */ }
+    return null;
+}
+
+function startContinuousOrbitSync() {
+    if (orbitSyncRaf) cancelAnimationFrame(orbitSyncRaf);
+    const tick = () => {
+        if (syncOrbitEnabled && !gridMode) {
+            const sourceFrame = activeOrbitSide === 'threers' ? els.threersFrame : els.threeFrame;
+            const state = readOrbitStateFromFrame(sourceFrame);
+            if (state) {
+                const key = orbitStateKey(state);
+                if (key && key !== lastOrbitRelayKey) {
+                    lastOrbitRelayKey = key;
+                    pushOrbitSyncToPeer(activeOrbitSide, state);
+                }
+            }
+        }
+        orbitSyncRaf = requestAnimationFrame(tick);
+    };
+    orbitSyncRaf = requestAnimationFrame(tick);
+}
+
+function orbitRelayTargetFrame(event, source) {
+    if (gridMode) {
+        const srcFrame = [...document.querySelectorAll('.grid-pair iframe')]
+            .find((f) => f.contentWindow === event.source);
+        if (srcFrame?.parentElement) {
+            return [...srcFrame.parentElement.querySelectorAll('iframe')]
+                .find((f) => f !== srcFrame) || null;
+        }
+        return null;
+    }
+    return source === 'three' ? els.threersFrame : els.threeFrame;
 }
 
 function requestOrbitState(frame, source) {
@@ -495,7 +610,7 @@ function requestOrbitState(frame, source) {
         setTimeout(() => {
             window.removeEventListener('message', onMsg);
             resolve(null);
-        }, 500);
+        }, 5000);
         try {
             frame?.contentWindow?.postMessage({ type: 'parity-orbit-get-state' }, '*');
         } catch (_) {
@@ -506,25 +621,30 @@ function requestOrbitState(frame, source) {
 }
 
 async function alignOrbitsFromThree() {
-    const state = await requestOrbitState(els.threeFrame, 'three');
-    if (!state) return;
-    lastOrbitRelayKey = `${state.position.x.toFixed(4)},${state.position.y.toFixed(4)},${state.position.z.toFixed(4)}|${state.target.x.toFixed(4)},${state.target.y.toFixed(4)},${state.target.z.toFixed(4)}`;
-    try {
-        els.threersFrame?.contentWindow?.postMessage({
-            type: 'parity-orbit-sync',
-            from: 'three',
-            state,
-        }, '*');
-    } catch (_) { /* not ready */ }
+    let state = await requestOrbitState(els.threeFrame, 'three');
+    if (!state) state = DEFAULT_ORBIT_STATE;
+    lastOrbitRelayKey = orbitStateKey(state);
+    activeOrbitSide = 'three';
+    broadcastOrbitSyncEnabled(true);
+    pushOrbitSyncToPeer('three', state);
+}
+
+function scheduleOrbitAlign() {
+    if (!syncOrbitEnabled) return;
+    alignOrbitsFromThree();
+    for (const delay of [500, 1200, 2500]) {
+        setTimeout(() => { if (syncOrbitEnabled) alignOrbitsFromThree(); }, delay);
+    }
 }
 
 function handleOrbitRelay(event) {
     const d = event.data;
     if (!d || d.type !== 'parity-orbit-change' || !syncOrbitEnabled) return;
-    const key = `${d.state.position.x.toFixed(4)},${d.state.position.y.toFixed(4)},${d.state.position.z.toFixed(4)}|${d.state.target.x.toFixed(4)},${d.state.target.y.toFixed(4)},${d.state.target.z.toFixed(4)}`;
-    if (key === lastOrbitRelayKey) return;
+    const key = orbitStateKey(d.state);
+    if (!key || key === lastOrbitRelayKey) return;
     lastOrbitRelayKey = key;
-    const target = d.source === 'three' ? els.threersFrame : els.threeFrame;
+    if (d.source === 'three' || d.source === 'threers') activeOrbitSide = d.source;
+    const target = orbitRelayTargetFrame(event, d.source);
     try {
         target?.contentWindow?.postMessage({
             type: 'parity-orbit-sync',
@@ -534,57 +654,23 @@ function handleOrbitRelay(event) {
     } catch (_) { /* not ready */ }
 }
 
-function waitPostMessage(type, slug, timeoutMs = 45000) {
-    return new Promise((resolve) => {
-        const start = Date.now();
-        const onMsg = (event) => {
-            const d = event.data;
-            if (!d || d.type !== type) return;
-            if (slug != null && d.slug !== slug) return;
-            window.removeEventListener('message', onMsg);
-            resolve(d);
-        };
-        window.addEventListener('message', onMsg);
-        const tick = () => {
-            if (Date.now() - start > timeoutMs) {
-                window.removeEventListener('message', onMsg);
-                resolve({ ok: false, err: 'timeout' });
-                return;
-            }
-            requestAnimationFrame(tick);
-        };
-        tick();
-    });
-}
-
-async function ensureThreersRunner(forceReload = false) {
-    if (forceReload) {
-        threersRunnerReady = false;
-        threersRunnerBoot = null;
-        iframeCacheBust = `${await fetchAssetVersion()}-${Date.now()}`;
+function assertSceneFeature(slug) {
+    if (!FEATURE_SCENES.has(slug)) return;
+    const feat = FEATURE_SCENES.get(slug);
+    if (feat === 'bvh-csg' && bvhCsgBuildEnabled === false) {
+        throw new Error('bvh-csg not in wasm build — run: BVH_CSG=1 web/build.sh');
     }
-    if (threersRunnerReady) return threersRunnerBoot;
-
-    const bootUrl = `/tests/parity/threers-runner.html${iframeCacheBust ? `?v=${iframeCacheBust}` : ''}`;
-    const bootPromise = waitPostMessage('parity-threers-boot');
-    els.threersFrame.src = bootUrl;
-    threersRunnerBoot = await bootPromise;
-    if (!threersRunnerBoot?.ok) {
-        throw new Error(threersRunnerBoot?.err || 'threers runner failed to boot');
-    }
-    threersRunnerReady = true;
-    syncIframeThemes();
-    return threersRunnerBoot;
-}
-
-async function loadThreersScene(slug, { forceReload = false } = {}) {
-    await ensureThreersRunner(forceReload);
-    if (FEATURE_SCENES.has(slug) && meshBvhBuildEnabled === false) {
+    if (feat === 'mesh-bvh' && meshBvhBuildEnabled === false) {
         throw new Error('mesh-bvh not in wasm build — run: MESH_BVH=1 web/build.sh');
     }
-    els.threersFrame.contentWindow.postMessage({ type: 'parity-scene', slug }, '*');
-    const msg = await waitPostMessage('parity-threers', slug);
-    if (!msg.ok) throw new Error(msg.err || 'render error');
+    if (meshBvhBuildEnabled === false && feat === 'bvh-csg') {
+        throw new Error('bvh-csg requires mesh-bvh — run: BVH_CSG=1 web/build.sh');
+    }
+}
+
+function sceneFrameUrl(side, slug) {
+    const bust = iframeCacheBust ? `?v=${encodeURIComponent(iframeCacheBust)}` : '';
+    return `${BASE}/${side}-${slug}.html${bust}`;
 }
 
 function waitFrameReady(frame, timeoutMs = 45000) {
@@ -613,17 +699,22 @@ function waitFrameReady(frame, timeoutMs = 45000) {
     });
 }
 
-async function pollFrames(forceThreersReload = false) {
+async function pollFrames() {
     els.statusThree.textContent = 'loading…';
     els.statusThreers.textContent = 'loading…';
     els.statusThree.className = 'pill loading';
     els.statusThreers.className = 'pill loading';
 
     const slug = SCENES[index];
-    const threeReady = waitFrameReady(els.threeFrame);
-    const threersReady = loadThreersScene(slug, { forceReload: forceThreersReload })
-        .then(() => ({ ok: true }))
-        .catch((err) => ({ ok: false, err: String(err) }));
+    let featureErr = null;
+    try { assertSceneFeature(slug); } catch (e) { featureErr = String(e); }
+
+    const threeReady = featureErr
+        ? Promise.resolve({ ok: false, err: featureErr })
+        : waitFrameReady(els.threeFrame, 60000);
+    const threersReady = featureErr
+        ? Promise.resolve({ ok: false, err: featureErr })
+        : waitFrameReady(els.threersFrame, 120000);
 
     const [a, b] = await Promise.all([threeReady, threersReady]);
     applyIframeChrome(els.threeFrame);
@@ -645,13 +736,11 @@ async function pollFrames(forceThreersReload = false) {
         els.stat.className = `stat ${st.cls}`;
         renderList(els.search.value);
     }
-    if (syncOrbitEnabled) {
-        broadcastOrbitSyncEnabled(true);
-        alignOrbitsFromThree();
-    }
+    if (syncOrbitEnabled) scheduleOrbitAlign();
 }
 
 function loadScene(i, { forceReload = false } = {}) {
+    lastOrbitRelayKey = '';
     index = ((i % SCENES.length) + SCENES.length) % SCENES.length;
     const slug = SCENES[index];
     setHash(slug);
@@ -665,24 +754,25 @@ function loadScene(i, { forceReload = false } = {}) {
     if (APPROXIMATE_SCENES.includes(slug)) els.apis.textContent += ' · approximate';
     const feat = FEATURE_SCENES.get(slug);
     if (feat) {
-        els.apis.textContent += ` · feature:${feat} (MESH_BVH=1 web/build.sh)`;
-        if (meshBvhBuildEnabled === false) {
+        const hint = feat === 'bvh-csg' ? 'BVH_CSG=1 web/build.sh' : 'MESH_BVH=1 web/build.sh';
+        els.apis.textContent += ` · feature:${feat} (${hint})`;
+        if (feat === 'bvh-csg' && bvhCsgBuildEnabled === false) {
+            els.apis.textContent += ' · wasm build missing bvh-csg';
+        } else if (feat === 'mesh-bvh' && meshBvhBuildEnabled === false) {
             els.apis.textContent += ' · wasm build missing mesh-bvh';
         }
     }
 
     if (forceReload) {
         iframeCacheBust = String(Date.now());
-        threersRunnerReady = false;
     }
-    const bust = iframeCacheBust ? `&v=${encodeURIComponent(iframeCacheBust)}` : '';
-    els.threeFrame.src = `/tests/parity/threejs-runner.html?slug=${encodeURIComponent(slug)}${bust}`;
-    // threers: persistent runner (postMessage scene swap) — no per-scene iframe reload.
+    els.threeFrame.src = sceneFrameUrl('threejs', slug);
+    els.threersFrame.src = sceneFrameUrl('threers', slug);
 
     if (els.btnOpenScene) els.btnOpenScene.href = `${BASE}/threejs-${slug}.html`;
     renderList(els.search.value);
     loadSceneSources(slug);
-    pollFrames(forceReload);
+    pollFrames();
 }
 
 function goTo(i) {
@@ -696,9 +786,10 @@ function step(delta) {
 }
 
 async function loadManifest() {
-    const [mainRes, bvhRes] = await Promise.all([
+    const [mainRes, bvhRes, csgRes] = await Promise.all([
         fetch('/tests/parity/scenes-manifest.json'),
         fetch('/tests/parity/scenes-manifest-mesh-bvh.json'),
+        fetch('/tests/parity/scenes-manifest-bvh-csg.json'),
     ]);
     if (!mainRes.ok) throw new Error('scenes-manifest.json missing — run node generate-scenes.js');
     const data = await mainRes.json();
@@ -706,14 +797,15 @@ async function loadManifest() {
     SCENE_API_MAP = { ...(data.apiMap || {}) };
     APPROXIMATE_SCENES = data.approximate || [];
 
-    if (bvhRes.ok) {
-        const bvh = await bvhRes.json();
-        const flag = bvh.feature || 'mesh-bvh';
-        for (const slug of bvh.scenes || []) {
+    for (const res of [bvhRes, csgRes]) {
+        if (!res.ok) continue;
+        const part = await res.json();
+        const flag = part.feature || 'mesh-bvh';
+        for (const slug of part.scenes || []) {
             if (!SCENES.includes(slug)) SCENES.push(slug);
             FEATURE_SCENES.set(slug, flag);
         }
-        Object.assign(SCENE_API_MAP, bvh.apiMap || {});
+        Object.assign(SCENE_API_MAP, part.apiMap || {});
     }
 }
 
@@ -721,11 +813,13 @@ async function loadMeshBvhBuildFlag() {
     try {
         const bust = iframeCacheBust ? `?v=${encodeURIComponent(iframeCacheBust)}` : '';
         const res = await fetch(`/web/features.js${bust}`);
-        if (!res.ok) { meshBvhBuildEnabled = false; return; }
+        if (!res.ok) { meshBvhBuildEnabled = false; bvhCsgBuildEnabled = false; return; }
         const text = await res.text();
         meshBvhBuildEnabled = /meshBvh:\s*true/.test(text);
+        bvhCsgBuildEnabled = /bvhCsg:\s*true/.test(text);
     } catch (_) {
         meshBvhBuildEnabled = false;
+        bvhCsgBuildEnabled = false;
     }
 }
 
@@ -735,6 +829,7 @@ async function loadStats() {
     for (const url of [
         `/tests/parity/out/compare-results.json${bust}`,
         `/tests/parity/out/compare-results-mesh-bvh.json${bust}`,
+        `/tests/parity/out/compare-results-bvh-csg.json${bust}`,
     ]) {
         try {
             const res = await fetch(url);
@@ -745,7 +840,13 @@ async function loadStats() {
             if (Array.isArray(part)) rows.push(...part);
         } catch (_) { /* optional */ }
     }
-    if (rows.length) stats = new Map(rows.map(r => [r.scene, r]));
+    if (rows.length) {
+        stats = new Map(rows.map((r) => {
+            const pct = r.pct ?? r.diffPct;
+            const ok = r.ok ?? (r.pass && pct != null && pct < 0.01);
+            return [r.scene, { ...r, pct, ok }];
+        }));
+    }
 }
 
 function bind() {
@@ -802,10 +903,11 @@ function bind() {
             syncOrbitEnabled = els.syncOrbit.checked;
             try { localStorage.setItem('parity-sync-orbit', syncOrbitEnabled ? '1' : '0'); } catch (_) { /* private */ }
             broadcastOrbitSyncEnabled(syncOrbitEnabled);
-            if (syncOrbitEnabled) await alignOrbitsFromThree();
+            if (syncOrbitEnabled) scheduleOrbitAlign();
         });
     }
     window.addEventListener('message', handleOrbitRelay);
+    startContinuousOrbitSync();
 }
 
 async function initCompare() {

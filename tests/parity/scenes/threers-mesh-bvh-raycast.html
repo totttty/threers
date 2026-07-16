@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { margin: 0; background: #101418; }
+        canvas { display: block; }
+        #err { position: absolute; top: 0; left: 0; padding: 12px; color: #fdd; background: #500; font-family: monospace; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+import { installMeshBvh, MeshBVH } from '/web/mesh-bvh-addon.js';
+
+const errEl = document.getElementById('err');
+function showError(e) {
+    errEl.style.display = 'block';
+    errEl.textContent = (e && e.stack) ? e.stack : String(e);
+    document.body.dataset.ready = 'error';
+}
+
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        installMeshBvh(THREE);
+
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x101418);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+        const dl = new THREE.DirectionalLight(0xffffff, 1);
+        dl.position.set(3, 5, 2);
+        scene.add(dl);
+
+        const geom = new THREE.SphereGeometry(1, 64, 32);
+        geom.boundsTree = new MeshBVH(geom);
+        const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x4488cc, roughness: 0.5 }));
+        scene.add(mesh);
+
+        const cam = new THREE.PerspectiveCamera(50, 800 / 600, 0.1, 100);
+        cam.position.set(0, 0, 5);
+        cam.lookAt(0, 0, 0);
+
+        const raycaster = new THREE.Raycaster();
+        raycaster.firstHitOnly = true;
+        raycaster.setFromCamera(new THREE.Vector2(0, 0), cam);
+        const hits = raycaster.intersectObject(mesh);
+        if (hits.length) {
+            const marker = new THREE.Mesh(
+                new THREE.SphereGeometry(0.08, 16, 16),
+                new THREE.MeshBasicMaterial({ color: 0xff2222 }),
+            );
+            marker.position.copy(hits[0].point);
+            scene.add(marker);
+        }
+
+        const renderer = await THREE.WebGLRenderer.create(canvas);
+        renderer.setSize(800, 600);
+        renderer.render(scene, cam);
+        await new Promise(r => requestAnimationFrame(() => r()));
+
+        document.body.dataset.ready = 'true';
+        document.body.dataset.hitCount = String(hits.length);
+        if (hits.length) document.body.dataset.hitDistance = String(hits[0].distance.toFixed(4));
+    } catch (e) {
+        console.error(e);
+        showError(e);
+    }
+})();
+</script>
+</body>
+</html>

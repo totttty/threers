@@ -61,6 +61,23 @@ impl Triangle {
         bc.x >= 0.0 && bc.y >= 0.0 && bc.z >= 0.0
     }
 
+    /// Triangle–triangle intersection (including coplanar cases).
+    ///
+    /// Available with the `bvh-csg` feature; delegates to the f64 ExtendedTriangle
+    /// path used by the CSG port.
+    #[cfg(feature = "bvh-csg")]
+    pub fn intersects_triangle(&self, other: &Triangle) -> bool {
+        self.intersects_triangle_ext(other, true)
+    }
+
+    /// Extended triangle intersection used by CSG (mirrors `ExtendedTriangle.intersectsTriangle`).
+    #[cfg(feature = "bvh-csg")]
+    pub fn intersects_triangle_ext(&self, other: &Triangle, coplanar: bool) -> bool {
+        use crate::csg::js_topology::JsTriangle;
+        JsTriangle::from_triangle(*self)
+            .intersects_triangle(JsTriangle::from_triangle(*other), coplanar)
+    }
+
     /// True if `direction` points against the triangle's normal.
     pub fn is_front_facing(&self, direction: Vector3) -> bool {
         (self.b - self.a).cross(self.c - self.a).dot(direction) < 0.0

@@ -1,0 +1,25 @@
+{
+  "scenes": [
+    "bvh-csg-union",
+    "bvh-csg-subtract",
+    "bvh-csg-intersect",
+    "bvh-csg-difference",
+    "bvh-csg-hierarchy",
+    "bvh-csg-hollow",
+    "bvh-csg-multimaterial",
+    "bvh-csg-multiop",
+    "bvh-csg-complex"
+  ],
+  "feature": "bvh-csg",
+  "apiMap": {
+    "bvh-csg-union": ["Brush", "Evaluator", "ADDITION"],
+    "bvh-csg-subtract": ["Brush", "Evaluator", "SUBTRACTION"],
+    "bvh-csg-intersect": ["Brush", "Evaluator", "INTERSECTION"],
+    "bvh-csg-difference": ["Brush", "Evaluator", "DIFFERENCE"],
+    "bvh-csg-hierarchy": ["Brush", "Evaluator", "Operation", "OperationGroup", "evaluateHierarchy", "ADDITION", "SUBTRACTION"],
+    "bvh-csg-hollow": ["Brush", "Evaluator", "HOLLOW_INTERSECTION", "HOLLOW_SUBTRACTION"],
+    "bvh-csg-multimaterial": ["Brush", "Evaluator", "useGroups", "ADDITION", "SUBTRACTION", "INTERSECTION"],
+    "bvh-csg-multiop": ["Brush", "Evaluator", "batch evaluate", "REVERSE_SUBTRACTION"],
+    "bvh-csg-complex": ["Brush", "Evaluator", "ADDITION", "SUBTRACTION"]
+  }
+}

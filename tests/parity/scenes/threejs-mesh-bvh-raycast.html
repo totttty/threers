@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>body{margin:0;background:#101418}canvas{display:block}</style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.165.0/build/three.module.js","three-mesh-bvh":"https://unpkg.com/three-mesh-bvh@0.7.6/build/index.module.js"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { MeshBVH, acceleratedRaycast } from 'three-mesh-bvh';
+
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+const canvas = document.getElementById('c');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101418);
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const dl = new THREE.DirectionalLight(0xffffff, 1);
+dl.position.set(3, 5, 2);
+scene.add(dl);
+
+const geom = new THREE.SphereGeometry(1, 64, 32);
+geom.boundsTree = new MeshBVH(geom);
+const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x4488cc, roughness: 0.5 }));
+scene.add(mesh);
+
+const cam = new THREE.PerspectiveCamera(50, 800 / 600, 0.1, 100);
+cam.position.set(0, 0, 5);
+cam.lookAt(0, 0, 0);
+
+const raycaster = new THREE.Raycaster();
+raycaster.firstHitOnly = true;
+raycaster.setFromCamera(new THREE.Vector2(0, 0), cam);
+const hits = raycaster.intersectObject(mesh);
+if (hits.length) {
+    const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.08, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0xff2222 }),
+    );
+    marker.position.copy(hits[0].point);
+    scene.add(marker);
+}
+
+const r = new THREE.WebGLRenderer({ canvas, antialias: false });
+r.setSize(800, 600, false);
+r.setPixelRatio(1);
+r.render(scene, cam);
+document.body.dataset.ready = 'true';
+document.body.dataset.hitCount = String(hits.length);
+if (hits.length) document.body.dataset.hitDistance = String(hits[0].distance.toFixed(4));
+</script>
+</body>
+</html>

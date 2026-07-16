@@ -3,9 +3,9 @@
 //! Loads wasm + WebGPU once, then swaps scenes via `postMessage` from the parent
 //! compare page — avoids reloading the wasm module per scene.
 const _assetV = new URLSearchParams(location.search).get('v') || '';
-const _shimUrl = `/web/threejs-shim.js${_assetV ? `?v=${encodeURIComponent(_assetV)}` : ''}`;
+const _shimUrl = '/web/threejs-shim.js';
 const { default: THREE, initThreers, seedRandom } = await import(_shimUrl);
-import { buildInitialRender, buildThreersOrbitTail, detectCamVar } from '/tests/parity/parity-interact.js';
+import { buildInitialRender, buildThreersOrbitTail, detectCamVar, stripInlineOrbit } from '/tests/parity/parity-interact.js';
 import { installOrbitSyncBridge } from '/tests/parity/parity-orbit-sync.js';
 
 installOrbitSyncBridge();
@@ -19,6 +19,9 @@ let renderer = null;
 /** mesh-bvh addon exports when wasm was built with MESH_BVH=1 (null otherwise). */
 let meshBvh = null;
 
+/** bvh-csg addon exports when wasm was built with BVH_CSG=1 (null otherwise). */
+let bvhCsg = null;
+
 /** Safari does not expose `AsyncFunction` as a global — derive it from async fn syntax. */
 const AsyncFunction = (async function () {}).constructor;
 
@@ -30,12 +33,56 @@ function sceneNeedsMeshBvh(html) {
         || /\bshapecast\s*\(/.test(html);
 }
 
+function sceneNeedsBvhCsg(html) {
+    return /\bBrush\b/.test(html)
+        || /\bEvaluator\b/.test(html)
+        || /\bADDITION\b/.test(html)
+        || /\bSUBTRACTION\b/.test(html)
+        || /\bevaluateHierarchy\b/.test(html)
+        || /\bOperation\b/.test(html)
+        || /\binstallBvhCsg\b/.test(html);
+}
+
+function bvhCsgUrl() {
+    return '/web/bvh-csg-addon.js';
+}
+
+async function ensureBvhCsg() {
+    if (bvhCsg) return bvhCsg;
+    await ensureMeshBvh();
+    const featMod = await import(featuresUrl());
+    if (!featMod.features?.bvhCsg) {
+        throw new Error('bvh-csg scenes require BVH_CSG=1 web/build.sh (features.bvhCsg is false)');
+    }
+    bvhCsg = await import(bvhCsgUrl());
+    bvhCsg.installBvhCsg(THREE);
+    return bvhCsg;
+}
+
+function bvhCsgBindings() {
+    if (!bvhCsg) return '';
+    return [
+        'const Brush = bvhCsg.Brush;',
+        'const Evaluator = bvhCsg.Evaluator;',
+        'const Operation = bvhCsg.Operation;',
+        'const OperationGroup = bvhCsg.OperationGroup;',
+        'const ADDITION = bvhCsg.ADDITION;',
+        'const SUBTRACTION = bvhCsg.SUBTRACTION;',
+        'const REVERSE_SUBTRACTION = bvhCsg.REVERSE_SUBTRACTION;',
+        'const INTERSECTION = bvhCsg.INTERSECTION;',
+        'const DIFFERENCE = bvhCsg.DIFFERENCE;',
+        'const HOLLOW_SUBTRACTION = bvhCsg.HOLLOW_SUBTRACTION;',
+        'const HOLLOW_INTERSECTION = bvhCsg.HOLLOW_INTERSECTION;',
+        'const geometryToBufferGeometry = THREE.geometryToBufferGeometry;',
+    ].join('\n');
+}
+
 function meshBvhUrl() {
-    return `/web/mesh-bvh-addon.js${_assetV ? `?v=${encodeURIComponent(_assetV)}` : ''}`;
+    return '/web/mesh-bvh-addon.js';
 }
 
 function featuresUrl() {
-    return `/web/features.js${_assetV ? `?v=${encodeURIComponent(_assetV)}` : ''}`;
+    return '/web/features.js';
 }
 
 async function ensureMeshBvh() {
@@ -75,6 +122,7 @@ function extractSceneSetup(html) {
     // Scenes without try/catch (e.g. ssao-rtcopy).
     body = body.replace(/\(async \(\) => \{[\s\S]*?await initThreers\(\s*['"][^'"]+['"]\s*\);\s*/m, '');
     body = body.replace(/^\s*installMeshBvh\(THREE\);\s*/gm, '');
+    body = body.replace(/^\s*installBvhCsg\(THREE\);\s*/gm, '');
     body = body.replace(/^\}\)\(\);\s*/m, '');
     body = body.replace(/^\s*const r = await THREE\.WebGLRenderer\.create\([\s\S]*?\);\s*/gm, '');
     body = body.replace(/^\s*const renderer = await THREE\.WebGLRenderer\.create\([\s\S]*?\);\s*/gm, '');
@@ -84,6 +132,7 @@ function extractSceneSetup(html) {
     body = body.replace(/await new Promise\(rs => requestAnimationFrame\(\(\) => rs\(\)\)\);\s*/g, '');
     body = body.replace(/document\.body\.dataset\.ready = 'true';\s*/g, '');
     body = body.replace(/} catch \(e\) \{[\s\S]*$/m, '');
+    body = stripInlineOrbit(body);
     return `const r = renderer;
 r.setRenderTarget(null);
 r.setSize(800, 600, false);
@@ -119,12 +168,13 @@ function buildSceneFn(setup) {
     const orbitTail = buildThreersOrbitTail(setup);
     const body = [
         meshBvhBindings(),
+        bvhCsgBindings(),
         setup,
         tail,
         'await new Promise((rs) => requestAnimationFrame(rs));',
         orbitTail,
     ].filter(Boolean).join('\n');
-    return new AsyncFunction('THREE', 'renderer', 'canvas', 'seedRandom', 'meshBvh', body);
+    return new AsyncFunction('THREE', 'renderer', 'canvas', 'seedRandom', 'meshBvh', 'bvhCsg', body);
 }
 
 async function runScene(slug) {
@@ -144,9 +194,10 @@ async function runScene(slug) {
     if (!res.ok) throw new Error(`scene not found: threers-${slug}.html`);
     const html = await res.text();
     if (sceneNeedsMeshBvh(html)) await ensureMeshBvh();
+    if (sceneNeedsBvhCsg(html)) await ensureBvhCsg();
     const setup = extractSceneSetup(html);
     const run = buildSceneFn(setup);
-    await run(THREE, renderer, canvas, seedRandom, meshBvh);
+    await run(THREE, renderer, canvas, seedRandom, meshBvh, bvhCsg);
     document.body.dataset.ready = 'true';
 }
 
@@ -188,6 +239,7 @@ try {
             meshBvh = await import(meshBvhUrl());
             meshBvh.installMeshBvh(THREE);
         }
+        // bvh-csg: lazy-loaded per scene via ensureBvhCsg() (BVH_CSG=1 only)
     } catch (e) {
         console.warn('mesh-bvh addon not loaded at boot', e);
     }

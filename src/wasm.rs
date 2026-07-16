@@ -2240,6 +2240,12 @@ impl WebOrbitControls {
             self.inner.update(ev, c, (w, h));
         }
     }
+    #[wasm_bindgen(js_name = reseedFromCamera)]
+    pub fn reseed_from_camera(&mut self, camera: &WebCamera) {
+        if let CameraInner::Perspective(c) = &camera.inner {
+            self.inner.reseed_from_camera(c);
+        }
+    }
 }
 
 #[wasm_bindgen]
@@ -3125,7 +3131,7 @@ impl WebMeshBvh {
         max_depth: u32,
         max_leaf_tris: u32,
     ) -> Result<WebMeshBvh, JsValue> {
-        Self::new_with_options_full(geometry, max_depth, max_leaf_tris, crate::mesh_bvh::CENTER, 0, 0)
+        Self::new_with_options_full(geometry, max_depth, max_leaf_tris, crate::mesh_bvh::CENTER, 0, 0, false)
     }
 
     #[wasm_bindgen(js_name = newWithOptionsFull)]
@@ -3136,6 +3142,7 @@ impl WebMeshBvh {
         strategy: u32,
         offset: u32,
         count: u32,
+        indirect: bool,
     ) -> Result<WebMeshBvh, JsValue> {
         let options = crate::mesh_bvh::BuildOptions {
             strategy,
@@ -3143,6 +3150,7 @@ impl WebMeshBvh {
             max_leaf_tris,
             offset,
             count,
+            indirect,
         };
         let bvh = crate::mesh_bvh::MeshBvh::build(&geometry.inner, options)
             .ok_or_else(|| JsValue::from_str("failed to build MeshBVH"))?;
@@ -3181,15 +3189,42 @@ impl WebMeshBvh {
         dz: f32,
         near: f32,
         far: f32,
+        side: u32,
     ) -> Vec<f32> {
         let ray = crate::Ray::new(
             crate::Vector3::new(ox, oy, oz),
             crate::Vector3::new(dx, dy, dz),
         );
-        match self.inner.raycast_first(&ray, near, far, true) {
+        match self.inner.raycast_first_with_side(&ray, near, far, side) {
             Some(h) => pack_hits(&[h]),
             None => Vec::new(),
         }
+    }
+
+    #[wasm_bindgen(js_name = resolveTriangleIndex)]
+    pub fn resolve_triangle_index(&self, bvh_triangle_index: u32) -> i32 {
+        match self.inner.resolve_triangle_index(bvh_triangle_index as usize) {
+            Some(i) => i as i32,
+            None => -1,
+        }
+    }
+
+    /// Packed triangle pairs: `[ia, ib, ia, ib, ...]` (BVH-layout indices).
+    #[wasm_bindgen(js_name = bvhcast)]
+    pub fn bvhcast(&self, other: &WebMeshBvh, matrix: &[f32]) -> Vec<u32> {
+        if matrix.len() < 16 {
+            return Vec::new();
+        }
+        let mut elems = [0.0f32; 16];
+        elems.copy_from_slice(&matrix[..16]);
+        let m = crate::Matrix4 { elements: elems };
+        let pairs = self.inner.bvhcast(&other.inner, &m);
+        let mut out = Vec::with_capacity(pairs.len() * 2);
+        for (a, b) in pairs {
+            out.push(a as u32);
+            out.push(b as u32);
+        }
+        out
     }
 
     #[wasm_bindgen(js_name = getBoundingBox)]
@@ -3315,7 +3350,7 @@ impl WebBufferGeometry {
         max_depth: u32,
         max_leaf_tris: u32,
     ) -> Result<WebMeshBvh, JsValue> {
-        self.compute_bounds_tree_full(max_depth, max_leaf_tris, crate::mesh_bvh::CENTER, 0, 0)
+        self.compute_bounds_tree_full(max_depth, max_leaf_tris, crate::mesh_bvh::CENTER, 0, 0, false)
     }
 
     #[wasm_bindgen(js_name = computeBoundsTreeFull)]
@@ -3326,6 +3361,7 @@ impl WebBufferGeometry {
         strategy: u32,
         offset: u32,
         count: u32,
+        indirect: bool,
     ) -> Result<WebMeshBvh, JsValue> {
         let options = crate::mesh_bvh::BuildOptions {
             strategy,
@@ -3333,6 +3369,7 @@ impl WebBufferGeometry {
             max_leaf_tris,
             offset,
             count,
+            indirect,
         };
         let bvh = Arc::make_mut(&mut self.inner)
             .compute_bounds_tree(options)

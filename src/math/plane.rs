@@ -41,6 +41,21 @@ impl Plane {
         self.normal.dot(p) + self.constant
     }
 
+    /// Intersection with a line segment; returns the hit point when the line crosses the plane.
+    pub fn intersect_line(&self, line: &crate::math::Line3) -> Option<Vector3> {
+        const EPS: f32 = 1e-10;
+        let d1 = self.distance_to_point(line.start);
+        let d2 = self.distance_to_point(line.end);
+        if d1 * d2 < 0.0 {
+            let t = d1 / (d1 - d2);
+            return Some(line.start + (line.end - line.start) * t);
+        }
+        if d1.abs() < EPS {
+            return Some(line.start);
+        }
+        None
+    }
+
     pub fn distance_to_sphere(&self, s: &Sphere) -> f32 {
         self.distance_to_point(s.center) - s.radius
     }

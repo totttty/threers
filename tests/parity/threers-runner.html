@@ -7,11 +7,27 @@ canvas:active{cursor:grabbing}
 #err{position:absolute;top:0;left:0;padding:12px;color:#fdd;background:#500;font-family:monospace;white-space:pre-wrap;max-width:100%}
 </style>
 </head>
-<body><canvas id="c" width="800" height="600"></canvas>
+<body><canvas id="c" width="800" height="600" tabindex="0"></canvas>
 <div id="err" style="display:none"></div>
 <script src="/web/webgpu-limit-patch.js"></script>
 <script type="module">
+// Single threejs-shim instance: csg/mesh-bvh import /web/threejs-shim.js while the runner
+// cache-busts via import map (otherwise WebBufferGeometry instanceof checks fail).
 const v = new URLSearchParams(location.search).get('v') || '';
+const shim = v ? `/web/threejs-shim.js?v=${encodeURIComponent(v)}` : '/web/threejs-shim.js';
+const map = document.createElement('script');
+map.type = 'importmap';
+map.textContent = JSON.stringify({
+    imports: {
+        '/web/threejs-shim.js': shim,
+        '/web/features.js': v ? `/web/features.js?v=${encodeURIComponent(v)}` : '/web/features.js',
+        '/web/mesh-bvh-impl.js': v ? `/web/mesh-bvh-impl.js?v=${encodeURIComponent(v)}` : '/web/mesh-bvh-impl.js',
+        '/web/mesh-bvh-addon.js': v ? `/web/mesh-bvh-addon.js?v=${encodeURIComponent(v)}` : '/web/mesh-bvh-addon.js',
+        '/web/bvh-csg-impl.js': v ? `/web/bvh-csg-impl.js?v=${encodeURIComponent(v)}` : '/web/bvh-csg-impl.js',
+        '/web/bvh-csg-addon.js': v ? `/web/bvh-csg-addon.js?v=${encodeURIComponent(v)}` : '/web/bvh-csg-addon.js',
+    },
+});
+document.head.appendChild(map);
 await import(`/tests/parity/threers-runner.js${v ? `?v=${encodeURIComponent(v)}` : ''}`);
 </script>
 </body></html>

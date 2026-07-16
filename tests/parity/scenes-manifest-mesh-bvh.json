@@ -1,0 +1,35 @@
+{
+  "scenes": [
+    "mesh-bvh-raycast",
+    "mesh-bvh-shapecast",
+    "mesh-bvh-multihit",
+    "mesh-bvh-static-gen",
+    "mesh-bvh-intersects"
+  ],
+  "feature": "mesh-bvh",
+  "apiMap": {
+    "mesh-bvh-raycast": [
+      "MeshBVH",
+      "acceleratedRaycast",
+      "raycastFirst"
+    ],
+    "mesh-bvh-shapecast": [
+      "MeshBVH",
+      "shapecast"
+    ],
+    "mesh-bvh-multihit": [
+      "MeshBVH",
+      "acceleratedRaycast"
+    ],
+    "mesh-bvh-static-gen": [
+      "MeshBVH",
+      "StaticGeometryGenerator",
+      "acceleratedRaycast"
+    ],
+    "mesh-bvh-intersects": [
+      "MeshBVH",
+      "intersectsBox",
+      "intersectsSphere"
+    ]
+  }
+}

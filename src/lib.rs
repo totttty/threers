@@ -1,9 +1,9 @@
-//! threers — a three.js-inspired 3D library for Rust.
+//! threers — a drop-in three.js replacement for Rust and WebAssembly.
 //!
-//! Mirrors three.js's core architecture: a scene graph of [`Object3D`]s,
-//! [`BufferGeometry`] with named attributes, [`Material`]s, [`Camera`]s, and a
-//! [`Renderer`] that walks the graph and draws. Backed by wgpu on native and
-//! WebGPU in the browser.
+//! Implements the three.js architecture and API surface: a scene graph of
+//! [`Object3D`]s, [`BufferGeometry`] with named attributes, [`Material`]s,
+//! [`Camera`]s, and a [`Renderer`] that walks the graph and draws. Backed by
+//! wgpu on native and WebGPU in the browser.
 //!
 //! # Crates and targets
 //!
@@ -12,8 +12,9 @@
 //!
 //! # Web usage
 //!
-//! The [`wasm`] module exposes `#[wasm_bindgen]` types. Browser apps import
-//! `web/threejs-shim.js`, which re-exports them as `THREE.*`.
+//! Import `web/threejs-shim.js` for a drop-in `THREE.*` API over the wasm
+//! bindings from [`wasm`]. Existing three.js r165-style apps can swap in with
+//! minimal changes.
 //!
 //! # Modules
 //!
@@ -24,6 +25,8 @@
 //! | [`postprocessing`] | EffectComposer-style pass chain (native) |
 //! | [`loaders`] | glTF, OBJ, HDR, … |
 //! | [`extras`] | PMREM, noise, marching cubes, … |
+//! | [`mesh_bvh`] | Opt-in BVH (`mesh-bvh` feature) |
+//! | [`csg`] | Opt-in CSG (`bvh-csg` feature) |
 
 pub mod math;
 pub mod core;
@@ -51,6 +54,9 @@ pub mod renderer;
 
 #[cfg(feature = "mesh-bvh")]
 pub mod mesh_bvh;
+
+#[cfg(feature = "bvh-csg")]
+pub mod csg;
 
 #[cfg(target_arch = "wasm32")]
 #[macro_export]
@@ -156,3 +162,14 @@ pub use renderer::{Renderer, RenderTarget};
 
 #[cfg(feature = "mesh-bvh")]
 pub use mesh_bvh::{MeshBvh, BvhHit, BuildOptions as MeshBvhBuildOptions, SerializedMeshBvh, AVERAGE, CENTER, SAH, NOT_INTERSECTED, INTERSECTED, CONTAINED};
+
+#[cfg(feature = "bvh-csg")]
+pub use csg::{
+    CsgBrush, CsgEvaluator, CsgOperation, CsgOperationGroup, CsgNode, evaluate_hierarchy,
+    build_bvh_csg_hierarchy_geometry, load_positions_geometry_bin,
+    assert_step_verts, evaluate_live_through, evaluate_through, js_target_verts,
+    step1_shell_cut, step2_add_sphere, step3_win_cut, step4_win_frame,
+    JS_STEP1_VERTS, JS_STEP2_VERTS, JS_STEP3_VERTS, JS_STEP4_VERTS,
+    ADDITION, SUBTRACTION, REVERSE_SUBTRACTION, INTERSECTION, DIFFERENCE,
+    HOLLOW_SUBTRACTION, HOLLOW_INTERSECTION,
+};

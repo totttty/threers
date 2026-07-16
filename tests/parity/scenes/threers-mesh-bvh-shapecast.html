@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { margin: 0; background: #101418; }
+        canvas { display: block; }
+        #err { position: absolute; top: 0; left: 0; padding: 12px; color: #fdd; background: #500; font-family: monospace; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+<canvas id="c" width="800" height="600"></canvas>
+<div id="err" style="display:none"></div>
+<script type="module">
+import THREE, { initThreers } from '/web/threejs-shim.js';
+import { installMeshBvh, MeshBVH, NOT_INTERSECTED, INTERSECTED } from '/web/mesh-bvh-addon.js';
+
+const errEl = document.getElementById('err');
+function showError(e) {
+    errEl.style.display = 'block';
+    errEl.textContent = (e && e.stack) ? e.stack : String(e);
+    document.body.dataset.ready = 'error';
+}
+
+(async () => {
+    try {
+        await initThreers('/web/pkg/threers_bg.wasm');
+        installMeshBvh(THREE);
+
+        const canvas = document.getElementById('c');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x101418);
+        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+        const geom = new THREE.TorusKnotGeometry(1, 0.35, 64, 16);
+        const bvh = new MeshBVH(geom);
+        geom.boundsTree = bvh;
+
+        const sphereCenter = new THREE.Vector3(0.3, 0.2, 0);
+        const sphereRadius = 0.55;
+        const half = sphereRadius;
+        const queryBox = {
+            min: new THREE.Vector3(sphereCenter.x - half, sphereCenter.y - half, sphereCenter.z - half),
+            max: new THREE.Vector3(sphereCenter.x + half, sphereCenter.y + half, sphereCenter.z + half),
+            intersectsBox(other) {
+                return (
+                    this.min.x <= other.max.x && this.max.x >= other.min.x &&
+                    this.min.y <= other.max.y && this.max.y >= other.min.y &&
+                    this.min.z <= other.max.z && this.max.z >= other.min.z
+                );
+            },
+        };
+
+        const markerGeom = new THREE.SphereGeometry(0.04, 8, 8);
+        const markerMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+        const hitCentroids = [];
+
+        let hitCount = 0;
+        bvh.shapecast({
+            intersectsBounds: (box) => box.intersectsBox(queryBox) ? INTERSECTED : NOT_INTERSECTED,
+            intersectsTriangle: (tri) => {
+                const inside = (p) => p.distanceTo(sphereCenter) <= sphereRadius;
+                if (inside(tri.a) || inside(tri.b) || inside(tri.c)) {
+                    hitCount++;
+                    hitCentroids.push(
+                        new THREE.Vector3()
+                            .add(tri.a).add(tri.b).add(tri.c)
+                            .multiplyScalar(1 / 3),
+                    );
+                }
+                return false;
+            },
+        });
+
+        const mesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x335588, roughness: 0.6 }));
+        scene.add(mesh);
+
+        for (const c of hitCentroids) {
+            const m = new THREE.Mesh(markerGeom, markerMat);
+            m.position.copy(c);
+            scene.add(m);
+        }
+
+        const cam = new THREE.PerspectiveCamera(50, 800 / 600, 0.1, 100);
+        cam.position.set(2.5, 1.5, 3.5);
+        cam.lookAt(0, 0, 0);
+
+        const renderer = await THREE.WebGLRenderer.create(canvas);
+        renderer.setSize(800, 600);
+        renderer.render(scene, cam);
+        await new Promise(r => requestAnimationFrame(() => r()));
+
+        document.body.dataset.ready = 'true';
+        document.body.dataset.shapecastHits = String(hitCount);
+    } catch (e) {
+        console.error(e);
+        showError(e);
+    }
+})();
+</script>
+</body>
+</html>

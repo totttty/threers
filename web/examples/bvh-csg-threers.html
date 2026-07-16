@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>bvh-csg — threers</title>
+    <link rel="stylesheet" href="/web/examples/controls-demo.css">
+    <style>
+        body { display: flex; flex-direction: column; height: 100%; }
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border);
+            background: var(--panel);
+            flex-shrink: 0;
+        }
+        .toolbar .group-label {
+            align-self: center;
+            color: var(--muted);
+            font-size: 12px;
+            margin-right: 4px;
+        }
+        .toolbar button {
+            padding: 6px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .toolbar button:hover { border-color: var(--accent); }
+        .toolbar button.active {
+            border-color: var(--accent);
+            background: rgba(88, 166, 255, 0.12);
+        }
+        #status { margin-left: auto; color: var(--muted); font-size: 13px; align-self: center; }
+        .layout {
+            flex: 1;
+            min-height: 0;
+            height: auto;
+        }
+        .preview canvas {
+            cursor: grab;
+            touch-action: none;
+        }
+        .preview canvas:active {
+            cursor: grabbing;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>threers <span class="tag">· bvh-csg</span></h1>
+        <span class="status" id="status">loading…</span>
+        <nav>
+            <a href="/tests/parity/">parity compare</a>
+            <a href="/web/examples/">all examples</a>
+        </nav>
+    </header>
+    <div class="toolbar" id="scenarios" aria-label="CSG scenarios">
+        <span class="group-label">Scenario</span>
+    </div>
+    <div class="toolbar" id="ops" aria-label="CSG operations">
+        <span class="group-label">Operation</span>
+    </div>
+    <div class="layout">
+        <div class="preview">
+            <div class="hint">drag orbit · right pan · wheel zoom · pick scenario &amp; operation above</div>
+            <canvas id="canvas" tabindex="0"></canvas>
+            <div id="err"></div>
+        </div>
+        <section class="code-panel" id="code-panel">
+            <div class="tabs"></div>
+            <div class="code-wrap">
+                <div class="loading">Loading source…</div>
+                <pre></pre>
+            </div>
+        </section>
+    </div>
+    <script type="module" src="/web/examples/bvh-csg-threers-demo.js"></script>
+    <script type="module">
+    import { initCodePanel } from '/web/examples/controls-code-panel.js';
+
+    await initCodePanel(document.getElementById('code-panel'), [
+        { id: 'js', label: 'JavaScript', url: '/web/examples/bvh-csg-threers-demo.js' },
+        { id: 'scenes', label: 'Scenarios', url: '/web/examples/bvh-csg-scenes.js' },
+        { id: 'html', label: 'HTML shell', url: '/web/examples/bvh-csg-threers.html' },
+    ]);
+    </script>
+</body>
+</html>
