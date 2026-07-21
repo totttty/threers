@@ -28,7 +28,10 @@ pub fn bvhcast_pairs(a: &CsgBrush, b: &CsgBrush) -> Vec<(usize, usize)> {
     a.bounds_tree().bvhcast(&b.bounds_tree(), &matrix)
 }
 
-pub fn pair_overlap(native: &[(usize, usize)], reference: &[(usize, usize)]) -> (usize, usize, usize) {
+pub fn pair_overlap(
+    native: &[(usize, usize)],
+    reference: &[(usize, usize)],
+) -> (usize, usize, usize) {
     use std::collections::HashSet;
     let ref_set: HashSet<_> = reference.iter().copied().collect();
     let native_set: HashSet<_> = native.iter().copied().collect();
@@ -56,7 +59,10 @@ pub struct BvhcastReference {
 pub fn intersection_neighbors(map: &super::intersection_map::IntersectionMap) -> Vec<usize> {
     let mut out = Vec::new();
     for &id in &map.ids {
-        let neighbors = map.intersection_set.get(&id).expect("missing neighbor list");
+        let neighbors = map
+            .intersection_set
+            .get(&id)
+            .expect("missing neighbor list");
         out.push(neighbors.len());
         out.extend_from_slice(neighbors);
     }
@@ -126,10 +132,7 @@ pub fn load_bvhcast_reference(raw: &[u8]) -> BvhcastReference {
     };
 
     let flat_pairs = read_u32_vec(pair_count * 2, raw, &mut offset);
-    let pairs = flat_pairs
-        .chunks_exact(2)
-        .map(|c| (c[0], c[1]))
-        .collect();
+    let pairs = flat_pairs.chunks_exact(2).map(|c| (c[0], c[1])).collect();
     let a_ids = read_u32_vec(a_id_count, raw, &mut offset);
     let b_ids = read_u32_vec(b_id_count, raw, &mut offset);
     let a_neighbors = read_u32_vec(a_neighbor_count, raw, &mut offset);

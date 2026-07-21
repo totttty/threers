@@ -73,7 +73,10 @@ pub fn step3_win_cut(evaluator: &mut CsgEvaluator, after_sphere: BufferGeometry)
 }
 
 /// **s4** — s3 + thin window frame 1.2×1.0×0.12 at (0.8, 0.15, 1.35).
-pub fn step4_win_frame(evaluator: &mut CsgEvaluator, after_win_cut: BufferGeometry) -> BufferGeometry {
+pub fn step4_win_frame(
+    evaluator: &mut CsgEvaluator,
+    after_win_cut: BufferGeometry,
+) -> BufferGeometry {
     let mut acc = brush_from_result(after_win_cut);
     let mut win_frame = window_frame_brush();
     let mut geom = evaluator.evaluate(&mut acc, &mut win_frame, ADDITION);

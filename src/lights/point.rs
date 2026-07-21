@@ -1,5 +1,5 @@
-use crate::math::Color;
 use super::ShadowSettings;
+use crate::math::Color;
 
 /// Omnidirectional light radiating from `position` (taken from the parent
 /// `Object3D`'s world matrix). Falloff matches three.js:
@@ -16,13 +16,16 @@ pub struct PointLight {
 }
 
 impl Default for PointLight {
-    fn default() -> Self { Self::new(Color::WHITE, 1.0) }
+    fn default() -> Self {
+        Self::new(Color::WHITE, 1.0)
+    }
 }
 
 impl PointLight {
     pub fn new(color: Color, intensity: f32) -> Self {
         Self {
-            color, intensity,
+            color,
+            intensity,
             distance: 0.0,
             decay: 2.0,
             cast_shadow: false,

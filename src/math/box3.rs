@@ -1,4 +1,4 @@
-use super::{Vector3, Matrix4};
+use super::{Matrix4, Vector3};
 
 /// Axis-aligned bounding box in 3D. Mirrors three.js's `Box3`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -8,7 +8,9 @@ pub struct Box3 {
 }
 
 impl Default for Box3 {
-    fn default() -> Self { Self::empty() }
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 impl Box3 {
@@ -30,18 +32,31 @@ impl Box3 {
 
     pub fn from_points(points: &[Vector3]) -> Self {
         let mut b = Self::empty();
-        for p in points { b.expand_by_point(*p); }
+        for p in points {
+            b.expand_by_point(*p);
+        }
         b
     }
 
     pub fn from_center_and_size(center: Vector3, size: Vector3) -> Self {
         let half = size * 0.5;
-        Self { min: center - half, max: center + half }
+        Self {
+            min: center - half,
+            max: center + half,
+        }
     }
 
     pub fn expand_by_point(&mut self, p: Vector3) -> &mut Self {
-        self.min = Vector3::new(self.min.x.min(p.x), self.min.y.min(p.y), self.min.z.min(p.z));
-        self.max = Vector3::new(self.max.x.max(p.x), self.max.y.max(p.y), self.max.z.max(p.z));
+        self.min = Vector3::new(
+            self.min.x.min(p.x),
+            self.min.y.min(p.y),
+            self.min.z.min(p.z),
+        );
+        self.max = Vector3::new(
+            self.max.x.max(p.x),
+            self.max.y.max(p.y),
+            self.max.z.max(p.z),
+        );
         self
     }
 
@@ -56,29 +71,46 @@ impl Box3 {
     }
 
     pub fn center(&self) -> Vector3 {
-        if self.is_empty() { Vector3::ZERO } else { (self.min + self.max) * 0.5 }
+        if self.is_empty() {
+            Vector3::ZERO
+        } else {
+            (self.min + self.max) * 0.5
+        }
     }
 
     pub fn size(&self) -> Vector3 {
-        if self.is_empty() { Vector3::ZERO } else { self.max - self.min }
+        if self.is_empty() {
+            Vector3::ZERO
+        } else {
+            self.max - self.min
+        }
     }
 
     pub fn contains_point(&self, p: Vector3) -> bool {
-        p.x >= self.min.x && p.x <= self.max.x
-            && p.y >= self.min.y && p.y <= self.max.y
-            && p.z >= self.min.z && p.z <= self.max.z
+        p.x >= self.min.x
+            && p.x <= self.max.x
+            && p.y >= self.min.y
+            && p.y <= self.max.y
+            && p.z >= self.min.z
+            && p.z <= self.max.z
     }
 
     pub fn contains_box(&self, other: &Self) -> bool {
-        self.min.x <= other.min.x && other.max.x <= self.max.x
-            && self.min.y <= other.min.y && other.max.y <= self.max.y
-            && self.min.z <= other.min.z && other.max.z <= self.max.z
+        self.min.x <= other.min.x
+            && other.max.x <= self.max.x
+            && self.min.y <= other.min.y
+            && other.max.y <= self.max.y
+            && self.min.z <= other.min.z
+            && other.max.z <= self.max.z
     }
 
     pub fn intersects_box(&self, other: &Self) -> bool {
-        !(other.max.x < self.min.x || other.min.x > self.max.x
-            || other.max.y < self.min.y || other.min.y > self.max.y
-            || other.max.z < self.min.z || other.min.z > self.max.z)
+        !(other.max.x < self.min.x
+            || other.min.x > self.max.x
+            || other.max.y < self.min.y
+            || other.min.y > self.max.y
+            || other.max.z < self.min.z
+            || other.min.z > self.max.z)
     }
 
     pub fn clamp_point(&self, p: Vector3) -> Vector3 {
@@ -95,25 +127,46 @@ impl Box3 {
 
     pub fn union(&self, other: &Self) -> Self {
         Self {
-            min: Vector3::new(self.min.x.min(other.min.x), self.min.y.min(other.min.y), self.min.z.min(other.min.z)),
-            max: Vector3::new(self.max.x.max(other.max.x), self.max.y.max(other.max.y), self.max.z.max(other.max.z)),
+            min: Vector3::new(
+                self.min.x.min(other.min.x),
+                self.min.y.min(other.min.y),
+                self.min.z.min(other.min.z),
+            ),
+            max: Vector3::new(
+                self.max.x.max(other.max.x),
+                self.max.y.max(other.max.y),
+                self.max.z.max(other.max.z),
+            ),
         }
     }
 
     pub fn intersect(&self, other: &Self) -> Self {
         Self {
-            min: Vector3::new(self.min.x.max(other.min.x), self.min.y.max(other.min.y), self.min.z.max(other.min.z)),
-            max: Vector3::new(self.max.x.min(other.max.x), self.max.y.min(other.max.y), self.max.z.min(other.max.z)),
+            min: Vector3::new(
+                self.min.x.max(other.min.x),
+                self.min.y.max(other.min.y),
+                self.min.z.max(other.min.z),
+            ),
+            max: Vector3::new(
+                self.max.x.min(other.max.x),
+                self.max.y.min(other.max.y),
+                self.max.z.min(other.max.z),
+            ),
         }
     }
 
     pub fn translate(&self, offset: Vector3) -> Self {
-        Self { min: self.min + offset, max: self.max + offset }
+        Self {
+            min: self.min + offset,
+            max: self.max + offset,
+        }
     }
 
     /// Transform the box by `m`, returning the AABB enclosing the transformed corners.
     pub fn apply_matrix4(&self, m: &Matrix4) -> Self {
-        if self.is_empty() { return *self; }
+        if self.is_empty() {
+            return *self;
+        }
         let corners = [
             Vector3::new(self.min.x, self.min.y, self.min.z),
             Vector3::new(self.min.x, self.min.y, self.max.z),
@@ -137,8 +190,8 @@ fn transform_point(m: &Matrix4, p: Vector3) -> Vector3 {
     let w = e[3] * p.x + e[7] * p.y + e[11] * p.z + e[15];
     let inv_w = if w == 0.0 { 1.0 } else { 1.0 / w };
     Vector3::new(
-        (e[0] * p.x + e[4] * p.y + e[8]  * p.z + e[12]) * inv_w,
-        (e[1] * p.x + e[5] * p.y + e[9]  * p.z + e[13]) * inv_w,
+        (e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12]) * inv_w,
+        (e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13]) * inv_w,
         (e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14]) * inv_w,
     )
 }
@@ -160,7 +213,9 @@ mod tests {
             Vector3::new(0.0, 5.0, -1.0),
         ];
         let b = Box3::from_points(&pts);
-        for p in pts { assert!(b.contains_point(p)); }
+        for p in pts {
+            assert!(b.contains_point(p));
+        }
         assert_eq!(b.min, Vector3::new(-1.0, -2.0, -1.0));
         assert_eq!(b.max, Vector3::new(3.0, 5.0, 2.0));
     }

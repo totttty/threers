@@ -11,6 +11,11 @@ pub struct BvhHit {
 
 impl BvhHit {
     pub fn new(distance: f32, point: Vector3, face_index: usize, uv: Vector3) -> Self {
-        Self { distance, point, face_index, uv }
+        Self {
+            distance,
+            point,
+            face_index,
+            uv,
+        }
     }
 }

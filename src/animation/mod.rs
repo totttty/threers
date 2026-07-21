@@ -6,14 +6,14 @@
 //! A `Mixer` advances time and applies the sampled values back to its `Scene`.
 //! `Action`s are play/pause handles over individual clips.
 
-mod interpolant;
-mod track;
-mod clip;
-mod mixer;
 mod action;
+mod clip;
+mod interpolant;
+mod mixer;
+mod track;
 
-pub use interpolant::Interpolation;
-pub use track::{KeyframeTrack, TrackTarget};
-pub use clip::AnimationClip;
-pub use mixer::AnimationMixer;
 pub use action::AnimationAction;
+pub use clip::AnimationClip;
+pub use interpolant::Interpolation;
+pub use mixer::AnimationMixer;
+pub use track::{KeyframeTrack, TrackTarget};

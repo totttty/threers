@@ -82,7 +82,11 @@ async fn read_texture_region(
                     rows_per_image: Some(h),
                 },
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         queue.submit(std::iter::once(encoder.finish()));
     }
@@ -160,14 +164,17 @@ pub struct WebCubeRenderTarget {
 impl WebCubeRenderTarget {
     #[wasm_bindgen(constructor)]
     pub fn new(renderer: &WebRenderer, side: u32) -> WebCubeRenderTarget {
-        let rt = crate::renderer::RenderTarget::new_cube(
-            &renderer.device, side, renderer.config.format
-        );
+        let rt =
+            crate::renderer::RenderTarget::new_cube(&renderer.device, side, renderer.config.format);
         let arc = std::sync::Arc::new(rt);
         let id = NEXT_RT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Register so scene.environment_cube_rt can find this RT at render time.
         ACTIVE_CUBE_TARGETS.with(|m| m.borrow_mut().insert(id, arc.clone()));
-        WebCubeRenderTarget { inner: arc, side, id }
+        WebCubeRenderTarget {
+            inner: arc,
+            side,
+            id,
+        }
     }
 }
 
@@ -231,12 +238,22 @@ impl WebRenderTarget {
         Self::alloc(renderer, width, height, wgpu::TextureFormat::Rgba16Float)
     }
 
-    fn alloc(renderer: &WebRenderer, width: u32, height: u32, format: wgpu::TextureFormat) -> WebRenderTarget {
+    fn alloc(
+        renderer: &WebRenderer,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> WebRenderTarget {
         let rt = crate::renderer::RenderTarget::new(&renderer.device, width, height, format);
         let arc = std::sync::Arc::new(rt);
         let id = NEXT_RT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         ACTIVE_TARGETS.with(|m| m.borrow_mut().insert(id, arc.clone()));
-        WebRenderTarget { inner: arc, width, height, id }
+        WebRenderTarget {
+            inner: arc,
+            width,
+            height,
+            id,
+        }
     }
 
     #[wasm_bindgen(js_name = setSize)]
@@ -262,7 +279,9 @@ impl WebRenderer {
         });
 
         let target = wgpu::SurfaceTarget::Canvas(canvas);
-        let surface = instance.create_surface(target).map_err(|e| JsValue::from_str(&format!("surface: {e:?}")))?;
+        let surface = instance
+            .create_surface(target)
+            .map_err(|e| JsValue::from_str(&format!("surface: {e:?}")))?;
 
         let (device, queue) = acquire_browser_gpu(&instance, &surface).await?;
 
@@ -276,8 +295,12 @@ impl WebRenderer {
             .ok_or_else(|| JsValue::from_str("no adapter"))?;
 
         let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps.formats.iter().copied()
-            .find(|f| f.is_srgb()).unwrap_or(surface_caps.formats[0]);
+        let surface_format = surface_caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .unwrap_or(surface_caps.formats[0]);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
@@ -290,10 +313,20 @@ impl WebRenderer {
         };
         surface.configure(&device, &config);
 
-        let renderer = crate::Renderer::new(device.clone(), queue.clone(), surface_format, width, height);
+        let renderer =
+            crate::Renderer::new(device.clone(), queue.clone(), surface_format, width, height);
         // Continue construction below — see existing return statement.
 
-        Ok(WebRenderer { renderer, surface, config, device, width, height, current_target_id: None, copy_scratch: None })
+        Ok(WebRenderer {
+            renderer,
+            surface,
+            config,
+            device,
+            width,
+            height,
+            current_target_id: None,
+            copy_scratch: None,
+        })
     }
 
     #[wasm_bindgen(js_name = setSize)]
@@ -314,7 +347,10 @@ impl WebRenderer {
         };
         if needs_alloc {
             let rt = Arc::new(crate::renderer::RenderTarget::new(
-                &self.device, self.width, self.height, self.config.format,
+                &self.device,
+                self.width,
+                self.height,
+                self.config.format,
             ));
             let id = NEXT_RT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             ACTIVE_TARGETS.with(|m| m.borrow_mut().insert(id, rt.clone()));
@@ -356,9 +392,14 @@ impl WebRenderer {
         // Whatever the surface format is, the RT was created with the same
         // format; on the crate side we treat it as sRGB (matches WebGL default).
         let t = crate::Texture::from_render_target(
-            rt.id, rt.width, rt.height, crate::textures::TextureFormat::Rgba8UnormSrgb,
+            rt.id,
+            rt.width,
+            rt.height,
+            crate::textures::TextureFormat::Rgba8UnormSrgb,
         );
-        WebTexture { inner: std::sync::Arc::new(t) }
+        WebTexture {
+            inner: std::sync::Arc::new(t),
+        }
     }
 
     /// Read pixels from a render target. Returns a Promise<Uint8Array> of RGBA
@@ -367,7 +408,12 @@ impl WebRenderer {
     /// returned to JS once the GPU has finished.
     #[wasm_bindgen(js_name = readRenderTargetPixels)]
     pub fn read_render_target_pixels(
-        &self, target_id: u32, x: u32, y: u32, w: u32, h: u32,
+        &self,
+        target_id: u32,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
     ) -> js_sys::Promise {
         let device = self.renderer.device_arc();
         let queue = self.renderer.queue_arc();
@@ -379,7 +425,7 @@ impl WebRenderer {
         const ALIGN: u32 = 256;
         let bytes_per_pixel = 4u32;
         let unpadded = w * bytes_per_pixel;
-        let padded   = ((unpadded + ALIGN - 1) / ALIGN) * ALIGN;
+        let padded = ((unpadded + ALIGN - 1) / ALIGN) * ALIGN;
         let buf_size = (padded * h) as u64;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("threers readback buffer"),
@@ -406,7 +452,11 @@ impl WebRenderer {
                         rows_per_image: Some(h),
                     },
                 },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
             );
             queue.submit(std::iter::once(encoder.finish()));
         }
@@ -451,12 +501,23 @@ impl WebRenderer {
         input_rt_id: u32,
         depth_rt_id: u32,
         normal_rt_id: u32,
-        kind: u32, time: f32,
-        p2x: f32, p2y: f32, p2z: f32, p2w: f32,
-        p3x: f32, p3y: f32, p3z: f32, p3w: f32,
+        kind: u32,
+        time: f32,
+        p2x: f32,
+        p2y: f32,
+        p2z: f32,
+        p2w: f32,
+        p3x: f32,
+        p3y: f32,
+        p3z: f32,
+        p3w: f32,
         additive: u32,
-        cam_near: f32, cam_far: f32, kernel_radius: f32, kernel_size: u32,
-        proj: Vec<f32>, inv_proj: Vec<f32>,
+        cam_near: f32,
+        cam_far: f32,
+        kernel_radius: f32,
+        kernel_size: u32,
+        proj: Vec<f32>,
+        inv_proj: Vec<f32>,
     ) {
         let input = match ACTIVE_TARGETS.with(|m| m.borrow().get(&input_rt_id).cloned()) {
             Some(t) => t,
@@ -473,7 +534,14 @@ impl WebRenderer {
                 self.renderer.register_render_target(normal_rt_id, &normal);
             }
         }
-        let camera = postfx_camera_from(cam_near, cam_far, kernel_radius, kernel_size, &proj, &inv_proj);
+        let camera = postfx_camera_from(
+            cam_near,
+            cam_far,
+            kernel_radius,
+            kernel_size,
+            &proj,
+            &inv_proj,
+        );
         // Dawn/WebGPU: sampling a render target in the same frame it was written,
         // then writing straight to the swapchain, misaligns at silhouettes. An
         // intermediate RT→RT copy matches the stable RT→RT→canvas path.
@@ -482,8 +550,19 @@ impl WebRenderer {
             let (scratch_id, scratch) = self.ensure_copy_scratch();
             self.renderer.register_render_target(scratch_id, &scratch);
             self.renderer.apply_postfx_by_id(
-                input_rt_id, scratch_id, &scratch.color_view, depth_rt_id, normal_rt_id, kind, time,
-                [p2x, p2y, p2z, p2w], [p3x, p3y, p3z, p3w], scratch.width, scratch.height, false, camera.clone(),
+                input_rt_id,
+                scratch_id,
+                &scratch.color_view,
+                depth_rt_id,
+                normal_rt_id,
+                kind,
+                time,
+                [p2x, p2y, p2z, p2w],
+                [p3x, p3y, p3z, p3w],
+                scratch.width,
+                scratch.height,
+                false,
+                camera.clone(),
             );
             input_rt_id = scratch_id;
         }
@@ -497,10 +576,23 @@ impl WebRenderer {
                 }
             }
         };
-        let output_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.renderer.apply_postfx_by_id(
-            input_rt_id, 0, &output_view, depth_rt_id, normal_rt_id, kind, time, [p2x, p2y, p2z, p2w],
-            [p3x, p3y, p3z, p3w], self.width, self.height, additive != 0, camera,
+            input_rt_id,
+            0,
+            &output_view,
+            depth_rt_id,
+            normal_rt_id,
+            kind,
+            time,
+            [p2x, p2y, p2z, p2w],
+            [p3x, p3y, p3z, p3w],
+            self.width,
+            self.height,
+            additive != 0,
+            camera,
         );
         frame.present();
     }
@@ -513,11 +605,22 @@ impl WebRenderer {
         output_rt_id: u32,
         depth_rt_id: u32,
         normal_rt_id: u32,
-        kind: u32, time: f32,
-        p2x: f32, p2y: f32, p2z: f32, p2w: f32,
-        p3x: f32, p3y: f32, p3z: f32, p3w: f32,
-        cam_near: f32, cam_far: f32, kernel_radius: f32, kernel_size: u32,
-        proj: Vec<f32>, inv_proj: Vec<f32>,
+        kind: u32,
+        time: f32,
+        p2x: f32,
+        p2y: f32,
+        p2z: f32,
+        p2w: f32,
+        p3x: f32,
+        p3y: f32,
+        p3z: f32,
+        p3w: f32,
+        cam_near: f32,
+        cam_far: f32,
+        kernel_radius: f32,
+        kernel_size: u32,
+        proj: Vec<f32>,
+        inv_proj: Vec<f32>,
     ) {
         let input = match ACTIVE_TARGETS.with(|m| m.borrow().get(&input_rt_id).cloned()) {
             Some(t) => t,
@@ -539,10 +642,28 @@ impl WebRenderer {
                 self.renderer.register_render_target(normal_rt_id, &normal);
             }
         }
-        let camera = postfx_camera_from(cam_near, cam_far, kernel_radius, kernel_size, &proj, &inv_proj);
+        let camera = postfx_camera_from(
+            cam_near,
+            cam_far,
+            kernel_radius,
+            kernel_size,
+            &proj,
+            &inv_proj,
+        );
         self.renderer.apply_postfx_by_id(
-            input_rt_id, output_rt_id, &output.color_view, depth_rt_id, normal_rt_id, kind, time,
-            [p2x, p2y, p2z, p2w], [p3x, p3y, p3z, p3w], output.width, output.height, false, camera,
+            input_rt_id,
+            output_rt_id,
+            &output.color_view,
+            depth_rt_id,
+            normal_rt_id,
+            kind,
+            time,
+            [p2x, p2y, p2z, p2w],
+            [p3x, p3y, p3z, p3w],
+            output.width,
+            output.height,
+            false,
+            camera,
         );
     }
 
@@ -575,7 +696,9 @@ impl WebRenderer {
                 y,
                 w,
                 h,
-            ).await.map_err(|e| JsValue::from_str(&e))?;
+            )
+            .await
+            .map_err(|e| JsValue::from_str(&e))?;
             let arr = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
             arr.copy_from(&bytes);
             Ok(JsValue::from(arr))
@@ -595,14 +718,11 @@ impl WebRenderer {
                 }
             }
         };
-        let output_view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer.blit_rgba8(
-            &data,
-            width,
-            height,
-            &output_view,
-            self.config.format,
-        );
+        let output_view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.renderer
+            .blit_rgba8(&data, width, height, &output_view, self.config.format);
         frame.present();
     }
 
@@ -639,8 +759,14 @@ impl WebRenderer {
         face: u32,
     ) {
         match &camera.inner {
-            CameraInner::Perspective(c)  => self.renderer.render_to_cube_face(&mut scene.inner, c, &target.inner, face as usize),
-            CameraInner::Orthographic(c) => self.renderer.render_to_cube_face(&mut scene.inner, c, &target.inner, face as usize),
+            CameraInner::Perspective(c) => {
+                self.renderer
+                    .render_to_cube_face(&mut scene.inner, c, &target.inner, face as usize)
+            }
+            CameraInner::Orthographic(c) => {
+                self.renderer
+                    .render_to_cube_face(&mut scene.inner, c, &target.inner, face as usize)
+            }
         }
     }
 
@@ -648,26 +774,38 @@ impl WebRenderer {
         // If the scene references a cube render target as its environment map,
         // make sure the renderer's view cache has its cube view registered.
         if let Some(env_rt_id) = scene.inner.environment_cube_rt {
-            if let Some(target) = ACTIVE_CUBE_TARGETS.with(|m| m.borrow().get(&env_rt_id).cloned()) {
-                self.renderer.register_cube_render_target(env_rt_id, &target);
+            if let Some(target) = ACTIVE_CUBE_TARGETS.with(|m| m.borrow().get(&env_rt_id).cloned())
+            {
+                self.renderer
+                    .register_cube_render_target(env_rt_id, &target);
             }
         }
         // If a render target is set, render into it (no canvas presentation).
         if let Some(id) = self.current_target_id {
             if let Some(target) = ACTIVE_TARGETS.with(|m| m.borrow().get(&id).cloned()) {
                 match &camera.inner {
-                    CameraInner::Perspective(c)  => self.renderer.render_to(&mut scene.inner, c, &target),
-                    CameraInner::Orthographic(c) => self.renderer.render_to(&mut scene.inner, c, &target),
+                    CameraInner::Perspective(c) => {
+                        self.renderer.render_to(&mut scene.inner, c, &target)
+                    }
+                    CameraInner::Orthographic(c) => {
+                        self.renderer.render_to(&mut scene.inner, c, &target)
+                    }
                 }
                 return;
             }
         }
         match self.surface.get_current_texture() {
             Ok(frame) => {
-                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
                 match &camera.inner {
-                    CameraInner::Perspective(c) => self.renderer.render(&mut scene.inner, c, &view, false),
-                    CameraInner::Orthographic(c) => self.renderer.render(&mut scene.inner, c, &view, false),
+                    CameraInner::Perspective(c) => {
+                        self.renderer.render(&mut scene.inner, c, &view, false)
+                    }
+                    CameraInner::Orthographic(c) => {
+                        self.renderer.render(&mut scene.inner, c, &view, false)
+                    }
                 }
                 frame.present();
             }
@@ -689,7 +827,9 @@ pub struct WebScene {
 impl WebScene {
     #[wasm_bindgen(constructor)]
     pub fn new() -> WebScene {
-        WebScene { inner: crate::Scene::new() }
+        WebScene {
+            inner: crate::Scene::new(),
+        }
     }
 
     /// Add a mesh to the scene. Returns its `ObjectId` (wrapped as `WebObjectHandle`).
@@ -715,34 +855,45 @@ impl WebScene {
     /// Query whether a LineSegments object's geometry has a named attribute.
     #[wasm_bindgen(js_name = lineGeometryHasAttr)]
     pub fn line_geometry_has_attr(&self, handle: &WebObjectHandle, name: &str) -> bool {
-        self.inner.get(handle.id).and_then(|obj| match &obj.kind {
-            crate::core::ObjectKind::LineSegments(ls) => ls.geometry.get_attribute(name).map(|_| ()),
-            _ => None,
-        }).is_some()
+        self.inner
+            .get(handle.id)
+            .and_then(|obj| match &obj.kind {
+                crate::core::ObjectKind::LineSegments(ls) => {
+                    ls.geometry.get_attribute(name).map(|_| ())
+                }
+                _ => None,
+            })
+            .is_some()
     }
 
     #[wasm_bindgen(js_name = lineGeometryUvX)]
     pub fn line_geometry_uv_x(&self, handle: &WebObjectHandle, vert: u32) -> f32 {
-        self.inner.get(handle.id).and_then(|obj| match &obj.kind {
-            crate::core::ObjectKind::LineSegments(ls) => {
-                ls.geometry.get_attribute("uv").and_then(|u| {
-                    let i = vert as usize * 2;
-                    u.array.get(i).copied()
-                })
-            }
-            _ => None,
-        }).unwrap_or(0.0)
+        self.inner
+            .get(handle.id)
+            .and_then(|obj| match &obj.kind {
+                crate::core::ObjectKind::LineSegments(ls) => {
+                    ls.geometry.get_attribute("uv").and_then(|u| {
+                        let i = vert as usize * 2;
+                        u.array.get(i).copied()
+                    })
+                }
+                _ => None,
+            })
+            .unwrap_or(0.0)
     }
 
     #[wasm_bindgen(js_name = lineMaterialDashSize)]
     pub fn line_material_dash_size(&self, handle: &WebObjectHandle) -> f32 {
-        self.inner.get(handle.id).and_then(|obj| match &obj.kind {
-            crate::core::ObjectKind::LineSegments(ls) => match &*ls.material {
-                crate::Material::Line(m) => Some(m.dash_size),
+        self.inner
+            .get(handle.id)
+            .and_then(|obj| match &obj.kind {
+                crate::core::ObjectKind::LineSegments(ls) => match &*ls.material {
+                    crate::Material::Line(m) => Some(m.dash_size),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        }).unwrap_or(0.0)
+            })
+            .unwrap_or(0.0)
     }
 
     /// Replace a LineSegments object's geometry after JS-side attribute edits
@@ -758,7 +909,11 @@ impl WebScene {
 
     /// Add a LineSegments primitive (geometry interpreted as line-list).
     #[wasm_bindgen(js_name = addLineSegments)]
-    pub fn add_line_segments(&mut self, geom: &WebBufferGeometry, mat: &WebMaterial) -> WebObjectHandle {
+    pub fn add_line_segments(
+        &mut self,
+        geom: &WebBufferGeometry,
+        mat: &WebMaterial,
+    ) -> WebObjectHandle {
         let ls = crate::core::LineSegments::from_arc(geom.inner.clone(), mat.inner.clone());
         let obj = crate::core::Object3D::line_segments(ls);
         let id = self.inner.add(obj);
@@ -779,7 +934,12 @@ impl WebScene {
     /// transforms — the mesh renders as a regular Mesh until bone matrices
     /// get updated (a hook can be added later to drive bones each frame).
     #[wasm_bindgen(js_name = addSkinnedMesh)]
-    pub fn add_skinned_mesh(&mut self, geom: &WebGeometry, mat: &WebMaterial, bone_count: usize) -> WebObjectHandle {
+    pub fn add_skinned_mesh(
+        &mut self,
+        geom: &WebGeometry,
+        mat: &WebMaterial,
+        bone_count: usize,
+    ) -> WebObjectHandle {
         let skeleton = crate::core::Skeleton {
             bones: Vec::new(),
             bone_matrices: vec![crate::math::Matrix4::identity(); bone_count.max(1)],
@@ -797,12 +957,18 @@ impl WebScene {
     /// Add an InstancedMesh — a geometry rendered N times with per-instance
     /// transforms, each entry is a column-major mat4 packed as 16 f32s.
     #[wasm_bindgen(js_name = addInstancedMesh)]
-    pub fn add_instanced_mesh(&mut self, geom: &WebGeometry, mat: &WebMaterial, transforms: Vec<f32>) -> WebObjectHandle {
+    pub fn add_instanced_mesh(
+        &mut self,
+        geom: &WebGeometry,
+        mat: &WebMaterial,
+        transforms: Vec<f32>,
+    ) -> WebObjectHandle {
         let count = transforms.len() / 16;
-        let mut im = crate::core::InstancedMesh::new((*geom.inner).clone(), (*mat.inner).clone(), count);
+        let mut im =
+            crate::core::InstancedMesh::new((*geom.inner).clone(), (*mat.inner).clone(), count);
         for i in 0..count {
             let mut e = [0.0f32; 16];
-            e.copy_from_slice(&transforms[i*16..(i+1)*16]);
+            e.copy_from_slice(&transforms[i * 16..(i + 1) * 16]);
             im.set_matrix_at(i, crate::math::Matrix4 { elements: e });
         }
         let obj = crate::core::Object3D::instanced_mesh(im);
@@ -875,7 +1041,10 @@ impl WebScene {
                     crate::Light::Hemisphere(_) => "Hemisphere",
                     crate::Light::RectArea(_) => "RectArea",
                 };
-                out.push_str(&format!("{name} world_pos=({:.3},{:.3},{:.3})\n", p.x, p.y, p.z));
+                out.push_str(&format!(
+                    "{name} world_pos=({:.3},{:.3},{:.3})\n",
+                    p.x, p.y, p.z
+                ));
             }
         });
         out
@@ -913,7 +1082,11 @@ impl WebScene {
     #[wasm_bindgen(js_name = setFog)]
     pub fn set_fog(&mut self, color: &WebColor, near: f32, far: f32, density: f32, mode: u32) {
         self.inner.fog = crate::scene::FogParams {
-            color: color.inner, near, far, density, mode,
+            color: color.inner,
+            near,
+            far,
+            density,
+            mode,
         };
     }
 
@@ -983,12 +1156,27 @@ enum CameraInner {
 impl WebCamera {
     #[wasm_bindgen(js_name = perspective)]
     pub fn perspective(fov_deg: f32, aspect: f32, near: f32, far: f32) -> WebCamera {
-        WebCamera { inner: CameraInner::Perspective(crate::PerspectiveCamera::new(fov_deg, aspect, near, far)) }
+        WebCamera {
+            inner: CameraInner::Perspective(crate::PerspectiveCamera::new(
+                fov_deg, aspect, near, far,
+            )),
+        }
     }
 
     #[wasm_bindgen(js_name = orthographic)]
-    pub fn orthographic(left: f32, right: f32, top: f32, bottom: f32, near: f32, far: f32) -> WebCamera {
-        WebCamera { inner: CameraInner::Orthographic(crate::OrthographicCamera::new(left, right, top, bottom, near, far)) }
+    pub fn orthographic(
+        left: f32,
+        right: f32,
+        top: f32,
+        bottom: f32,
+        near: f32,
+        far: f32,
+    ) -> WebCamera {
+        WebCamera {
+            inner: CameraInner::Orthographic(crate::OrthographicCamera::new(
+                left, right, top, bottom, near, far,
+            )),
+        }
     }
 
     #[wasm_bindgen(js_name = setPosition)]
@@ -1020,8 +1208,12 @@ impl WebCamera {
     #[wasm_bindgen(js_name = lookAt)]
     pub fn look_at(&mut self, x: f32, y: f32, z: f32) {
         match &mut self.inner {
-            CameraInner::Perspective(c) => { c.look_at(crate::Vector3::new(x, y, z)); }
-            CameraInner::Orthographic(c) => { c.target = crate::Vector3::new(x, y, z); }
+            CameraInner::Perspective(c) => {
+                c.look_at(crate::Vector3::new(x, y, z));
+            }
+            CameraInner::Orthographic(c) => {
+                c.target = crate::Vector3::new(x, y, z);
+            }
         }
     }
 
@@ -1032,8 +1224,12 @@ impl WebCamera {
     pub fn set_up(&mut self, x: f32, y: f32, z: f32) {
         let v = crate::Vector3::new(x, y, z);
         match &mut self.inner {
-            CameraInner::Perspective(c)  => { c.up = v; }
-            CameraInner::Orthographic(c) => { c.up = v; }
+            CameraInner::Perspective(c) => {
+                c.up = v;
+            }
+            CameraInner::Orthographic(c) => {
+                c.up = v;
+            }
         }
     }
 
@@ -1053,18 +1249,18 @@ impl WebCamera {
     pub fn copy_projection(&mut self, other: &WebCamera) {
         match (&mut self.inner, &other.inner) {
             (CameraInner::Perspective(a), CameraInner::Perspective(b)) => {
-                a.fov    = b.fov;
+                a.fov = b.fov;
                 a.aspect = b.aspect;
-                a.near   = b.near;
-                a.far    = b.far;
+                a.near = b.near;
+                a.far = b.far;
             }
             (CameraInner::Orthographic(a), CameraInner::Orthographic(b)) => {
-                a.left   = b.left;
-                a.right  = b.right;
-                a.top    = b.top;
+                a.left = b.left;
+                a.right = b.right;
+                a.top = b.top;
                 a.bottom = b.bottom;
-                a.near   = b.near;
-                a.far    = b.far;
+                a.near = b.near;
+                a.far = b.far;
             }
             _ => {}
         }
@@ -1077,7 +1273,7 @@ impl WebCamera {
     pub fn view_matrix(&self) -> Vec<f32> {
         use crate::cameras::Camera;
         match &self.inner {
-            CameraInner::Perspective(c)  => c.view_matrix().elements.to_vec(),
+            CameraInner::Perspective(c) => c.view_matrix().elements.to_vec(),
             CameraInner::Orthographic(c) => c.view_matrix().elements.to_vec(),
         }
     }
@@ -1087,7 +1283,7 @@ impl WebCamera {
     pub fn projection_matrix(&self) -> Vec<f32> {
         use crate::cameras::Camera;
         match &self.inner {
-            CameraInner::Perspective(c)  => c.projection_matrix().elements.to_vec(),
+            CameraInner::Perspective(c) => c.projection_matrix().elements.to_vec(),
             CameraInner::Orthographic(c) => c.projection_matrix().elements.to_vec(),
         }
     }
@@ -1095,7 +1291,9 @@ impl WebCamera {
     /// Override the virtual camera projection (Reflector oblique near clip).
     #[wasm_bindgen(js_name = setProjectionOverride)]
     pub fn set_projection_override(&mut self, elements: Vec<f32>) {
-        if elements.len() != 16 { return; }
+        if elements.len() != 16 {
+            return;
+        }
         if let CameraInner::Perspective(c) = &mut self.inner {
             let mut m = [0f32; 16];
             m.copy_from_slice(&elements);
@@ -1120,28 +1318,53 @@ pub struct WebGeometry {
 impl WebGeometry {
     #[wasm_bindgen(js_name = box)]
     pub fn box_(width: f32, height: f32, depth: f32) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::BoxGeometry::new(width, height, depth)) }
+        WebGeometry {
+            inner: Arc::new(crate::BoxGeometry::new(width, height, depth)),
+        }
     }
 
     #[wasm_bindgen(js_name = sphere)]
     pub fn sphere(radius: f32, w_segments: usize, h_segments: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::SphereGeometry::new(radius, w_segments, h_segments)) }
+        WebGeometry {
+            inner: Arc::new(crate::SphereGeometry::new(radius, w_segments, h_segments)),
+        }
     }
 
     #[wasm_bindgen(js_name = plane)]
     pub fn plane(width: f32, height: f32) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::PlaneGeometry::new(width, height)) }
+        WebGeometry {
+            inner: Arc::new(crate::PlaneGeometry::new(width, height)),
+        }
     }
 
     #[wasm_bindgen(js_name = cylinder)]
-    pub fn cylinder(radius_top: f32, radius_bottom: f32, height: f32, radial_segments: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::CylinderGeometry::new(
-            radius_top, radius_bottom, height, radial_segments, 1, false, 0.0, std::f32::consts::PI * 2.0,
-        )) }
+    pub fn cylinder(
+        radius_top: f32,
+        radius_bottom: f32,
+        height: f32,
+        radial_segments: usize,
+    ) -> WebGeometry {
+        WebGeometry {
+            inner: Arc::new(crate::CylinderGeometry::new(
+                radius_top,
+                radius_bottom,
+                height,
+                radial_segments,
+                1,
+                false,
+                0.0,
+                std::f32::consts::PI * 2.0,
+            )),
+        }
     }
 
     #[wasm_bindgen(js_name = torus)]
-    pub fn torus(radius: f32, tube: f32, radial_segments: u32, tubular_segments: u32) -> WebGeometry {
+    pub fn torus(
+        radius: f32,
+        tube: f32,
+        radial_segments: u32,
+        tubular_segments: u32,
+    ) -> WebGeometry {
         WebGeometry {
             inner: Arc::new(crate::TorusGeometry::new(
                 radius,
@@ -1163,7 +1386,11 @@ pub struct WebMaterial {
 impl WebMaterial {
     #[wasm_bindgen(js_name = basic)]
     pub fn basic(color: &WebColor) -> WebMaterial {
-        WebMaterial { inner: Arc::new(crate::Material::Basic(crate::BasicMaterial::new(color.inner))) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Basic(crate::BasicMaterial::new(
+                color.inner,
+            ))),
+        }
     }
 
     /// ShadowMaterial — black transparent surface that only shows shadow darkness.
@@ -1173,24 +1400,26 @@ impl WebMaterial {
         m.transparent = true;
         m.opacity = opacity;
         m.shadow_only = true;
-        WebMaterial { inner: Arc::new(crate::Material::Basic(m)) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Basic(m)),
+        }
     }
 
     #[wasm_bindgen(js_name = setColor)]
     pub fn set_color(&mut self, color: &WebColor) {
         let inner = Arc::make_mut(&mut self.inner);
         match inner {
-            crate::Material::Basic(m)    => m.color = color.inner,
-            crate::Material::Lambert(m)  => m.color = color.inner,
-            crate::Material::Phong(m)    => m.color = color.inner,
+            crate::Material::Basic(m) => m.color = color.inner,
+            crate::Material::Lambert(m) => m.color = color.inner,
+            crate::Material::Phong(m) => m.color = color.inner,
             crate::Material::Standard(m) => m.color = color.inner,
             crate::Material::Physical(m) => m.color = color.inner,
-            crate::Material::Toon(m)     => m.color = color.inner,
-            crate::Material::Matcap(m)   => m.color = color.inner,
-            crate::Material::Line(m)     => m.color = color.inner,
-            crate::Material::Points(m)   => m.color = color.inner,
-            crate::Material::Sprite(m)   => m.color = color.inner,
-            crate::Material::Mirror(m)   => m.color = color.inner,
+            crate::Material::Toon(m) => m.color = color.inner,
+            crate::Material::Matcap(m) => m.color = color.inner,
+            crate::Material::Line(m) => m.color = color.inner,
+            crate::Material::Points(m) => m.color = color.inner,
+            crate::Material::Sprite(m) => m.color = color.inner,
+            crate::Material::Mirror(m) => m.color = color.inner,
             _ => {}
         }
     }
@@ -1204,7 +1433,11 @@ impl WebMaterial {
 
     #[wasm_bindgen(js_name = lambert)]
     pub fn lambert(color: &WebColor) -> WebMaterial {
-        WebMaterial { inner: Arc::new(crate::Material::Lambert(crate::LambertMaterial::new(color.inner))) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Lambert(crate::LambertMaterial::new(
+                color.inner,
+            ))),
+        }
     }
 
     #[wasm_bindgen(js_name = standard)]
@@ -1212,14 +1445,18 @@ impl WebMaterial {
         let m = crate::StandardMaterial::new(color.inner)
             .with_roughness(roughness)
             .with_metalness(metalness);
-        WebMaterial { inner: Arc::new(crate::Material::Standard(m)) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Standard(m)),
+        }
     }
 
     #[wasm_bindgen(js_name = matcap)]
     pub fn matcap(color: &WebColor) -> WebMaterial {
         let mut m = crate::MatcapMaterial::default();
         m.color = color.inner;
-        WebMaterial { inner: Arc::new(crate::Material::Matcap(m)) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Matcap(m)),
+        }
     }
 
     /// SkyMaterial — Preetham atmospheric scattering shader. Defaults match
@@ -1227,14 +1464,24 @@ impl WebMaterial {
     /// mieCoefficient 0.005, mieDirectionalG 0.7.
     #[wasm_bindgen(js_name = sky)]
     pub fn sky(
-        sun_x: f32, sun_y: f32, sun_z: f32,
-        turbidity: f32, rayleigh: f32, mie_coefficient: f32, mie_directional_g: f32,
+        sun_x: f32,
+        sun_y: f32,
+        sun_z: f32,
+        turbidity: f32,
+        rayleigh: f32,
+        mie_coefficient: f32,
+        mie_directional_g: f32,
     ) -> WebMaterial {
         let m = crate::materials::SkyMaterial {
             sun_position: crate::math::Vector3::new(sun_x, sun_y, sun_z),
-            turbidity, rayleigh, mie_coefficient, mie_directional_g,
+            turbidity,
+            rayleigh,
+            mie_coefficient,
+            mie_directional_g,
         };
-        WebMaterial { inner: Arc::new(crate::Material::Sky(m)) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Sky(m)),
+        }
     }
 
     /// Mirror material — drives the Reflector / Refractor / Water shader path.
@@ -1246,7 +1493,9 @@ impl WebMaterial {
             color: crate::math::Color::new(r, g, b),
             ..Default::default()
         };
-        WebMaterial { inner: Arc::new(crate::Material::Mirror(m)) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Mirror(m)),
+        }
     }
 
     /// Push a per-frame texture matrix (column-major 4×4) used by the mirror
@@ -1254,10 +1503,14 @@ impl WebMaterial {
     /// `(0.5*bias+0.5) * virtualCam.projection * virtualCam.matrixWorldInverse`.
     #[wasm_bindgen(js_name = setTextureMatrix)]
     pub fn set_texture_matrix(&mut self, elements: Vec<f32>) {
-        if elements.len() < 16 { return; }
+        if elements.len() < 16 {
+            return;
+        }
         let inner = Arc::make_mut(&mut self.inner);
         if let crate::Material::Mirror(m) = inner {
-            for i in 0..16 { m.texture_matrix[i] = elements[i]; }
+            for i in 0..16 {
+                m.texture_matrix[i] = elements[i];
+            }
         }
     }
 
@@ -1266,9 +1519,13 @@ impl WebMaterial {
     #[wasm_bindgen(js_name = distance)]
     pub fn distance(ref_x: f32, ref_y: f32, ref_z: f32, near: f32, far: f32) -> WebMaterial {
         let m = crate::materials::DistanceMaterial::new(
-            crate::math::Vector3::new(ref_x, ref_y, ref_z), near, far
+            crate::math::Vector3::new(ref_x, ref_y, ref_z),
+            near,
+            far,
         );
-        WebMaterial { inner: Arc::new(crate::Material::Distance(m)) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Distance(m)),
+        }
     }
 
     #[wasm_bindgen(js_name = setMatcap)]
@@ -1323,9 +1580,12 @@ impl WebMaterial {
         format!(
             "Material kind={:?} map={} normal={} rough={} metal={} ao={} emissive={}",
             self.inner.kind(),
-            slots.map.is_some(), slots.normal_map.is_some(),
-            slots.roughness_map.is_some(), slots.metalness_map.is_some(),
-            slots.ao_map.is_some(), slots.emissive_map.is_some(),
+            slots.map.is_some(),
+            slots.normal_map.is_some(),
+            slots.roughness_map.is_some(),
+            slots.metalness_map.is_some(),
+            slots.ao_map.is_some(),
+            slots.emissive_map.is_some(),
         )
     }
 }
@@ -1349,12 +1609,12 @@ impl WebMaterial {
     pub fn set_opacity(&mut self, opacity: f32) {
         let inner = Arc::make_mut(&mut self.inner);
         match inner {
-            crate::Material::Basic(m)    => m.opacity = opacity,
-            crate::Material::Lambert(m)  => m.opacity = opacity,
-            crate::Material::Phong(m)    => m.opacity = opacity,
+            crate::Material::Basic(m) => m.opacity = opacity,
+            crate::Material::Lambert(m) => m.opacity = opacity,
+            crate::Material::Phong(m) => m.opacity = opacity,
             crate::Material::Standard(m) => m.opacity = opacity,
             crate::Material::Physical(m) => m.opacity = opacity,
-            crate::Material::Toon(m)     => m.opacity = opacity,
+            crate::Material::Toon(m) => m.opacity = opacity,
             _ => {}
         }
     }
@@ -1365,7 +1625,9 @@ impl WebMaterial {
     #[wasm_bindgen(js_name = setTransparent)]
     pub fn set_transparent(&mut self, transparent: bool) {
         let inner = Arc::make_mut(&mut self.inner);
-        if let crate::Material::Basic(m) = inner { m.transparent = transparent; }
+        if let crate::Material::Basic(m) = inner {
+            m.transparent = transparent;
+        }
     }
 
     /// Set the emissive color. Standard / Physical / Lambert / Phong / Toon
@@ -1376,9 +1638,9 @@ impl WebMaterial {
         match inner {
             crate::Material::Standard(m) => m.emissive = color.inner,
             crate::Material::Physical(m) => m.emissive = color.inner,
-            crate::Material::Lambert(m)  => m.emissive = color.inner,
-            crate::Material::Phong(m)    => m.emissive = color.inner,
-            crate::Material::Toon(m)     => m.emissive = color.inner,
+            crate::Material::Lambert(m) => m.emissive = color.inner,
+            crate::Material::Phong(m) => m.emissive = color.inner,
+            crate::Material::Toon(m) => m.emissive = color.inner,
             _ => {}
         }
     }
@@ -1387,8 +1649,11 @@ impl WebMaterial {
     #[wasm_bindgen(js_name = setEmissiveIntensity)]
     pub fn set_emissive_intensity(&mut self, intensity: f32) {
         let inner = Arc::make_mut(&mut self.inner);
-        if let crate::Material::Standard(m) = inner { m.emissive_intensity = intensity; }
-        else if let crate::Material::Physical(m) = inner { m.emissive_intensity = intensity; }
+        if let crate::Material::Standard(m) = inner {
+            m.emissive_intensity = intensity;
+        } else if let crate::Material::Physical(m) = inner {
+            m.emissive_intensity = intensity;
+        }
     }
 
     /// Toggle wireframe rendering (renderer picks the line-polygon pipeline).
@@ -1396,15 +1661,15 @@ impl WebMaterial {
     pub fn set_wireframe(&mut self, wireframe: bool) {
         let inner = Arc::make_mut(&mut self.inner);
         match inner {
-            crate::Material::Basic(m)    => m.wireframe = wireframe,
-            crate::Material::Lambert(m)  => m.wireframe = wireframe,
-            crate::Material::Phong(m)    => m.wireframe = wireframe,
+            crate::Material::Basic(m) => m.wireframe = wireframe,
+            crate::Material::Lambert(m) => m.wireframe = wireframe,
+            crate::Material::Phong(m) => m.wireframe = wireframe,
             crate::Material::Standard(m) => m.wireframe = wireframe,
             crate::Material::Physical(m) => m.wireframe = wireframe,
-            crate::Material::Normal(m)   => m.wireframe = wireframe,
-            crate::Material::Depth(m)    => m.wireframe = wireframe,
-            crate::Material::Toon(m)     => m.wireframe = wireframe,
-            crate::Material::Matcap(m)   => m.wireframe = wireframe,
+            crate::Material::Normal(m) => m.wireframe = wireframe,
+            crate::Material::Depth(m) => m.wireframe = wireframe,
+            crate::Material::Toon(m) => m.wireframe = wireframe,
+            crate::Material::Matcap(m) => m.wireframe = wireframe,
             _ => {}
         }
     }
@@ -1414,11 +1679,11 @@ impl WebMaterial {
     fn set_map_arc(&mut self, tex: std::sync::Arc<crate::Texture>) {
         let inner = Arc::make_mut(&mut self.inner);
         match inner {
-            crate::Material::Basic(m)    => m.map = Some(tex),
+            crate::Material::Basic(m) => m.map = Some(tex),
             crate::Material::Standard(m) => m.map = Some(tex),
             crate::Material::Physical(m) => m.map = Some(tex),
-            crate::Material::Sprite(m)   => m.map = Some(tex),
-            crate::Material::Mirror(m)   => m.map = Some(tex),
+            crate::Material::Sprite(m) => m.map = Some(tex),
+            crate::Material::Mirror(m) => m.map = Some(tex),
             _ => {}
         }
     }
@@ -1433,12 +1698,12 @@ impl WebMaterial {
     pub fn set_side(&mut self, side: u32) {
         let inner = Arc::make_mut(&mut self.inner);
         match inner {
-            crate::Material::Basic(m)    => m.side = side,
-            crate::Material::Lambert(m)  => m.side = side,
-            crate::Material::Phong(m)    => m.side = side,
+            crate::Material::Basic(m) => m.side = side,
+            crate::Material::Lambert(m) => m.side = side,
+            crate::Material::Phong(m) => m.side = side,
             crate::Material::Standard(m) => m.side = side,
             crate::Material::Physical(m) => m.side = side,
-            crate::Material::Toon(m)     => m.side = side,
+            crate::Material::Toon(m) => m.side = side,
             // Sky always uses BackSide; setting from JS is a no-op (already 1).
             _ => {}
         }
@@ -1455,7 +1720,10 @@ pub struct WebMesh {
 impl WebMesh {
     #[wasm_bindgen(constructor)]
     pub fn new(geom: &WebGeometry, mat: &WebMaterial) -> WebMesh {
-        WebMesh { geometry: geom.inner.clone(), material: mat.inner.clone() }
+        WebMesh {
+            geometry: geom.inner.clone(),
+            material: mat.inner.clone(),
+        }
     }
 }
 
@@ -1477,12 +1745,16 @@ enum LightInner {
 impl WebLight {
     #[wasm_bindgen(js_name = ambient)]
     pub fn ambient(color: &WebColor, intensity: f32) -> WebLight {
-        WebLight { inner: LightInner::Ambient(crate::AmbientLight::new(color.inner, intensity)) }
+        WebLight {
+            inner: LightInner::Ambient(crate::AmbientLight::new(color.inner, intensity)),
+        }
     }
 
     #[wasm_bindgen(js_name = directional)]
     pub fn directional(color: &WebColor, intensity: f32) -> WebLight {
-        WebLight { inner: LightInner::Directional(crate::DirectionalLight::new(color.inner, intensity)) }
+        WebLight {
+            inner: LightInner::Directional(crate::DirectionalLight::new(color.inner, intensity)),
+        }
     }
 
     /// Set the direction the light shines toward (only meaningful for
@@ -1532,12 +1804,16 @@ pub struct WebColor {
 impl WebColor {
     #[wasm_bindgen(constructor)]
     pub fn new(r: f32, g: f32, b: f32) -> WebColor {
-        WebColor { inner: crate::Color::new(r, g, b) }
+        WebColor {
+            inner: crate::Color::new(r, g, b),
+        }
     }
 
     #[wasm_bindgen(js_name = fromHex)]
     pub fn from_hex(hex: u32) -> WebColor {
-        WebColor { inner: crate::Color::from_hex(hex) }
+        WebColor {
+            inner: crate::Color::from_hex(hex),
+        }
     }
 }
 
@@ -1551,15 +1827,23 @@ pub struct WebVector3 {
 impl WebVector3 {
     #[wasm_bindgen(constructor)]
     pub fn new(x: f32, y: f32, z: f32) -> WebVector3 {
-        WebVector3 { inner: crate::Vector3::new(x, y, z) }
+        WebVector3 {
+            inner: crate::Vector3::new(x, y, z),
+        }
     }
 
     #[wasm_bindgen(getter)]
-    pub fn x(&self) -> f32 { self.inner.x }
+    pub fn x(&self) -> f32 {
+        self.inner.x
+    }
     #[wasm_bindgen(getter)]
-    pub fn y(&self) -> f32 { self.inner.y }
+    pub fn y(&self) -> f32 {
+        self.inner.y
+    }
     #[wasm_bindgen(getter)]
-    pub fn z(&self) -> f32 { self.inner.z }
+    pub fn z(&self) -> f32 {
+        self.inner.z
+    }
 }
 
 #[wasm_bindgen]
@@ -1572,15 +1856,23 @@ pub struct WebEuler {
 impl WebEuler {
     #[wasm_bindgen(constructor)]
     pub fn new(x: f32, y: f32, z: f32) -> WebEuler {
-        WebEuler { inner: crate::Euler::new(x, y, z) }
+        WebEuler {
+            inner: crate::Euler::new(x, y, z),
+        }
     }
 
     #[wasm_bindgen(getter)]
-    pub fn x(&self) -> f32 { self.inner.x }
+    pub fn x(&self) -> f32 {
+        self.inner.x
+    }
     #[wasm_bindgen(getter)]
-    pub fn y(&self) -> f32 { self.inner.y }
+    pub fn y(&self) -> f32 {
+        self.inner.y
+    }
     #[wasm_bindgen(getter)]
-    pub fn z(&self) -> f32 { self.inner.z }
+    pub fn z(&self) -> f32 {
+        self.inner.z
+    }
 }
 
 // JS console logging convenience.
@@ -1596,206 +1888,370 @@ extern "C" {
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebVector2 { pub x: f32, pub y: f32 }
+pub struct WebVector2 {
+    pub x: f32,
+    pub y: f32,
+}
 #[wasm_bindgen]
 impl WebVector2 {
     #[wasm_bindgen(constructor)]
-    pub fn new(x: f32, y: f32) -> WebVector2 { WebVector2 { x, y } }
+    pub fn new(x: f32, y: f32) -> WebVector2 {
+        WebVector2 { x, y }
+    }
     #[wasm_bindgen(js_name = lengthSq)]
-    pub fn length_sq(&self) -> f32 { self.x*self.x + self.y*self.y }
-    pub fn length(&self) -> f32 { self.length_sq().sqrt() }
-    pub fn dot(&self, o: &WebVector2) -> f32 { self.x*o.x + self.y*o.y }
+    pub fn length_sq(&self) -> f32 {
+        self.x * self.x + self.y * self.y
+    }
+    pub fn length(&self) -> f32 {
+        self.length_sq().sqrt()
+    }
+    pub fn dot(&self, o: &WebVector2) -> f32 {
+        self.x * o.x + self.y * o.y
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebVector4 { pub x: f32, pub y: f32, pub z: f32, pub w: f32 }
+pub struct WebVector4 {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
 #[wasm_bindgen]
 impl WebVector4 {
     #[wasm_bindgen(constructor)]
-    pub fn new(x: f32, y: f32, z: f32, w: f32) -> WebVector4 { WebVector4 { x, y, z, w } }
-    pub fn length(&self) -> f32 { (self.x*self.x + self.y*self.y + self.z*self.z + self.w*self.w).sqrt() }
+    pub fn new(x: f32, y: f32, z: f32, w: f32) -> WebVector4 {
+        WebVector4 { x, y, z, w }
+    }
+    pub fn length(&self) -> f32 {
+        (self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w).sqrt()
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone)]
-pub struct WebMatrix3 { inner: crate::Matrix3 }
+pub struct WebMatrix3 {
+    inner: crate::Matrix3,
+}
 #[wasm_bindgen]
 impl WebMatrix3 {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebMatrix3 { WebMatrix3 { inner: crate::Matrix3::identity() } }
-    pub fn identity() -> WebMatrix3 { WebMatrix3 { inner: crate::Matrix3::identity() } }
-    pub fn elements(&self) -> Vec<f32> { self.inner.elements.to_vec() }
+    pub fn new() -> WebMatrix3 {
+        WebMatrix3 {
+            inner: crate::Matrix3::identity(),
+        }
+    }
+    pub fn identity() -> WebMatrix3 {
+        WebMatrix3 {
+            inner: crate::Matrix3::identity(),
+        }
+    }
+    pub fn elements(&self) -> Vec<f32> {
+        self.inner.elements.to_vec()
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone)]
-pub struct WebMatrix4 { pub(crate) inner: crate::Matrix4 }
+pub struct WebMatrix4 {
+    pub(crate) inner: crate::Matrix4,
+}
 #[wasm_bindgen]
 impl WebMatrix4 {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebMatrix4 { WebMatrix4 { inner: crate::Matrix4::identity() } }
-    pub fn identity() -> WebMatrix4 { WebMatrix4 { inner: crate::Matrix4::identity() } }
-    pub fn elements(&self) -> Vec<f32> { self.inner.elements.to_vec() }
+    pub fn new() -> WebMatrix4 {
+        WebMatrix4 {
+            inner: crate::Matrix4::identity(),
+        }
+    }
+    pub fn identity() -> WebMatrix4 {
+        WebMatrix4 {
+            inner: crate::Matrix4::identity(),
+        }
+    }
+    pub fn elements(&self) -> Vec<f32> {
+        self.inner.elements.to_vec()
+    }
     #[wasm_bindgen(js_name = makePerspective)]
     pub fn make_perspective(fov: f32, aspect: f32, near: f32, far: f32) -> WebMatrix4 {
-        WebMatrix4 { inner: crate::Matrix4::perspective(fov, aspect, near, far) }
+        WebMatrix4 {
+            inner: crate::Matrix4::perspective(fov, aspect, near, far),
+        }
     }
-    pub fn invert(&self) -> WebMatrix4 { WebMatrix4 { inner: self.inner.invert() } }
+    pub fn invert(&self) -> WebMatrix4 {
+        WebMatrix4 {
+            inner: self.inner.invert(),
+        }
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebQuaternion { pub x: f32, pub y: f32, pub z: f32, pub w: f32 }
+pub struct WebQuaternion {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub w: f32,
+}
 #[wasm_bindgen]
 impl WebQuaternion {
     #[wasm_bindgen(constructor)]
-    pub fn new(x: f32, y: f32, z: f32, w: f32) -> WebQuaternion { WebQuaternion { x, y, z, w } }
-    pub fn identity() -> WebQuaternion { WebQuaternion { x: 0.0, y: 0.0, z: 0.0, w: 1.0 } }
+    pub fn new(x: f32, y: f32, z: f32, w: f32) -> WebQuaternion {
+        WebQuaternion { x, y, z, w }
+    }
+    pub fn identity() -> WebQuaternion {
+        WebQuaternion {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
+        }
+    }
     #[wasm_bindgen(js_name = setFromEuler)]
     pub fn set_from_euler(e: &WebEuler) -> WebQuaternion {
         let q = e.inner.to_quaternion();
-        WebQuaternion { x: q.x, y: q.y, z: q.z, w: q.w }
+        WebQuaternion {
+            x: q.x,
+            y: q.y,
+            z: q.z,
+            w: q.w,
+        }
     }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebBox2 { inner: crate::Box2 }
+pub struct WebBox2 {
+    inner: crate::Box2,
+}
 #[wasm_bindgen]
 impl WebBox2 {
     #[wasm_bindgen(constructor)]
     pub fn new(min: &WebVector2, max: &WebVector2) -> WebBox2 {
-        WebBox2 { inner: crate::Box2::new(crate::Vector2::new(min.x, min.y), crate::Vector2::new(max.x, max.y)) }
+        WebBox2 {
+            inner: crate::Box2::new(
+                crate::Vector2::new(min.x, min.y),
+                crate::Vector2::new(max.x, max.y),
+            ),
+        }
     }
-    pub fn empty() -> WebBox2 { WebBox2 { inner: crate::Box2::empty() } }
+    pub fn empty() -> WebBox2 {
+        WebBox2 {
+            inner: crate::Box2::empty(),
+        }
+    }
     #[wasm_bindgen(js_name = isEmpty)]
-    pub fn is_empty(&self) -> bool { self.inner.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebBox3 { pub(crate) inner: crate::Box3 }
+pub struct WebBox3 {
+    pub(crate) inner: crate::Box3,
+}
 #[wasm_bindgen]
 impl WebBox3 {
     #[wasm_bindgen(constructor)]
     pub fn new(min: &WebVector3, max: &WebVector3) -> WebBox3 {
-        WebBox3 { inner: crate::Box3::new(min.inner, max.inner) }
+        WebBox3 {
+            inner: crate::Box3::new(min.inner, max.inner),
+        }
     }
-    pub fn empty() -> WebBox3 { WebBox3 { inner: crate::Box3::empty() } }
+    pub fn empty() -> WebBox3 {
+        WebBox3 {
+            inner: crate::Box3::empty(),
+        }
+    }
     #[wasm_bindgen(js_name = isEmpty)]
-    pub fn is_empty(&self) -> bool { self.inner.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
     #[wasm_bindgen(js_name = containsPoint)]
-    pub fn contains_point(&self, p: &WebVector3) -> bool { self.inner.contains_point(p.inner) }
+    pub fn contains_point(&self, p: &WebVector3) -> bool {
+        self.inner.contains_point(p.inner)
+    }
     #[wasm_bindgen(js_name = intersectsBox)]
-    pub fn intersects_box(&self, o: &WebBox3) -> bool { self.inner.intersects_box(&o.inner) }
-    pub fn center(&self) -> WebVector3 { WebVector3 { inner: self.inner.center() } }
-    pub fn size(&self) -> WebVector3 { WebVector3 { inner: self.inner.size() } }
+    pub fn intersects_box(&self, o: &WebBox3) -> bool {
+        self.inner.intersects_box(&o.inner)
+    }
+    pub fn center(&self) -> WebVector3 {
+        WebVector3 {
+            inner: self.inner.center(),
+        }
+    }
+    pub fn size(&self) -> WebVector3 {
+        WebVector3 {
+            inner: self.inner.size(),
+        }
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebSphere { inner: crate::Sphere }
+pub struct WebSphere {
+    inner: crate::Sphere,
+}
 #[wasm_bindgen]
 impl WebSphere {
     #[wasm_bindgen(constructor)]
     pub fn new(center: &WebVector3, radius: f32) -> WebSphere {
-        WebSphere { inner: crate::Sphere::new(center.inner, radius) }
+        WebSphere {
+            inner: crate::Sphere::new(center.inner, radius),
+        }
     }
     #[wasm_bindgen(js_name = containsPoint)]
-    pub fn contains_point(&self, p: &WebVector3) -> bool { self.inner.contains_point(p.inner) }
+    pub fn contains_point(&self, p: &WebVector3) -> bool {
+        self.inner.contains_point(p.inner)
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebRay { inner: crate::Ray }
+pub struct WebRay {
+    inner: crate::Ray,
+}
 #[wasm_bindgen]
 impl WebRay {
     #[wasm_bindgen(constructor)]
     pub fn new(origin: &WebVector3, direction: &WebVector3) -> WebRay {
-        WebRay { inner: crate::Ray::new(origin.inner, direction.inner) }
+        WebRay {
+            inner: crate::Ray::new(origin.inner, direction.inner),
+        }
     }
-    pub fn at(&self, t: f32) -> WebVector3 { WebVector3 { inner: self.inner.at(t) } }
+    pub fn at(&self, t: f32) -> WebVector3 {
+        WebVector3 {
+            inner: self.inner.at(t),
+        }
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebPlane { inner: crate::Plane }
+pub struct WebPlane {
+    inner: crate::Plane,
+}
 #[wasm_bindgen]
 impl WebPlane {
     #[wasm_bindgen(constructor)]
     pub fn new(normal: &WebVector3, constant: f32) -> WebPlane {
-        WebPlane { inner: crate::Plane::new(normal.inner, constant) }
+        WebPlane {
+            inner: crate::Plane::new(normal.inner, constant),
+        }
     }
     #[wasm_bindgen(js_name = distanceToPoint)]
-    pub fn distance_to_point(&self, p: &WebVector3) -> f32 { self.inner.distance_to_point(p.inner) }
+    pub fn distance_to_point(&self, p: &WebVector3) -> f32 {
+        self.inner.distance_to_point(p.inner)
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebTriangle { inner: crate::Triangle }
+pub struct WebTriangle {
+    inner: crate::Triangle,
+}
 #[wasm_bindgen]
 impl WebTriangle {
     #[wasm_bindgen(constructor)]
     pub fn new(a: &WebVector3, b: &WebVector3, c: &WebVector3) -> WebTriangle {
-        WebTriangle { inner: crate::Triangle::new(a.inner, b.inner, c.inner) }
+        WebTriangle {
+            inner: crate::Triangle::new(a.inner, b.inner, c.inner),
+        }
     }
-    pub fn area(&self) -> f32 { self.inner.area() }
-    pub fn normal(&self) -> WebVector3 { WebVector3 { inner: self.inner.normal() } }
+    pub fn area(&self) -> f32 {
+        self.inner.area()
+    }
+    pub fn normal(&self) -> WebVector3 {
+        WebVector3 {
+            inner: self.inner.normal(),
+        }
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone)]
-pub struct WebFrustum { inner: crate::Frustum }
+pub struct WebFrustum {
+    inner: crate::Frustum,
+}
 #[wasm_bindgen]
 impl WebFrustum {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebFrustum { WebFrustum { inner: crate::Frustum::default() } }
+    pub fn new() -> WebFrustum {
+        WebFrustum {
+            inner: crate::Frustum::default(),
+        }
+    }
     #[wasm_bindgen(js_name = setFromProjectionMatrix)]
     pub fn set_from_projection_matrix(m: &WebMatrix4) -> WebFrustum {
-        WebFrustum { inner: crate::Frustum::from_projection_matrix(&m.inner) }
+        WebFrustum {
+            inner: crate::Frustum::from_projection_matrix(&m.inner),
+        }
     }
     #[wasm_bindgen(js_name = containsPoint)]
-    pub fn contains_point(&self, p: &WebVector3) -> bool { self.inner.contains_point(p.inner) }
+    pub fn contains_point(&self, p: &WebVector3) -> bool {
+        self.inner.contains_point(p.inner)
+    }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebSpherical { inner: crate::Spherical }
+pub struct WebSpherical {
+    inner: crate::Spherical,
+}
 #[wasm_bindgen]
 impl WebSpherical {
     #[wasm_bindgen(constructor)]
     pub fn new(radius: f32, phi: f32, theta: f32) -> WebSpherical {
-        WebSpherical { inner: crate::Spherical::new(radius, phi, theta) }
+        WebSpherical {
+            inner: crate::Spherical::new(radius, phi, theta),
+        }
     }
     #[wasm_bindgen(js_name = setFromVector3)]
     pub fn set_from_vector3(v: &WebVector3) -> WebSpherical {
-        WebSpherical { inner: crate::Spherical::from_vector3(v.inner) }
+        WebSpherical {
+            inner: crate::Spherical::from_vector3(v.inner),
+        }
     }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebCylindrical { inner: crate::Cylindrical }
+pub struct WebCylindrical {
+    inner: crate::Cylindrical,
+}
 #[wasm_bindgen]
 impl WebCylindrical {
     #[wasm_bindgen(constructor)]
     pub fn new(radius: f32, theta: f32, y: f32) -> WebCylindrical {
-        WebCylindrical { inner: crate::Cylindrical::new(radius, theta, y) }
+        WebCylindrical {
+            inner: crate::Cylindrical::new(radius, theta, y),
+        }
     }
 }
 
 #[wasm_bindgen]
 #[derive(Clone, Copy)]
-pub struct WebLine3 { inner: crate::Line3 }
+pub struct WebLine3 {
+    inner: crate::Line3,
+}
 #[wasm_bindgen]
 impl WebLine3 {
     #[wasm_bindgen(constructor)]
     pub fn new(start: &WebVector3, end: &WebVector3) -> WebLine3 {
-        WebLine3 { inner: crate::Line3::new(start.inner, end.inner) }
+        WebLine3 {
+            inner: crate::Line3::new(start.inner, end.inner),
+        }
     }
-    pub fn distance(&self) -> f32 { self.inner.distance() }
-    pub fn center(&self) -> WebVector3 { WebVector3 { inner: self.inner.center() } }
+    pub fn distance(&self) -> f32 {
+        self.inner.distance()
+    }
+    pub fn center(&self) -> WebVector3 {
+        WebVector3 {
+            inner: self.inner.center(),
+        }
+    }
 }
 
 // ======================================================================
@@ -1806,21 +2262,41 @@ impl WebLine3 {
 impl WebGeometry {
     #[wasm_bindgen(js_name = circle)]
     pub fn circle(radius: f32, segments: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::CircleGeometry::new(
-            radius, segments.max(3), 0.0, std::f32::consts::PI * 2.0,
-        )) }
+        WebGeometry {
+            inner: Arc::new(crate::CircleGeometry::new(
+                radius,
+                segments.max(3),
+                0.0,
+                std::f32::consts::PI * 2.0,
+            )),
+        }
     }
     #[wasm_bindgen(js_name = ring)]
     pub fn ring(inner: f32, outer: f32, theta_segments: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::RingGeometry::new(
-            inner, outer, theta_segments.max(3), 1, 0.0, std::f32::consts::PI * 2.0,
-        )) }
+        WebGeometry {
+            inner: Arc::new(crate::RingGeometry::new(
+                inner,
+                outer,
+                theta_segments.max(3),
+                1,
+                0.0,
+                std::f32::consts::PI * 2.0,
+            )),
+        }
     }
     #[wasm_bindgen(js_name = cone)]
     pub fn cone(radius: f32, height: f32, radial_segments: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::ConeGeometry::new(
-            radius, height, radial_segments.max(3), 1, false, 0.0, std::f32::consts::PI * 2.0,
-        )) }
+        WebGeometry {
+            inner: Arc::new(crate::ConeGeometry::new(
+                radius,
+                height,
+                radial_segments.max(3),
+                1,
+                false,
+                0.0,
+                std::f32::consts::PI * 2.0,
+            )),
+        }
     }
     #[wasm_bindgen(js_name = torusKnot)]
     pub fn torus_knot(
@@ -1831,41 +2307,70 @@ impl WebGeometry {
         p: u32,
         q: u32,
     ) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::TorusKnotGeometry::new(
-            radius, tube, tubular_segments.max(3), radial_segments.max(3), p, q,
-        )) }
+        WebGeometry {
+            inner: Arc::new(crate::TorusKnotGeometry::new(
+                radius,
+                tube,
+                tubular_segments.max(3),
+                radial_segments.max(3),
+                p,
+                q,
+            )),
+        }
     }
     #[wasm_bindgen(js_name = capsule)]
-    pub fn capsule(radius: f32, length: f32, cap_segments: usize, radial_segments: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::CapsuleGeometry::new(
-            radius, length, cap_segments.max(1), radial_segments.max(3),
-        )) }
+    pub fn capsule(
+        radius: f32,
+        length: f32,
+        cap_segments: usize,
+        radial_segments: usize,
+    ) -> WebGeometry {
+        WebGeometry {
+            inner: Arc::new(crate::CapsuleGeometry::new(
+                radius,
+                length,
+                cap_segments.max(1),
+                radial_segments.max(3),
+            )),
+        }
     }
     #[wasm_bindgen(js_name = tetrahedron)]
     pub fn tetrahedron(radius: f32, detail: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::TetrahedronGeometry::new(radius, detail)) }
+        WebGeometry {
+            inner: Arc::new(crate::TetrahedronGeometry::new(radius, detail)),
+        }
     }
     #[wasm_bindgen(js_name = octahedron)]
     pub fn octahedron(radius: f32, detail: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::OctahedronGeometry::new(radius, detail)) }
+        WebGeometry {
+            inner: Arc::new(crate::OctahedronGeometry::new(radius, detail)),
+        }
     }
     #[wasm_bindgen(js_name = icosahedron)]
     pub fn icosahedron(radius: f32, detail: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::IcosahedronGeometry::new(radius, detail)) }
+        WebGeometry {
+            inner: Arc::new(crate::IcosahedronGeometry::new(radius, detail)),
+        }
     }
     #[wasm_bindgen(js_name = dodecahedron)]
     pub fn dodecahedron(radius: f32, detail: usize) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::DodecahedronGeometry::new(radius, detail)) }
+        WebGeometry {
+            inner: Arc::new(crate::DodecahedronGeometry::new(radius, detail)),
+        }
     }
     #[wasm_bindgen(js_name = boxLine)]
     pub fn box_line(w: f32, h: f32, d: f32) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::BoxLineGeometry::new(w, h, d)) }
+        WebGeometry {
+            inner: Arc::new(crate::BoxLineGeometry::new(w, h, d)),
+        }
     }
 
     /// Clone into a `WebBufferGeometry` handle (same underlying data).
     #[wasm_bindgen(js_name = toBufferGeometry)]
     pub fn to_buffer_geometry(&self) -> WebBufferGeometry {
-        WebBufferGeometry { inner: self.inner.clone() }
+        WebBufferGeometry {
+            inner: self.inner.clone(),
+        }
     }
 }
 
@@ -1877,28 +2382,46 @@ impl WebGeometry {
 impl WebMaterial {
     #[wasm_bindgen(js_name = phong)]
     pub fn phong(color: &WebColor) -> WebMaterial {
-        WebMaterial { inner: Arc::new(crate::Material::Phong(crate::PhongMaterial::new(color.inner))) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Phong(crate::PhongMaterial::new(
+                color.inner,
+            ))),
+        }
     }
     #[wasm_bindgen(js_name = physical)]
-    pub fn physical(color: &WebColor, roughness: f32, metalness: f32, clearcoat: f32, clearcoat_roughness: f32) -> WebMaterial {
+    pub fn physical(
+        color: &WebColor,
+        roughness: f32,
+        metalness: f32,
+        clearcoat: f32,
+        clearcoat_roughness: f32,
+    ) -> WebMaterial {
         let mut m = crate::PhysicalMaterial::new(color.inner);
         m.roughness = roughness;
         m.metalness = metalness;
         m.clearcoat = clearcoat;
         m.clearcoat_roughness = clearcoat_roughness;
-        WebMaterial { inner: Arc::new(crate::Material::Physical(m)) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Physical(m)),
+        }
     }
     #[wasm_bindgen(js_name = normalMat)]
     pub fn normal_mat() -> WebMaterial {
-        WebMaterial { inner: Arc::new(crate::Material::Normal(crate::NormalMaterial::new())) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Normal(crate::NormalMaterial::new())),
+        }
     }
     #[wasm_bindgen(js_name = depth)]
     pub fn depth() -> WebMaterial {
-        WebMaterial { inner: Arc::new(crate::Material::Depth(crate::DepthMaterial::new())) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Depth(crate::DepthMaterial::new())),
+        }
     }
     #[wasm_bindgen(js_name = toon)]
     pub fn toon(color: &WebColor) -> WebMaterial {
-        WebMaterial { inner: Arc::new(crate::Material::Toon(crate::ToonMaterial::new(color.inner))) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Toon(crate::ToonMaterial::new(color.inner))),
+        }
     }
     #[wasm_bindgen(js_name = lineDashed)]
     pub fn line_dashed(color: &WebColor, scale: f32, dash_size: f32, gap_size: f32) -> WebMaterial {
@@ -1907,19 +2430,34 @@ impl WebMaterial {
         m.dash_scale = scale;
         m.dash_size = dash_size;
         m.gap_size = gap_size;
-        WebMaterial { inner: Arc::new(crate::Material::Line(m)) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Line(m)),
+        }
     }
     #[wasm_bindgen(js_name = line)]
     pub fn line(color: &WebColor) -> WebMaterial {
-        WebMaterial { inner: Arc::new(crate::Material::Line(crate::LineBasicMaterial::new(color.inner))) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Line(crate::LineBasicMaterial::new(
+                color.inner,
+            ))),
+        }
     }
     #[wasm_bindgen(js_name = points)]
     pub fn points(color: &WebColor, size: f32) -> WebMaterial {
-        WebMaterial { inner: Arc::new(crate::Material::Points(crate::PointsMaterial::new(color.inner, size))) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Points(crate::PointsMaterial::new(
+                color.inner,
+                size,
+            ))),
+        }
     }
     #[wasm_bindgen(js_name = sprite)]
     pub fn sprite(color: &WebColor) -> WebMaterial {
-        WebMaterial { inner: Arc::new(crate::Material::Sprite(crate::SpriteMaterial::new(color.inner))) }
+        WebMaterial {
+            inner: Arc::new(crate::Material::Sprite(crate::SpriteMaterial::new(
+                color.inner,
+            ))),
+        }
     }
 }
 
@@ -1934,7 +2472,9 @@ impl WebLight {
         let mut p = crate::PointLight::new(color.inner, intensity);
         p.distance = distance;
         p.decay = decay;
-        WebLight { inner: LightInner::Point(p) }
+        WebLight {
+            inner: LightInner::Point(p),
+        }
     }
 
     // Adjust intensity in-place (three.js .intensity = ...).
@@ -1957,8 +2497,8 @@ impl WebLight {
     pub fn set_cast_shadow(&mut self, cast: bool) {
         match &mut self.inner {
             LightInner::Directional(l) => l.cast_shadow = cast,
-            LightInner::Spot(l)        => l.cast_shadow = cast,
-            LightInner::Point(l)       => l.cast_shadow = cast,
+            LightInner::Spot(l) => l.cast_shadow = cast,
+            LightInner::Point(l) => l.cast_shadow = cast,
             _ => {}
         }
     }
@@ -1994,23 +2534,36 @@ impl WebLight {
         }
     }
     #[wasm_bindgen(js_name = spot)]
-    pub fn spot(color: &WebColor, intensity: f32, distance: f32, angle: f32, penumbra: f32, decay: f32) -> WebLight {
+    pub fn spot(
+        color: &WebColor,
+        intensity: f32,
+        distance: f32,
+        angle: f32,
+        penumbra: f32,
+        decay: f32,
+    ) -> WebLight {
         let mut s = crate::SpotLight::new(color.inner, intensity);
         s.distance = distance;
         s.angle = angle;
         s.penumbra = penumbra;
         s.decay = decay;
-        WebLight { inner: LightInner::Spot(s) }
+        WebLight {
+            inner: LightInner::Spot(s),
+        }
     }
     #[wasm_bindgen(js_name = hemisphere)]
     pub fn hemisphere(sky: &WebColor, ground: &WebColor, intensity: f32) -> WebLight {
         let h = crate::HemisphereLight::new(sky.inner, ground.inner, intensity);
-        WebLight { inner: LightInner::Hemisphere(h) }
+        WebLight {
+            inner: LightInner::Hemisphere(h),
+        }
     }
     #[wasm_bindgen(js_name = rectArea)]
     pub fn rect_area(color: &WebColor, intensity: f32, width: f32, height: f32) -> WebLight {
         let r = crate::RectAreaLight::new(color.inner, intensity, width, height);
-        WebLight { inner: LightInner::RectArea(r) }
+        WebLight {
+            inner: LightInner::RectArea(r),
+        }
     }
 }
 
@@ -2019,49 +2572,87 @@ impl WebLight {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebTexture { inner: Arc<crate::Texture> }
+pub struct WebTexture {
+    inner: Arc<crate::Texture>,
+}
 #[wasm_bindgen]
 impl WebTexture {
     #[wasm_bindgen(constructor)]
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> WebTexture {
-        WebTexture { inner: Arc::new(crate::Texture::new(width, height, crate::TextureFormat::Rgba8UnormSrgb, data)) }
+        WebTexture {
+            inner: Arc::new(crate::Texture::new(
+                width,
+                height,
+                crate::TextureFormat::Rgba8UnormSrgb,
+                data,
+            )),
+        }
     }
     #[wasm_bindgen(js_name = solid)]
     pub fn solid(r: u8, g: u8, b: u8, a: u8) -> WebTexture {
-        WebTexture { inner: Arc::new(crate::Texture::solid([r,g,b,a], crate::TextureFormat::Rgba8UnormSrgb)) }
+        WebTexture {
+            inner: Arc::new(crate::Texture::solid(
+                [r, g, b, a],
+                crate::TextureFormat::Rgba8UnormSrgb,
+            )),
+        }
     }
     /// Set sampler filter/wrap. 0 = LinearFilter, 1 = NearestFilter.
     /// 0 = ClampToEdge, 1 = Repeat, 2 = MirroredRepeat.
     #[wasm_bindgen(js_name = setFilters)]
     pub fn set_filters(&mut self, mag: u32, _min: u32, wrap_s: u32, wrap_t: u32) {
         let inner = Arc::make_mut(&mut self.inner);
-        inner.mag_filter = if mag == 1 { crate::textures::TextureFilter::Nearest } else { crate::textures::TextureFilter::Linear };
+        inner.mag_filter = if mag == 1 {
+            crate::textures::TextureFilter::Nearest
+        } else {
+            crate::textures::TextureFilter::Linear
+        };
         inner.min_filter = inner.mag_filter;
         let conv = |w: u32| match w {
             1 => crate::textures::TextureWrap::Repeat,
-            2 => crate::textures::TextureWrap::Repeat,  // MirroredRepeat → Repeat (no mirror in pre-built samplers yet)
+            2 => crate::textures::TextureWrap::Repeat, // MirroredRepeat → Repeat (no mirror in pre-built samplers yet)
             _ => crate::textures::TextureWrap::ClampToEdge,
         };
         inner.wrap_s = conv(wrap_s);
         inner.wrap_t = conv(wrap_t);
     }
-    pub fn width(&self) -> u32 { self.inner.width }
-    pub fn height(&self) -> u32 { self.inner.height }
+    pub fn width(&self) -> u32 {
+        self.inner.width
+    }
+    pub fn height(&self) -> u32 {
+        self.inner.height
+    }
 }
 
 #[wasm_bindgen]
-pub struct WebCubeTexture { inner: Arc<crate::CubeTexture> }
+pub struct WebCubeTexture {
+    inner: Arc<crate::CubeTexture>,
+}
 #[wasm_bindgen]
 impl WebCubeTexture {
     #[wasm_bindgen(constructor)]
-    pub fn new(size: u32, px: Vec<u8>, nx: Vec<u8>, py: Vec<u8>, ny: Vec<u8>, pz: Vec<u8>, nz: Vec<u8>) -> WebCubeTexture {
+    pub fn new(
+        size: u32,
+        px: Vec<u8>,
+        nx: Vec<u8>,
+        py: Vec<u8>,
+        ny: Vec<u8>,
+        pz: Vec<u8>,
+        nz: Vec<u8>,
+    ) -> WebCubeTexture {
         WebCubeTexture {
-            inner: Arc::new(crate::CubeTexture::new(size, crate::TextureFormat::Rgba8UnormSrgb, [px,nx,py,ny,pz,nz]))
+            inner: Arc::new(crate::CubeTexture::new(
+                size,
+                crate::TextureFormat::Rgba8UnormSrgb,
+                [px, nx, py, ny, pz, nz],
+            )),
         }
     }
 
     #[wasm_bindgen(getter)]
-    pub fn size(&self) -> u32 { self.inner.size }
+    pub fn size(&self) -> u32 {
+        self.inner.size
+    }
 
     #[wasm_bindgen(js_name = sampleCubeUvEnv)]
     pub fn sample_cube_uv_env(&self, dx: f32, dy: f32, dz: f32, roughness: f32) -> Vec<f32> {
@@ -2077,38 +2668,60 @@ pub struct WebPmremGenerator;
 #[wasm_bindgen]
 impl WebPmremGenerator {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebPmremGenerator { WebPmremGenerator }
+    pub fn new() -> WebPmremGenerator {
+        WebPmremGenerator
+    }
 
     /// Prefilter `cube` into a PMREM mip chain at `size` and return a CubeTexture wrapper.
     #[wasm_bindgen(js_name = fromCubemap)]
     pub fn from_cubemap(cube: &WebCubeTexture, size: u32) -> WebCubeTexture {
         let pmrem = crate::PmremGenerator::generate_pmrem(&cube.inner, size.max(1));
-        WebCubeTexture { inner: Arc::new(pmrem) }
+        WebCubeTexture {
+            inner: Arc::new(pmrem),
+        }
     }
 
     /// Convert an equirectangular RGBA8 texture into a PMREM cubemap.
     #[wasm_bindgen(js_name = fromEquirectangular)]
-    pub fn from_equirectangular(data: Vec<u8>, src_w: u32, src_h: u32, cube_size: u32) -> WebCubeTexture {
+    pub fn from_equirectangular(
+        data: Vec<u8>,
+        src_w: u32,
+        src_h: u32,
+        cube_size: u32,
+    ) -> WebCubeTexture {
         let cube = crate::PmremGenerator::from_equirect(&data, src_w, src_h, cube_size.max(1));
         let pmrem = crate::PmremGenerator::generate_pmrem(&cube, cube_size.max(1));
-        WebCubeTexture { inner: Arc::new(pmrem) }
+        WebCubeTexture {
+            inner: Arc::new(pmrem),
+        }
     }
 }
 
 #[wasm_bindgen]
-pub struct WebDataTexture { inner: Arc<crate::Texture> }
+pub struct WebDataTexture {
+    inner: Arc<crate::Texture>,
+}
 #[wasm_bindgen]
 impl WebDataTexture {
     #[wasm_bindgen(constructor)]
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> WebDataTexture {
         WebDataTexture {
-            inner: Arc::new(crate::DataTexture::new(width, height, crate::TextureFormat::Rgba8Unorm, data))
+            inner: Arc::new(crate::DataTexture::new(
+                width,
+                height,
+                crate::TextureFormat::Rgba8Unorm,
+                data,
+            )),
         }
     }
     #[wasm_bindgen(js_name = setFilters)]
     pub fn set_filters(&mut self, mag: u32, _min: u32, wrap_s: u32, wrap_t: u32) {
         let inner = Arc::make_mut(&mut self.inner);
-        inner.mag_filter = if mag == 1 { crate::textures::TextureFilter::Nearest } else { crate::textures::TextureFilter::Linear };
+        inner.mag_filter = if mag == 1 {
+            crate::textures::TextureFilter::Nearest
+        } else {
+            crate::textures::TextureFilter::Linear
+        };
         inner.min_filter = inner.mag_filter;
         let conv = |w: u32| match w {
             1 => crate::textures::TextureWrap::Repeat,
@@ -2125,64 +2738,119 @@ impl WebDataTexture {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebLineCurve { inner: crate::LineCurve }
+pub struct WebLineCurve {
+    inner: crate::LineCurve,
+}
 #[wasm_bindgen]
 impl WebLineCurve {
     #[wasm_bindgen(constructor)]
     pub fn new(v1: &WebVector2, v2: &WebVector2) -> WebLineCurve {
-        WebLineCurve { inner: crate::LineCurve::new(crate::Vector2::new(v1.x, v1.y), crate::Vector2::new(v2.x, v2.y)) }
+        WebLineCurve {
+            inner: crate::LineCurve::new(
+                crate::Vector2::new(v1.x, v1.y),
+                crate::Vector2::new(v2.x, v2.y),
+            ),
+        }
     }
 }
 
 #[wasm_bindgen]
-pub struct WebLineCurve3 { inner: crate::LineCurve3 }
+pub struct WebLineCurve3 {
+    inner: crate::LineCurve3,
+}
 #[wasm_bindgen]
 impl WebLineCurve3 {
     #[wasm_bindgen(constructor)]
     pub fn new(v1: &WebVector3, v2: &WebVector3) -> WebLineCurve3 {
-        WebLineCurve3 { inner: crate::LineCurve3::new(v1.inner, v2.inner) }
+        WebLineCurve3 {
+            inner: crate::LineCurve3::new(v1.inner, v2.inner),
+        }
     }
 }
 
 #[wasm_bindgen]
-pub struct WebEllipseCurve { inner: crate::EllipseCurve }
+pub struct WebEllipseCurve {
+    inner: crate::EllipseCurve,
+}
 #[wasm_bindgen]
 impl WebEllipseCurve {
     #[wasm_bindgen(constructor)]
-    pub fn new(cx: f32, cy: f32, rx: f32, ry: f32, a0: f32, a1: f32, clockwise: bool, rot: f32) -> WebEllipseCurve {
-        WebEllipseCurve { inner: crate::EllipseCurve::new(crate::Vector2::new(cx, cy), rx, ry, a0, a1, clockwise, rot) }
+    pub fn new(
+        cx: f32,
+        cy: f32,
+        rx: f32,
+        ry: f32,
+        a0: f32,
+        a1: f32,
+        clockwise: bool,
+        rot: f32,
+    ) -> WebEllipseCurve {
+        WebEllipseCurve {
+            inner: crate::EllipseCurve::new(
+                crate::Vector2::new(cx, cy),
+                rx,
+                ry,
+                a0,
+                a1,
+                clockwise,
+                rot,
+            ),
+        }
     }
 }
 
 #[wasm_bindgen]
-pub struct WebCatmullRomCurve3 { inner: crate::CatmullRomCurve3 }
+pub struct WebCatmullRomCurve3 {
+    inner: crate::CatmullRomCurve3,
+}
 #[wasm_bindgen]
 impl WebCatmullRomCurve3 {
     #[wasm_bindgen(constructor)]
     pub fn new(points_flat: Vec<f32>) -> WebCatmullRomCurve3 {
-        let points = points_flat.chunks_exact(3).map(|c| crate::Vector3::new(c[0], c[1], c[2])).collect();
-        WebCatmullRomCurve3 { inner: crate::CatmullRomCurve3::new(points) }
+        let points = points_flat
+            .chunks_exact(3)
+            .map(|c| crate::Vector3::new(c[0], c[1], c[2]))
+            .collect();
+        WebCatmullRomCurve3 {
+            inner: crate::CatmullRomCurve3::new(points),
+        }
     }
 }
 
 #[wasm_bindgen]
-pub struct WebPath { inner: crate::Path }
+pub struct WebPath {
+    inner: crate::Path,
+}
 #[wasm_bindgen]
 impl WebPath {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebPath { WebPath { inner: crate::Path::new() } }
+    pub fn new() -> WebPath {
+        WebPath {
+            inner: crate::Path::new(),
+        }
+    }
     #[wasm_bindgen(js_name = moveTo)]
-    pub fn move_to(&mut self, x: f32, y: f32) { self.inner.move_to(crate::Vector2::new(x, y)); }
+    pub fn move_to(&mut self, x: f32, y: f32) {
+        self.inner.move_to(crate::Vector2::new(x, y));
+    }
     #[wasm_bindgen(js_name = lineTo)]
-    pub fn line_to(&mut self, x: f32, y: f32) { self.inner.line_to(crate::Vector2::new(x, y)); }
+    pub fn line_to(&mut self, x: f32, y: f32) {
+        self.inner.line_to(crate::Vector2::new(x, y));
+    }
 }
 
 #[wasm_bindgen]
-pub struct WebShape { pub(crate) inner: crate::Shape }
+pub struct WebShape {
+    pub(crate) inner: crate::Shape,
+}
 #[wasm_bindgen]
 impl WebShape {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebShape { WebShape { inner: crate::Shape::new() } }
+    pub fn new() -> WebShape {
+        WebShape {
+            inner: crate::Shape::new(),
+        }
+    }
 }
 
 // ======================================================================
@@ -2190,25 +2858,39 @@ impl WebShape {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebAnimationClip { pub(crate) inner: crate::AnimationClip }
+pub struct WebAnimationClip {
+    pub(crate) inner: crate::AnimationClip,
+}
 #[wasm_bindgen]
 impl WebAnimationClip {
     #[wasm_bindgen(constructor)]
     pub fn new(name: &str, _duration: f32) -> WebAnimationClip {
-        WebAnimationClip { inner: crate::AnimationClip::empty(name) }
+        WebAnimationClip {
+            inner: crate::AnimationClip::empty(name),
+        }
     }
     #[wasm_bindgen(getter)]
-    pub fn duration(&self) -> f32 { self.inner.duration }
+    pub fn duration(&self) -> f32 {
+        self.inner.duration
+    }
     #[wasm_bindgen(getter)]
-    pub fn name(&self) -> String { self.inner.name.clone() }
+    pub fn name(&self) -> String {
+        self.inner.name.clone()
+    }
 }
 
 #[wasm_bindgen]
-pub struct WebAnimationMixer { inner: crate::AnimationMixer }
+pub struct WebAnimationMixer {
+    inner: crate::AnimationMixer,
+}
 #[wasm_bindgen]
 impl WebAnimationMixer {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebAnimationMixer { WebAnimationMixer { inner: crate::AnimationMixer::new() } }
+    pub fn new() -> WebAnimationMixer {
+        WebAnimationMixer {
+            inner: crate::AnimationMixer::new(),
+        }
+    }
     #[wasm_bindgen(js_name = clipAction)]
     pub fn clip_action(&mut self, clip: WebAnimationClip) -> usize {
         self.inner.clip_action(clip.inner)
@@ -2223,7 +2905,9 @@ impl WebAnimationMixer {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebOrbitControls { inner: crate::OrbitControls }
+pub struct WebOrbitControls {
+    inner: crate::OrbitControls,
+}
 #[wasm_bindgen]
 impl WebOrbitControls {
     #[wasm_bindgen(constructor)]
@@ -2232,10 +2916,28 @@ impl WebOrbitControls {
             CameraInner::Perspective(p) => p.clone(),
             _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
         };
-        WebOrbitControls { inner: crate::OrbitControls::new(&c) }
+        WebOrbitControls {
+            inner: crate::OrbitControls::new(&c),
+        }
     }
-    pub fn update(&mut self, camera: &mut WebCamera, dx: f32, dy: f32, wheel: f32, rotating: bool, panning: bool, w: f32, h: f32) {
-        let ev = crate::PointerEvent { dx, dy, wheel, rotating, panning };
+    pub fn update(
+        &mut self,
+        camera: &mut WebCamera,
+        dx: f32,
+        dy: f32,
+        wheel: f32,
+        rotating: bool,
+        panning: bool,
+        w: f32,
+        h: f32,
+    ) {
+        let ev = crate::PointerEvent {
+            dx,
+            dy,
+            wheel,
+            rotating,
+            panning,
+        };
         if let CameraInner::Perspective(c) = &mut camera.inner {
             self.inner.update(ev, c, (w, h));
         }
@@ -2249,7 +2951,9 @@ impl WebOrbitControls {
 }
 
 #[wasm_bindgen]
-pub struct WebTrackballControls { inner: crate::TrackballControls }
+pub struct WebTrackballControls {
+    inner: crate::TrackballControls,
+}
 #[wasm_bindgen]
 impl WebTrackballControls {
     #[wasm_bindgen(constructor)]
@@ -2258,10 +2962,28 @@ impl WebTrackballControls {
             CameraInner::Perspective(p) => p.clone(),
             _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
         };
-        WebTrackballControls { inner: crate::TrackballControls::new(&c) }
+        WebTrackballControls {
+            inner: crate::TrackballControls::new(&c),
+        }
     }
-    pub fn update(&mut self, camera: &mut WebCamera, dx: f32, dy: f32, wheel: f32, rotating: bool, panning: bool, w: f32, h: f32) {
-        let ev = crate::PointerEvent { dx, dy, wheel, rotating, panning };
+    pub fn update(
+        &mut self,
+        camera: &mut WebCamera,
+        dx: f32,
+        dy: f32,
+        wheel: f32,
+        rotating: bool,
+        panning: bool,
+        w: f32,
+        h: f32,
+    ) {
+        let ev = crate::PointerEvent {
+            dx,
+            dy,
+            wheel,
+            rotating,
+            panning,
+        };
         if let CameraInner::Perspective(c) = &mut camera.inner {
             self.inner.update(ev, c, (w, h));
         }
@@ -2269,7 +2991,9 @@ impl WebTrackballControls {
 }
 
 #[wasm_bindgen]
-pub struct WebArcballControls { inner: crate::ArcballControls }
+pub struct WebArcballControls {
+    inner: crate::ArcballControls,
+}
 #[wasm_bindgen]
 impl WebArcballControls {
     #[wasm_bindgen(constructor)]
@@ -2278,14 +3002,29 @@ impl WebArcballControls {
             CameraInner::Perspective(p) => p.clone(),
             _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
         };
-        WebArcballControls { inner: crate::ArcballControls::new(&c) }
+        WebArcballControls {
+            inner: crate::ArcballControls::new(&c),
+        }
     }
     #[wasm_bindgen(js_name = setTarget)]
     pub fn set_target(&mut self, x: f32, y: f32, z: f32) {
         self.inner.target = crate::Vector3::new(x, y, z);
     }
-    pub fn update(&mut self, camera: &mut WebCamera, ndc_x: f32, ndc_y: f32, wheel: f32, rotating: bool) {
-        let ev = crate::PointerEvent { dx: 0.0, dy: 0.0, wheel, rotating, panning: false };
+    pub fn update(
+        &mut self,
+        camera: &mut WebCamera,
+        ndc_x: f32,
+        ndc_y: f32,
+        wheel: f32,
+        rotating: bool,
+    ) {
+        let ev = crate::PointerEvent {
+            dx: 0.0,
+            dy: 0.0,
+            wheel,
+            rotating,
+            panning: false,
+        };
         let ndc = crate::Vector2::new(ndc_x, ndc_y);
         if let CameraInner::Perspective(c) = &mut camera.inner {
             self.inner.update(ndc, ev, c);
@@ -2294,7 +3033,9 @@ impl WebArcballControls {
 }
 
 #[wasm_bindgen]
-pub struct WebFirstPersonControls { inner: crate::FirstPersonControls }
+pub struct WebFirstPersonControls {
+    inner: crate::FirstPersonControls,
+}
 #[wasm_bindgen]
 impl WebFirstPersonControls {
     #[wasm_bindgen(constructor)]
@@ -2303,10 +3044,18 @@ impl WebFirstPersonControls {
             CameraInner::Perspective(p) => p.clone(),
             _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
         };
-        WebFirstPersonControls { inner: crate::FirstPersonControls::new(&c) }
+        WebFirstPersonControls {
+            inner: crate::FirstPersonControls::new(&c),
+        }
     }
     pub fn update(&mut self, camera: &mut WebCamera, dx: f32, dy: f32, dt: f32, rotating: bool) {
-        let ev = crate::PointerEvent { dx, dy, wheel: 0.0, rotating, panning: false };
+        let ev = crate::PointerEvent {
+            dx,
+            dy,
+            wheel: 0.0,
+            rotating,
+            panning: false,
+        };
         if let CameraInner::Perspective(c) = &mut camera.inner {
             self.inner.update(ev, c, dt);
         }
@@ -2318,7 +3067,9 @@ impl WebFirstPersonControls {
 }
 
 #[wasm_bindgen]
-pub struct WebPointerLockControls { inner: crate::PointerLockControls }
+pub struct WebPointerLockControls {
+    inner: crate::PointerLockControls,
+}
 #[wasm_bindgen]
 impl WebPointerLockControls {
     #[wasm_bindgen(constructor)]
@@ -2327,7 +3078,9 @@ impl WebPointerLockControls {
             CameraInner::Perspective(p) => p.clone(),
             _ => crate::PerspectiveCamera::new(60.0, 1.0, 0.1, 100.0),
         };
-        WebPointerLockControls { inner: crate::PointerLockControls::new(&c) }
+        WebPointerLockControls {
+            inner: crate::PointerLockControls::new(&c),
+        }
     }
 }
 
@@ -2336,42 +3089,58 @@ impl WebPointerLockControls {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebAxesHelper { obj: crate::core::Object3D }
+pub struct WebAxesHelper {
+    obj: crate::core::Object3D,
+}
 #[wasm_bindgen]
 impl WebAxesHelper {
     #[wasm_bindgen(constructor)]
     pub fn new(size: f32) -> WebAxesHelper {
-        WebAxesHelper { obj: crate::AxesHelper::new(size) }
+        WebAxesHelper {
+            obj: crate::AxesHelper::new(size),
+        }
     }
 }
 
 #[wasm_bindgen]
-pub struct WebGridHelper { obj: crate::core::Object3D }
+pub struct WebGridHelper {
+    obj: crate::core::Object3D,
+}
 #[wasm_bindgen]
 impl WebGridHelper {
     #[wasm_bindgen(constructor)]
     pub fn new(size: f32, divisions: usize, color1: u32, color2: u32) -> WebGridHelper {
-        WebGridHelper { obj: crate::GridHelper::new_from_hex(size, divisions, color1, color2) }
+        WebGridHelper {
+            obj: crate::GridHelper::new_from_hex(size, divisions, color1, color2),
+        }
     }
 }
 
 #[wasm_bindgen]
-pub struct WebBoxHelper { obj: crate::core::Object3D }
+pub struct WebBoxHelper {
+    obj: crate::core::Object3D,
+}
 #[wasm_bindgen]
 impl WebBoxHelper {
     #[wasm_bindgen(constructor)]
     pub fn new(bb: &WebBox3) -> WebBoxHelper {
-        WebBoxHelper { obj: crate::BoxHelper::new(&bb.inner, crate::Color::WHITE) }
+        WebBoxHelper {
+            obj: crate::BoxHelper::new(&bb.inner, crate::Color::WHITE),
+        }
     }
 }
 
 #[wasm_bindgen]
-pub struct WebPolarGridHelper { obj: crate::core::Object3D }
+pub struct WebPolarGridHelper {
+    obj: crate::core::Object3D,
+}
 #[wasm_bindgen]
 impl WebPolarGridHelper {
     #[wasm_bindgen(constructor)]
     pub fn new(radius: f32, segments: usize, circles: usize) -> WebPolarGridHelper {
-        WebPolarGridHelper { obj: crate::PolarGridHelper::default_(radius, segments, circles) }
+        WebPolarGridHelper {
+            obj: crate::PolarGridHelper::default_(radius, segments, circles),
+        }
     }
 }
 
@@ -2379,8 +3148,16 @@ impl WebPolarGridHelper {
 impl WebScene {
     /// Add a helper as a scene-graph child (returns its handle for later removal).
     #[wasm_bindgen(js_name = addHelper)]
-    pub fn add_helper(&mut self, axes: Option<WebAxesHelper>, grid: Option<WebGridHelper>) -> WebObjectHandle {
-        let obj = if let Some(a) = axes { a.obj } else if let Some(g) = grid { g.obj } else {
+    pub fn add_helper(
+        &mut self,
+        axes: Option<WebAxesHelper>,
+        grid: Option<WebGridHelper>,
+    ) -> WebObjectHandle {
+        let obj = if let Some(a) = axes {
+            a.obj
+        } else if let Some(g) = grid {
+            g.obj
+        } else {
             crate::core::Object3D::group()
         };
         let id = self.inner.add(obj);
@@ -2397,9 +3174,13 @@ pub struct WebObjLoader;
 #[wasm_bindgen]
 impl WebObjLoader {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebObjLoader { WebObjLoader }
+    pub fn new() -> WebObjLoader {
+        WebObjLoader
+    }
     pub fn parse(&self, src: &str) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::ObjLoader::parse(src)) }
+        WebGeometry {
+            inner: Arc::new(crate::ObjLoader::parse(src)),
+        }
     }
 }
 
@@ -2408,9 +3189,13 @@ pub struct WebStlLoader;
 #[wasm_bindgen]
 impl WebStlLoader {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebStlLoader { WebStlLoader }
+    pub fn new() -> WebStlLoader {
+        WebStlLoader
+    }
     pub fn parse(&self, bytes: Vec<u8>) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::StlLoader::parse(&bytes)) }
+        WebGeometry {
+            inner: Arc::new(crate::StlLoader::parse(&bytes)),
+        }
     }
 }
 
@@ -2419,9 +3204,13 @@ pub struct WebPlyLoader;
 #[wasm_bindgen]
 impl WebPlyLoader {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebPlyLoader { WebPlyLoader }
+    pub fn new() -> WebPlyLoader {
+        WebPlyLoader
+    }
     pub fn parse(&self, bytes: Vec<u8>) -> WebGeometry {
-        WebGeometry { inner: Arc::new(crate::PlyLoader::parse(&bytes)) }
+        WebGeometry {
+            inner: Arc::new(crate::PlyLoader::parse(&bytes)),
+        }
     }
 }
 
@@ -2430,7 +3219,9 @@ pub struct WebHdrLoader;
 #[wasm_bindgen]
 impl WebHdrLoader {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebHdrLoader { WebHdrLoader }
+    pub fn new() -> WebHdrLoader {
+        WebHdrLoader
+    }
     pub fn parse(&self, bytes: Vec<u8>) -> Result<WebTexture, JsValue> {
         crate::HdrLoader::parse(&bytes)
             .map(|t| WebTexture { inner: Arc::new(t) })
@@ -2443,7 +3234,9 @@ pub struct WebFbxLoader;
 #[wasm_bindgen]
 impl WebFbxLoader {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebFbxLoader { WebFbxLoader }
+    pub fn new() -> WebFbxLoader {
+        WebFbxLoader
+    }
     pub fn parse(&self, bytes: Vec<u8>) -> Result<WebGeometry, JsValue> {
         crate::FbxLoader::parse(&bytes)
             .map(|g| WebGeometry { inner: Arc::new(g) })
@@ -2456,7 +3249,9 @@ pub struct WebColladaLoader;
 #[wasm_bindgen]
 impl WebColladaLoader {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebColladaLoader { WebColladaLoader }
+    pub fn new() -> WebColladaLoader {
+        WebColladaLoader
+    }
     pub fn parse(&self, src: &str) -> Result<WebGeometry, JsValue> {
         crate::ColladaLoader::parse(src)
             .map(|g| WebGeometry { inner: Arc::new(g) })
@@ -2469,7 +3264,9 @@ pub struct WebExrLoader;
 #[wasm_bindgen]
 impl WebExrLoader {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebExrLoader { WebExrLoader }
+    pub fn new() -> WebExrLoader {
+        WebExrLoader
+    }
     pub fn parse(&self, bytes: Vec<u8>) -> Result<WebTexture, JsValue> {
         crate::ExrLoader::parse(&bytes)
             .map(|t| WebTexture { inner: Arc::new(t) })
@@ -2482,27 +3279,49 @@ impl WebExrLoader {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebAudioListener { inner: crate::AudioListener }
+pub struct WebAudioListener {
+    inner: crate::AudioListener,
+}
 #[wasm_bindgen]
 impl WebAudioListener {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebAudioListener { WebAudioListener { inner: crate::AudioListener::default() } }
+    pub fn new() -> WebAudioListener {
+        WebAudioListener {
+            inner: crate::AudioListener::default(),
+        }
+    }
     #[wasm_bindgen(js_name = setMasterVolume)]
-    pub fn set_master_volume(&mut self, v: f32) { self.inner.master_volume = v; }
+    pub fn set_master_volume(&mut self, v: f32) {
+        self.inner.master_volume = v;
+    }
 }
 
 #[wasm_bindgen]
-pub struct WebAudio { inner: crate::Audio }
+pub struct WebAudio {
+    inner: crate::Audio,
+}
 #[wasm_bindgen]
 impl WebAudio {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebAudio { WebAudio { inner: crate::Audio::default() } }
+    pub fn new() -> WebAudio {
+        WebAudio {
+            inner: crate::Audio::default(),
+        }
+    }
     #[wasm_bindgen(js_name = setVolume)]
-    pub fn set_volume(&mut self, v: f32) { self.inner.volume = v; }
+    pub fn set_volume(&mut self, v: f32) {
+        self.inner.volume = v;
+    }
     #[wasm_bindgen(js_name = setLoop)]
-    pub fn set_loop(&mut self, l: bool) { self.inner.loop_ = l; }
-    pub fn play(&mut self) { self.inner.playing = true; }
-    pub fn stop(&mut self) { self.inner.playing = false; }
+    pub fn set_loop(&mut self, l: bool) {
+        self.inner.loop_ = l;
+    }
+    pub fn play(&mut self) {
+        self.inner.playing = true;
+    }
+    pub fn stop(&mut self) {
+        self.inner.playing = false;
+    }
 }
 
 // ======================================================================
@@ -2517,7 +3336,9 @@ impl WebEffectComposer {
     /// builds one internally with the renderer. Use `renderer.composer()`
     /// to obtain a composer bound to the same surface.
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebEffectComposer { WebEffectComposer }
+    pub fn new() -> WebEffectComposer {
+        WebEffectComposer
+    }
 }
 
 #[wasm_bindgen]
@@ -2525,7 +3346,9 @@ pub struct WebRenderPass;
 #[wasm_bindgen]
 impl WebRenderPass {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebRenderPass { WebRenderPass }
+    pub fn new() -> WebRenderPass {
+        WebRenderPass
+    }
 }
 
 #[wasm_bindgen]
@@ -2533,7 +3356,9 @@ pub struct WebBloomPass;
 #[wasm_bindgen]
 impl WebBloomPass {
     #[wasm_bindgen(constructor)]
-    pub fn new(_strength: f32, _radius: f32, _threshold: f32) -> WebBloomPass { WebBloomPass }
+    pub fn new(_strength: f32, _radius: f32, _threshold: f32) -> WebBloomPass {
+        WebBloomPass
+    }
 }
 
 #[wasm_bindgen]
@@ -2541,7 +3366,9 @@ pub struct WebFxaaPass;
 #[wasm_bindgen]
 impl WebFxaaPass {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebFxaaPass { WebFxaaPass }
+    pub fn new() -> WebFxaaPass {
+        WebFxaaPass
+    }
 }
 
 // ======================================================================
@@ -2549,14 +3376,20 @@ impl WebFxaaPass {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebOctree { inner: crate::Octree }
+pub struct WebOctree {
+    inner: crate::Octree,
+}
 #[wasm_bindgen]
 impl WebOctree {
     #[wasm_bindgen(constructor)]
     pub fn new(bb: &WebBox3, max_depth: u32, max_points: usize) -> WebOctree {
-        WebOctree { inner: crate::Octree::new(bb.inner, max_depth, max_points) }
+        WebOctree {
+            inner: crate::Octree::new(bb.inner, max_depth, max_points),
+        }
     }
-    pub fn insert(&mut self, p: &WebVector3) { self.inner.insert(p.inner); }
+    pub fn insert(&mut self, p: &WebVector3) {
+        self.inner.insert(p.inner);
+    }
 }
 
 #[wasm_bindgen]
@@ -2564,8 +3397,12 @@ pub struct WebSimplexNoise;
 #[wasm_bindgen]
 impl WebSimplexNoise {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebSimplexNoise { WebSimplexNoise }
-    pub fn noise2(&self, x: f32, y: f32) -> f32 { crate::SimplexNoise::noise2(x, y) }
+    pub fn new() -> WebSimplexNoise {
+        WebSimplexNoise
+    }
+    pub fn noise2(&self, x: f32, y: f32) -> f32 {
+        crate::SimplexNoise::noise2(x, y)
+    }
 }
 
 #[wasm_bindgen]
@@ -2573,7 +3410,9 @@ pub struct WebMarchingCubes;
 #[wasm_bindgen]
 impl WebMarchingCubes {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebMarchingCubes { WebMarchingCubes }
+    pub fn new() -> WebMarchingCubes {
+        WebMarchingCubes
+    }
 }
 
 // ======================================================================
@@ -2581,19 +3420,31 @@ impl WebMarchingCubes {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebCss2dRenderer { inner: crate::Css2dRenderer }
+pub struct WebCss2dRenderer {
+    inner: crate::Css2dRenderer,
+}
 #[wasm_bindgen]
 impl WebCss2dRenderer {
     #[wasm_bindgen(constructor)]
-    pub fn new(w: u32, h: u32) -> WebCss2dRenderer { WebCss2dRenderer { inner: crate::Css2dRenderer::new(w, h) } }
+    pub fn new(w: u32, h: u32) -> WebCss2dRenderer {
+        WebCss2dRenderer {
+            inner: crate::Css2dRenderer::new(w, h),
+        }
+    }
 }
 
 #[wasm_bindgen]
-pub struct WebSvgRenderer { inner: crate::SvgRenderer }
+pub struct WebSvgRenderer {
+    inner: crate::SvgRenderer,
+}
 #[wasm_bindgen]
 impl WebSvgRenderer {
     #[wasm_bindgen(constructor)]
-    pub fn new(w: u32, h: u32) -> WebSvgRenderer { WebSvgRenderer { inner: crate::SvgRenderer::new(w, h) } }
+    pub fn new(w: u32, h: u32) -> WebSvgRenderer {
+        WebSvgRenderer {
+            inner: crate::SvgRenderer::new(w, h),
+        }
+    }
     #[wasm_bindgen(js_name = renderToString)]
     pub fn render_to_string(&self, scene: &mut WebScene, camera: &WebCamera) -> String {
         match &camera.inner {
@@ -2608,17 +3459,31 @@ impl WebSvgRenderer {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebStats { inner: crate::Stats }
+pub struct WebStats {
+    inner: crate::Stats,
+}
 #[wasm_bindgen]
 impl WebStats {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebStats { WebStats { inner: crate::Stats::new() } }
-    pub fn begin(&mut self) { self.inner.begin(); }
-    pub fn end(&mut self) { self.inner.end(); }
+    pub fn new() -> WebStats {
+        WebStats {
+            inner: crate::Stats::new(),
+        }
+    }
+    pub fn begin(&mut self) {
+        self.inner.begin();
+    }
+    pub fn end(&mut self) {
+        self.inner.end();
+    }
     #[wasm_bindgen(getter)]
-    pub fn fps(&self) -> f32 { self.inner.fps }
+    pub fn fps(&self) -> f32 {
+        self.inner.fps
+    }
     #[wasm_bindgen(js_name = frameMs, getter)]
-    pub fn frame_ms(&self) -> f32 { self.inner.frame_ms }
+    pub fn frame_ms(&self) -> f32 {
+        self.inner.frame_ms
+    }
 }
 
 // ======================================================================
@@ -2626,16 +3491,26 @@ impl WebStats {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebRaycaster { inner: crate::Raycaster }
+pub struct WebRaycaster {
+    inner: crate::Raycaster,
+}
 #[wasm_bindgen]
 impl WebRaycaster {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebRaycaster { WebRaycaster { inner: crate::Raycaster::default() } }
+    pub fn new() -> WebRaycaster {
+        WebRaycaster {
+            inner: crate::Raycaster::default(),
+        }
+    }
     #[wasm_bindgen(js_name = setFromCamera)]
     pub fn set_from_camera(&mut self, ndc_x: f32, ndc_y: f32, camera: &WebCamera) {
         match &camera.inner {
-            CameraInner::Perspective(c) => self.inner.set_from_camera_perspective(crate::Vector2::new(ndc_x, ndc_y), c),
-            CameraInner::Orthographic(c) => self.inner.set_from_camera_ortho(crate::Vector2::new(ndc_x, ndc_y), c),
+            CameraInner::Perspective(c) => self
+                .inner
+                .set_from_camera_perspective(crate::Vector2::new(ndc_x, ndc_y), c),
+            CameraInner::Orthographic(c) => self
+                .inner
+                .set_from_camera_ortho(crate::Vector2::new(ndc_x, ndc_y), c),
         }
     }
 }
@@ -2645,15 +3520,25 @@ impl WebRaycaster {
 // ======================================================================
 
 #[wasm_bindgen]
-pub struct WebClock { inner: crate::Clock }
+pub struct WebClock {
+    inner: crate::Clock,
+}
 #[wasm_bindgen]
 impl WebClock {
     #[wasm_bindgen(constructor)]
-    pub fn new() -> WebClock { WebClock { inner: crate::Clock::new(true) } }
+    pub fn new() -> WebClock {
+        WebClock {
+            inner: crate::Clock::new(true),
+        }
+    }
     #[wasm_bindgen(js_name = getDelta)]
-    pub fn get_delta(&mut self) -> f64 { self.inner.get_delta() }
+    pub fn get_delta(&mut self) -> f64 {
+        self.inner.get_delta()
+    }
     #[wasm_bindgen(js_name = getElapsedTime)]
-    pub fn get_elapsed_time(&mut self) -> f64 { self.inner.get_elapsed_time() }
+    pub fn get_elapsed_time(&mut self) -> f64 {
+        self.inner.get_elapsed_time()
+    }
 }
 
 // ======================================================================
@@ -2671,7 +3556,9 @@ impl WebObject3D {
     /// Empty group — three.js `new Group()` / `new Object3D()`.
     #[wasm_bindgen(constructor)]
     pub fn new() -> WebObject3D {
-        WebObject3D { inner: Some(crate::core::Object3D::group()) }
+        WebObject3D {
+            inner: Some(crate::core::Object3D::group()),
+        }
     }
 }
 
@@ -2680,8 +3567,13 @@ impl WebScene {
     /// Add a generic Object3D (group, helper, etc.) to the scene.
     #[wasm_bindgen(js_name = addObject)]
     pub fn add_object(&mut self, obj: &mut WebObject3D) -> WebObjectHandle {
-        let o = obj.inner.take().unwrap_or_else(crate::core::Object3D::group);
-        WebObjectHandle { id: self.inner.add(o) }
+        let o = obj
+            .inner
+            .take()
+            .unwrap_or_else(crate::core::Object3D::group);
+        WebObjectHandle {
+            id: self.inner.add(o),
+        }
     }
 
     /// Remove an object from the scene (by handle).
@@ -2697,18 +3589,14 @@ impl WebScene {
             match &mut obj.kind {
                 crate::core::ObjectKind::Mesh(mesh) => {
                     let mut new_geom = (*mesh.geometry).clone();
-                    new_geom.set_attribute(
-                        "position",
-                        crate::core::BufferAttribute::new(positions, 3),
-                    );
+                    new_geom
+                        .set_attribute("position", crate::core::BufferAttribute::new(positions, 3));
                     mesh.geometry = std::sync::Arc::new(new_geom);
                 }
                 crate::core::ObjectKind::SkinnedMesh(sm) => {
                     let mut new_geom = (*sm.geometry).clone();
-                    new_geom.set_attribute(
-                        "position",
-                        crate::core::BufferAttribute::new(positions, 3),
-                    );
+                    new_geom
+                        .set_attribute("position", crate::core::BufferAttribute::new(positions, 3));
                     sm.geometry = std::sync::Arc::new(new_geom);
                 }
                 _ => {}
@@ -2722,10 +3610,7 @@ impl WebScene {
         if let Some(obj) = self.inner.arena.get_mut(handle.id) {
             if let crate::core::ObjectKind::Mesh(mesh) = &mut obj.kind {
                 let mut new_geom = (*mesh.geometry).clone();
-                new_geom.set_attribute(
-                    "normal",
-                    crate::core::BufferAttribute::new(normals, 3),
-                );
+                new_geom.set_attribute("normal", crate::core::BufferAttribute::new(normals, 3));
                 mesh.geometry = std::sync::Arc::new(new_geom);
             }
         }
@@ -2744,7 +3629,9 @@ impl WebScene {
                 for i in 0..mat_count {
                     let mut e = [0.0_f32; 16];
                     e.copy_from_slice(&matrices[i * 16..(i + 1) * 16]);
-                    new_skel.bone_matrices.push(crate::math::Matrix4 { elements: e });
+                    new_skel
+                        .bone_matrices
+                        .push(crate::math::Matrix4 { elements: e });
                 }
                 sm.skeleton = std::sync::Arc::new(new_skel);
             }
@@ -2757,10 +3644,7 @@ impl WebScene {
         if let Some(obj) = self.inner.arena.get_mut(handle.id) {
             if let crate::core::ObjectKind::SkinnedMesh(sm) = &mut obj.kind {
                 let mut new_geom = (*sm.geometry).clone();
-                new_geom.set_attribute(
-                    "joint",
-                    crate::core::BufferAttribute::new(joints, 4),
-                );
+                new_geom.set_attribute("joint", crate::core::BufferAttribute::new(joints, 4));
                 sm.geometry = std::sync::Arc::new(new_geom);
             }
         }
@@ -2772,10 +3656,7 @@ impl WebScene {
         if let Some(obj) = self.inner.arena.get_mut(handle.id) {
             if let crate::core::ObjectKind::SkinnedMesh(sm) = &mut obj.kind {
                 let mut new_geom = (*sm.geometry).clone();
-                new_geom.set_attribute(
-                    "weight",
-                    crate::core::BufferAttribute::new(weights, 4),
-                );
+                new_geom.set_attribute("weight", crate::core::BufferAttribute::new(weights, 4));
                 sm.geometry = std::sync::Arc::new(new_geom);
             }
         }
@@ -2785,7 +3666,10 @@ impl WebScene {
     #[wasm_bindgen(js_name = getObjectByName)]
     pub fn get_object_by_name(&self, name: &str) -> Option<WebObjectHandle> {
         let root = self.inner.root;
-        self.inner.arena.get_object_by_name(root, name).map(|id| WebObjectHandle { id })
+        self.inner
+            .arena
+            .get_object_by_name(root, name)
+            .map(|id| WebObjectHandle { id })
     }
 
     /// Set a name on the object identified by `handle`.
@@ -2839,7 +3723,11 @@ impl WebScene {
     #[wasm_bindgen(js_name = getWorldPosition)]
     pub fn get_world_position(&mut self, handle: &WebObjectHandle) -> WebVector3 {
         self.inner.update_world();
-        let p = self.inner.get(handle.id).map(|o| o.world_position()).unwrap_or(crate::Vector3::ZERO);
+        let p = self
+            .inner
+            .get(handle.id)
+            .map(|o| o.world_position())
+            .unwrap_or(crate::Vector3::ZERO);
         WebVector3 { inner: p }
     }
 }
@@ -2863,20 +3751,28 @@ impl WebVector3 {
         self.inner = self.inner * s;
         WebVector3 { inner: self.inner }
     }
-    pub fn length(&self) -> f32 { self.inner.length() }
+    pub fn length(&self) -> f32 {
+        self.inner.length()
+    }
     #[wasm_bindgen(js_name = lengthSq)]
-    pub fn length_sq(&self) -> f32 { self.inner.length_sq() }
+    pub fn length_sq(&self) -> f32 {
+        self.inner.length_sq()
+    }
     pub fn normalize(&mut self) -> WebVector3 {
         self.inner = self.inner.normalize();
         WebVector3 { inner: self.inner }
     }
-    pub fn dot(&self, o: &WebVector3) -> f32 { self.inner.dot(o.inner) }
+    pub fn dot(&self, o: &WebVector3) -> f32 {
+        self.inner.dot(o.inner)
+    }
     pub fn cross(&mut self, o: &WebVector3) -> WebVector3 {
         self.inner = self.inner.cross(o.inner);
         WebVector3 { inner: self.inner }
     }
     #[wasm_bindgen(js_name = distanceTo)]
-    pub fn distance_to(&self, o: &WebVector3) -> f32 { self.inner.distance_to(o.inner) }
+    pub fn distance_to(&self, o: &WebVector3) -> f32 {
+        self.inner.distance_to(o.inner)
+    }
     pub fn lerp(&mut self, o: &WebVector3, t: f32) -> WebVector3 {
         self.inner = self.inner.lerp(o.inner, t);
         WebVector3 { inner: self.inner }
@@ -2896,9 +3792,15 @@ impl WebVector3 {
 
 #[wasm_bindgen]
 impl WebColor {
-    pub fn r(&self) -> f32 { self.inner.r }
-    pub fn g(&self) -> f32 { self.inner.g }
-    pub fn b(&self) -> f32 { self.inner.b }
+    pub fn r(&self) -> f32 {
+        self.inner.r
+    }
+    pub fn g(&self) -> f32 {
+        self.inner.g
+    }
+    pub fn b(&self) -> f32 {
+        self.inner.b
+    }
     #[wasm_bindgen(js_name = setRGB)]
     pub fn set_rgb(&mut self, r: f32, g: f32, b: f32) -> WebColor {
         self.inner = crate::Color::new(r, g, b);
@@ -2933,43 +3835,63 @@ impl WebMatrix4 {
     }
     #[wasm_bindgen(js_name = makeTranslation)]
     pub fn make_translation(x: f32, y: f32, z: f32) -> WebMatrix4 {
-        WebMatrix4 { inner: crate::Matrix4::translation(crate::Vector3::new(x, y, z)) }
+        WebMatrix4 {
+            inner: crate::Matrix4::translation(crate::Vector3::new(x, y, z)),
+        }
     }
     #[wasm_bindgen(js_name = makeScale)]
     pub fn make_scale(x: f32, y: f32, z: f32) -> WebMatrix4 {
-        WebMatrix4 { inner: crate::Matrix4::scale(crate::Vector3::new(x, y, z)) }
+        WebMatrix4 {
+            inner: crate::Matrix4::scale(crate::Vector3::new(x, y, z)),
+        }
     }
     #[wasm_bindgen(js_name = lookAt)]
     pub fn look_at(eye: &WebVector3, target: &WebVector3, up: &WebVector3) -> WebMatrix4 {
-        WebMatrix4 { inner: crate::Matrix4::look_at(eye.inner, target.inner, up.inner) }
+        WebMatrix4 {
+            inner: crate::Matrix4::look_at(eye.inner, target.inner, up.inner),
+        }
     }
-    pub fn determinant(&self) -> f32 { self.inner.determinant() }
+    pub fn determinant(&self) -> f32 {
+        self.inner.determinant()
+    }
 }
 
 #[wasm_bindgen]
 impl WebQuaternion {
     pub fn normalize(&mut self) -> WebQuaternion {
         let q = crate::Quaternion::new(self.x, self.y, self.z, self.w).normalize();
-        self.x = q.x; self.y = q.y; self.z = q.z; self.w = q.w;
+        self.x = q.x;
+        self.y = q.y;
+        self.z = q.z;
+        self.w = q.w;
         *self
     }
     pub fn invert(&mut self) -> WebQuaternion {
         let q = crate::Quaternion::new(self.x, self.y, self.z, self.w).invert();
-        self.x = q.x; self.y = q.y; self.z = q.z; self.w = q.w;
+        self.x = q.x;
+        self.y = q.y;
+        self.z = q.z;
+        self.w = q.w;
         *self
     }
     pub fn multiply(&mut self, o: &WebQuaternion) -> WebQuaternion {
         let a = crate::Quaternion::new(self.x, self.y, self.z, self.w);
         let b = crate::Quaternion::new(o.x, o.y, o.z, o.w);
         let c = a.multiply(b);
-        self.x = c.x; self.y = c.y; self.z = c.z; self.w = c.w;
+        self.x = c.x;
+        self.y = c.y;
+        self.z = c.z;
+        self.w = c.w;
         *self
     }
     pub fn slerp(&mut self, o: &WebQuaternion, t: f32) -> WebQuaternion {
         let a = crate::Quaternion::new(self.x, self.y, self.z, self.w);
         let b = crate::Quaternion::new(o.x, o.y, o.z, o.w);
         let c = a.slerp(b, t);
-        self.x = c.x; self.y = c.y; self.z = c.z; self.w = c.w;
+        self.x = c.x;
+        self.y = c.y;
+        self.z = c.z;
+        self.w = c.w;
         *self
     }
     pub fn dot(&self, o: &WebQuaternion) -> f32 {
@@ -2980,7 +3902,10 @@ impl WebQuaternion {
     #[wasm_bindgen(js_name = setFromAxisAngle)]
     pub fn set_from_axis_angle(&mut self, axis: &WebVector3, angle: f32) -> WebQuaternion {
         let q = crate::Quaternion::from_axis_angle(axis.inner, angle);
-        self.x = q.x; self.y = q.y; self.z = q.z; self.w = q.w;
+        self.x = q.x;
+        self.y = q.y;
+        self.z = q.z;
+        self.w = q.w;
         *self
     }
 }
@@ -2994,20 +3919,32 @@ pub struct WebMathUtils;
 
 #[wasm_bindgen]
 impl WebMathUtils {
-    pub fn clamp(v: f32, min: f32, max: f32) -> f32 { v.clamp(min, max) }
-    pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + (b - a) * t }
+    pub fn clamp(v: f32, min: f32, max: f32) -> f32 {
+        v.clamp(min, max)
+    }
+    pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
+        a + (b - a) * t
+    }
     #[wasm_bindgen(js_name = degToRad)]
-    pub fn deg_to_rad(d: f32) -> f32 { d.to_radians() }
+    pub fn deg_to_rad(d: f32) -> f32 {
+        d.to_radians()
+    }
     #[wasm_bindgen(js_name = radToDeg)]
-    pub fn rad_to_deg(r: f32) -> f32 { r.to_degrees() }
+    pub fn rad_to_deg(r: f32) -> f32 {
+        r.to_degrees()
+    }
     #[wasm_bindgen(js_name = mapLinear)]
     pub fn map_linear(x: f32, a1: f32, a2: f32, b1: f32, b2: f32) -> f32 {
         b1 + (x - a1) * (b2 - b1) / (a2 - a1)
     }
     #[wasm_bindgen(js_name = smoothstep)]
     pub fn smoothstep(x: f32, min: f32, max: f32) -> f32 {
-        if x <= min { return 0.0; }
-        if x >= max { return 1.0; }
+        if x <= min {
+            return 0.0;
+        }
+        if x >= max {
+            return 1.0;
+        }
         let t = (x - min) / (max - min);
         t * t * (3.0 - 2.0 * t)
     }
@@ -3016,7 +3953,9 @@ impl WebMathUtils {
         ((n % m) + m) % m
     }
     #[wasm_bindgen(js_name = isPowerOfTwo)]
-    pub fn is_power_of_two(n: u32) -> bool { n != 0 && (n & (n - 1)) == 0 }
+    pub fn is_power_of_two(n: u32) -> bool {
+        n != 0 && (n & (n - 1)) == 0
+    }
 }
 
 // ======================================================================
@@ -3032,12 +3971,20 @@ pub struct WebBufferAttribute {
 impl WebBufferAttribute {
     #[wasm_bindgen(constructor)]
     pub fn new(array: Vec<f32>, item_size: usize) -> WebBufferAttribute {
-        WebBufferAttribute { inner: crate::BufferAttribute::new(array, item_size) }
+        WebBufferAttribute {
+            inner: crate::BufferAttribute::new(array, item_size),
+        }
     }
-    pub fn count(&self) -> usize { self.inner.count() }
+    pub fn count(&self) -> usize {
+        self.inner.count()
+    }
     #[wasm_bindgen(js_name = itemSize, getter)]
-    pub fn item_size(&self) -> usize { self.inner.item_size }
-    pub fn array(&self) -> Vec<f32> { self.inner.array.clone() }
+    pub fn item_size(&self) -> usize {
+        self.inner.item_size
+    }
+    pub fn array(&self) -> Vec<f32> {
+        self.inner.array.clone()
+    }
 }
 
 #[wasm_bindgen]
@@ -3049,7 +3996,9 @@ pub struct WebBufferGeometry {
 impl WebBufferGeometry {
     #[wasm_bindgen(constructor)]
     pub fn new() -> WebBufferGeometry {
-        WebBufferGeometry { inner: Arc::new(crate::BufferGeometry::new()) }
+        WebBufferGeometry {
+            inner: Arc::new(crate::BufferGeometry::new()),
+        }
     }
     #[wasm_bindgen(js_name = setAttribute)]
     pub fn set_attribute(&mut self, name: &str, attr: WebBufferAttribute) {
@@ -3061,11 +4010,15 @@ impl WebBufferGeometry {
     }
     #[wasm_bindgen(js_name = computeBoundingBox)]
     pub fn compute_bounding_box(&mut self) -> WebBox3 {
-        WebBox3 { inner: Arc::make_mut(&mut self.inner).compute_bounding_box() }
+        WebBox3 {
+            inner: Arc::make_mut(&mut self.inner).compute_bounding_box(),
+        }
     }
     #[wasm_bindgen(js_name = computeBoundingSphere)]
     pub fn compute_bounding_sphere(&mut self) -> WebSphere {
-        WebSphere { inner: Arc::make_mut(&mut self.inner).compute_bounding_sphere() }
+        WebSphere {
+            inner: Arc::make_mut(&mut self.inner).compute_bounding_sphere(),
+        }
     }
     #[wasm_bindgen(js_name = computeVertexNormals)]
     pub fn compute_vertex_normals(&mut self) {
@@ -3076,7 +4029,9 @@ impl WebBufferGeometry {
         self.inner.get_attribute(name).is_some()
     }
     #[wasm_bindgen(js_name = drawCount)]
-    pub fn draw_count(&self) -> usize { self.inner.draw_count() }
+    pub fn draw_count(&self) -> usize {
+        self.inner.draw_count()
+    }
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "mesh-bvh"))]
@@ -3131,7 +4086,15 @@ impl WebMeshBvh {
         max_depth: u32,
         max_leaf_tris: u32,
     ) -> Result<WebMeshBvh, JsValue> {
-        Self::new_with_options_full(geometry, max_depth, max_leaf_tris, crate::mesh_bvh::CENTER, 0, 0, false)
+        Self::new_with_options_full(
+            geometry,
+            max_depth,
+            max_leaf_tris,
+            crate::mesh_bvh::CENTER,
+            0,
+            0,
+            false,
+        )
     }
 
     #[wasm_bindgen(js_name = newWithOptionsFull)]
@@ -3154,7 +4117,9 @@ impl WebMeshBvh {
         };
         let bvh = crate::mesh_bvh::MeshBvh::build(&geometry.inner, options)
             .ok_or_else(|| JsValue::from_str("failed to build MeshBVH"))?;
-        Ok(WebMeshBvh { inner: Arc::new(bvh) })
+        Ok(WebMeshBvh {
+            inner: Arc::new(bvh),
+        })
     }
 
     /// Packed hits: per entry `[distance, px, py, pz, face_index, u, v]`.
@@ -3203,7 +4168,10 @@ impl WebMeshBvh {
 
     #[wasm_bindgen(js_name = resolveTriangleIndex)]
     pub fn resolve_triangle_index(&self, bvh_triangle_index: u32) -> i32 {
-        match self.inner.resolve_triangle_index(bvh_triangle_index as usize) {
+        match self
+            .inner
+            .resolve_triangle_index(bvh_triangle_index as usize)
+        {
             Some(i) => i as i32,
             None => -1,
         }
@@ -3229,7 +4197,9 @@ impl WebMeshBvh {
 
     #[wasm_bindgen(js_name = getBoundingBox)]
     pub fn get_bounding_box(&self) -> WebBox3 {
-        WebBox3 { inner: self.inner.bounding_box() }
+        WebBox3 {
+            inner: self.inner.bounding_box(),
+        }
     }
 
     #[wasm_bindgen(js_name = nodeBuffer)]
@@ -3262,7 +4232,11 @@ impl WebMeshBvh {
 
     #[wasm_bindgen(js_name = triangleOrder)]
     pub fn triangle_order(&self) -> Vec<u32> {
-        self.inner.triangle_order().iter().map(|&i| i as u32).collect()
+        self.inner
+            .triangle_order()
+            .iter()
+            .map(|&i| i as u32)
+            .collect()
     }
 
     #[wasm_bindgen(js_name = refit)]
@@ -3271,7 +4245,15 @@ impl WebMeshBvh {
     }
 
     #[wasm_bindgen(js_name = intersectsBox)]
-    pub fn intersects_box(&self, min_x: f32, min_y: f32, min_z: f32, max_x: f32, max_y: f32, max_z: f32) -> bool {
+    pub fn intersects_box(
+        &self,
+        min_x: f32,
+        min_y: f32,
+        min_z: f32,
+        max_x: f32,
+        max_y: f32,
+        max_z: f32,
+    ) -> bool {
         let b = crate::Box3::new(
             crate::Vector3::new(min_x, min_y, min_z),
             crate::Vector3::new(max_x, max_y, max_z),
@@ -3288,7 +4270,9 @@ impl WebMeshBvh {
     /// Closest point: `[px, py, pz, distance, face_index]`.
     #[wasm_bindgen(js_name = closestPointToPoint)]
     pub fn closest_point_to_point(&self, px: f32, py: f32, pz: f32) -> Vec<f32> {
-        let (point, dist, tri) = self.inner.closest_point_to_point(crate::Vector3::new(px, py, pz));
+        let (point, dist, tri) = self
+            .inner
+            .closest_point_to_point(crate::Vector3::new(px, py, pz));
         vec![point.x, point.y, point.z, dist, tri as f32]
     }
 
@@ -3322,7 +4306,9 @@ impl WebMeshBvh {
         };
         let bvh = crate::mesh_bvh::MeshBvh::deserialize(data)
             .ok_or_else(|| JsValue::from_str("failed to deserialize MeshBVH"))?;
-        Ok(WebMeshBvh { inner: Arc::new(bvh) })
+        Ok(WebMeshBvh {
+            inner: Arc::new(bvh),
+        })
     }
 }
 
@@ -3350,7 +4336,14 @@ impl WebBufferGeometry {
         max_depth: u32,
         max_leaf_tris: u32,
     ) -> Result<WebMeshBvh, JsValue> {
-        self.compute_bounds_tree_full(max_depth, max_leaf_tris, crate::mesh_bvh::CENTER, 0, 0, false)
+        self.compute_bounds_tree_full(
+            max_depth,
+            max_leaf_tris,
+            crate::mesh_bvh::CENTER,
+            0,
+            0,
+            false,
+        )
     }
 
     #[wasm_bindgen(js_name = computeBoundsTreeFull)]
@@ -3397,5 +4390,7 @@ pub fn merge_geometries(geometries: Vec<WebBufferGeometry>) -> Result<WebBufferG
     let refs: Vec<crate::BufferGeometry> = geometries.iter().map(|g| (*g.inner).clone()).collect();
     let merged = crate::merge_geometries(&refs)
         .ok_or_else(|| JsValue::from_str("mergeGeometries: incompatible geometries"))?;
-    Ok(WebBufferGeometry { inner: Arc::new(merged) })
+    Ok(WebBufferGeometry {
+        inner: Arc::new(merged),
+    })
 }

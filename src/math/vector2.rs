@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub, Mul, Neg};
+use std::ops::{Add, Mul, Neg, Sub};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vector2 {
@@ -15,7 +15,8 @@ impl Vector2 {
     }
 
     pub fn set(&mut self, x: f32, y: f32) -> &mut Self {
-        self.x = x; self.y = y;
+        self.x = x;
+        self.y = y;
         self
     }
 
@@ -29,7 +30,11 @@ impl Vector2 {
 
     pub fn normalize(&self) -> Self {
         let len = self.length();
-        if len == 0.0 { Self::ZERO } else { *self * (1.0 / len) }
+        if len == 0.0 {
+            Self::ZERO
+        } else {
+            *self * (1.0 / len)
+        }
     }
 
     pub fn dot(&self, other: Self) -> f32 {

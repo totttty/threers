@@ -9,12 +9,19 @@ pub struct Quaternion {
 }
 
 impl Default for Quaternion {
-    fn default() -> Self { Self::identity() }
+    fn default() -> Self {
+        Self::identity()
+    }
 }
 
 impl Quaternion {
     pub const fn identity() -> Self {
-        Self { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            w: 1.0,
+        }
     }
 
     pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
@@ -56,14 +63,26 @@ impl Quaternion {
 
     pub fn normalize(&self) -> Self {
         let len_sq = self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w;
-        if len_sq == 0.0 { Self::identity() } else {
+        if len_sq == 0.0 {
+            Self::identity()
+        } else {
             let inv = 1.0 / len_sq.sqrt();
-            Self { x: self.x * inv, y: self.y * inv, z: self.z * inv, w: self.w * inv }
+            Self {
+                x: self.x * inv,
+                y: self.y * inv,
+                z: self.z * inv,
+                w: self.w * inv,
+            }
         }
     }
 
     pub fn conjugate(&self) -> Self {
-        Self { x: -self.x, y: -self.y, z: -self.z, w: self.w }
+        Self {
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+            w: self.w,
+        }
     }
 
     /// For a unit quaternion, invert == conjugate. Matches three.js.
@@ -82,12 +101,21 @@ impl Quaternion {
 
     /// Spherical linear interpolation. Matches three.js's `Quaternion.slerp`.
     pub fn slerp(&self, other: Self, t: f32) -> Self {
-        if t == 0.0 { return *self; }
-        if t == 1.0 { return other; }
+        if t == 0.0 {
+            return *self;
+        }
+        if t == 1.0 {
+            return other;
+        }
         let mut cos_half = self.dot(other);
         let mut q = other;
         if cos_half < 0.0 {
-            q = Self { x: -other.x, y: -other.y, z: -other.z, w: -other.w };
+            q = Self {
+                x: -other.x,
+                y: -other.y,
+                z: -other.z,
+                w: -other.w,
+            };
             cos_half = -cos_half;
         }
         if cos_half >= 1.0 - 1e-6 {
@@ -96,7 +124,8 @@ impl Quaternion {
                 y: self.y + (q.y - self.y) * t,
                 z: self.z + (q.z - self.z) * t,
                 w: self.w + (q.w - self.w) * t,
-            }.normalize();
+            }
+            .normalize();
         }
         let sin_half_sq = 1.0 - cos_half * cos_half;
         let sin_half = sin_half_sq.sqrt();
@@ -115,22 +144,48 @@ impl Quaternion {
     /// pure rotation). Mirrors three.js's `Quaternion.setFromRotationMatrix`.
     pub fn from_rotation_matrix(m: &super::Matrix4) -> Self {
         let te = &m.elements;
-        let m11 = te[0]; let m12 = te[4]; let m13 = te[8];
-        let m21 = te[1]; let m22 = te[5]; let m23 = te[9];
-        let m31 = te[2]; let m32 = te[6]; let m33 = te[10];
+        let m11 = te[0];
+        let m12 = te[4];
+        let m13 = te[8];
+        let m21 = te[1];
+        let m22 = te[5];
+        let m23 = te[9];
+        let m31 = te[2];
+        let m32 = te[6];
+        let m33 = te[10];
         let trace = m11 + m22 + m33;
         if trace > 0.0 {
             let s = 0.5 / (trace + 1.0).sqrt();
-            Self { x: (m32 - m23) * s, y: (m13 - m31) * s, z: (m21 - m12) * s, w: 0.25 / s }
+            Self {
+                x: (m32 - m23) * s,
+                y: (m13 - m31) * s,
+                z: (m21 - m12) * s,
+                w: 0.25 / s,
+            }
         } else if m11 > m22 && m11 > m33 {
             let s = 2.0 * (1.0 + m11 - m22 - m33).sqrt();
-            Self { x: 0.25 * s, y: (m12 + m21) / s, z: (m13 + m31) / s, w: (m32 - m23) / s }
+            Self {
+                x: 0.25 * s,
+                y: (m12 + m21) / s,
+                z: (m13 + m31) / s,
+                w: (m32 - m23) / s,
+            }
         } else if m22 > m33 {
             let s = 2.0 * (1.0 + m22 - m11 - m33).sqrt();
-            Self { x: (m12 + m21) / s, y: 0.25 * s, z: (m23 + m32) / s, w: (m13 - m31) / s }
+            Self {
+                x: (m12 + m21) / s,
+                y: 0.25 * s,
+                z: (m23 + m32) / s,
+                w: (m13 - m31) / s,
+            }
         } else {
             let s = 2.0 * (1.0 + m33 - m11 - m22).sqrt();
-            Self { x: (m13 + m31) / s, y: (m23 + m32) / s, z: 0.25 * s, w: (m21 - m12) / s }
+            Self {
+                x: (m13 + m31) / s,
+                y: (m23 + m32) / s,
+                z: 0.25 * s,
+                w: (m21 - m12) / s,
+            }
         }
     }
 }

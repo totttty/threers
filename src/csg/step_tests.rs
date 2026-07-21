@@ -39,9 +39,9 @@ mod step_tests {
 
     #[test]
     fn sphere_primitive_soup_matches_js() {
-        use crate::geometries::SphereGeometry;
         use super::super::geometry_prep::ensure_non_indexed;
         use crate::csg::topology::topology_overlap;
+        use crate::geometries::SphereGeometry;
 
         const SPHERE: &[u8] =
             include_bytes!("../../tests/parity/scenes/rust/sphere-0.55-24-12.geom.bin");
@@ -58,16 +58,17 @@ mod step_tests {
 
     #[test]
     fn sphere_addition_bvhcast_pairs_match_js() {
-        use crate::geometries::SphereGeometry;
-        use crate::math::Matrix4;
+        use super::super::brush::CsgBrush;
         use super::super::bvhcast_parity::{
             bvh_buffers_match, bvhcast_pairs, intersection_neighbors, load_bvhcast_reference,
             pair_overlap, prepare_brush_geometry, serialized_bvh,
         };
-        use super::super::brush::CsgBrush;
         use super::super::operations::collect_intersecting_triangles;
+        use crate::geometries::SphereGeometry;
+        use crate::math::Matrix4;
 
-        const REF: &[u8] = include_bytes!("../../tests/parity/scenes/rust/bvhcast-shell-sphere.bin");
+        const REF: &[u8] =
+            include_bytes!("../../tests/parity/scenes/rust/bvhcast-shell-sphere.bin");
         let reference = load_bvhcast_reference(REF);
 
         let mut ev = CsgEvaluator::new();
@@ -133,7 +134,8 @@ mod step_tests {
             "sphere BVH buffers differ from JS"
         );
         assert_eq!(
-            native_filtered, reference.pairs,
+            native_filtered,
+            reference.pairs,
             "shared bvhcast pair order differs (filtered {}/{})",
             filtered_prefix,
             reference.pairs.len().min(20)
@@ -173,21 +175,47 @@ mod step_tests {
         fn ord_key(t: JsTriangle) -> String {
             format!(
                 "{},{},{},{},{},{},{},{},{}",
-                hash_coord(t.a.x), hash_coord(t.a.y), hash_coord(t.a.z),
-                hash_coord(t.b.x), hash_coord(t.b.y), hash_coord(t.b.z),
-                hash_coord(t.c.x), hash_coord(t.c.y), hash_coord(t.c.z),
+                hash_coord(t.a.x),
+                hash_coord(t.a.y),
+                hash_coord(t.a.z),
+                hash_coord(t.b.x),
+                hash_coord(t.b.y),
+                hash_coord(t.b.z),
+                hash_coord(t.c.x),
+                hash_coord(t.c.y),
+                hash_coord(t.c.z),
             )
         }
 
         let tri = JsTriangle {
-            a: JsVec3::new(0.18703882002231964, -0.7325606782431417, -0.3000000476837159),
-            b: JsVec3::new(-0.3510995269214351, -0.30194287194517766, -0.3000000476837159),
+            a: JsVec3::new(
+                0.18703882002231964,
+                -0.7325606782431417,
+                -0.3000000476837159,
+            ),
+            b: JsVec3::new(
+                -0.3510995269214351,
+                -0.30194287194517766,
+                -0.3000000476837159,
+            ),
             c: JsVec3::new(-0.5541723443478346, 0.5898297789076434, -0.3000000476837159),
         };
         let clip = JsTriangle {
-            a: JsVec3::new(-0.23815692961215973, -0.27500003576278687, -0.4125000238418579),
-            b: JsVec3::new(-0.19445432722568512, -0.3889087438583374, -0.3368048667907715),
-            c: JsVec3::new(-0.27500009536743164, -0.3889087438583374, -0.2749998867511749),
+            a: JsVec3::new(
+                -0.23815692961215973,
+                -0.27500003576278687,
+                -0.4125000238418579,
+            ),
+            b: JsVec3::new(
+                -0.19445432722568512,
+                -0.3889087438583374,
+                -0.3368048667907715,
+            ),
+            c: JsVec3::new(
+                -0.27500009536743164,
+                -0.3889087438583374,
+                -0.2749998867511749,
+            ),
         };
         let mut s = TriangleSplitter::new();
         s.initialize(tri);
@@ -266,24 +294,52 @@ mod step_tests {
         let nv2 = (single + 2) % 3;
         let use_first = arr[nv1].distance_to_squared(fs) < arr[nv2].distance_to_squared(fe);
         let _tri1 = if use_first {
-            JsTriangle { a: arr[nv1], b: fs, c: fe }
+            JsTriangle {
+                a: arr[nv1],
+                b: fs,
+                c: fe,
+            }
         } else {
-            JsTriangle { a: arr[nv2], b: fs, c: fe }
+            JsTriangle {
+                a: arr[nv2],
+                b: fs,
+                c: fe,
+            }
         };
-        // wait - when use_first false, tri1 = (nv2, fs, fe) per code... 
+        // wait - when use_first false, tri1 = (nv2, fs, fe) per code...
         // re-read: else branch tri1 = (arr[next_vert2], fs, fe) = (nv2, fs, fe)
         // But TARGET needs (v0, fs, fe) and nv2 = (1+2)%3 = 0. Yes nv2=0!
         let tri1 = if !use_first {
-            JsTriangle { a: arr[nv2], b: fs, c: fe }
+            JsTriangle {
+                a: arr[nv2],
+                b: fs,
+                c: fe,
+            }
         } else {
-            JsTriangle { a: arr[nv1], b: fs, c: fe }
+            JsTriangle {
+                a: arr[nv1],
+                b: fs,
+                c: fe,
+            }
         };
         let tri2 = if use_first {
-            JsTriangle { a: arr[nv1], b: arr[nv2], c: fs }
+            JsTriangle {
+                a: arr[nv1],
+                b: arr[nv2],
+                c: fs,
+            }
         } else {
-            JsTriangle { a: arr[nv1], b: arr[nv2], c: fe }
+            JsTriangle {
+                a: arr[nv1],
+                b: arr[nv2],
+                c: fe,
+            }
         };
-        let main = JsTriangle { a: arr[single], b: fe, c: fs };
+        let main = JsTriangle {
+            a: arr[single],
+            b: fe,
+            c: fs,
+        };
         use super::super::js_topology::is_tri_degenerate;
         eprintln!(
             "single={single} use_first={use_first} tri1={} tri2={} main={} tri1_key={}",
@@ -293,28 +349,40 @@ mod step_tests {
             ord_key(tri1)
         );
         assert!(
-            s.clipped_js_triangles().iter().any(|t| ord_key(*t) == target),
+            s.clipped_js_triangles()
+                .iter()
+                .any(|t| ord_key(*t) == target),
             "missing REF105 precursor from src16"
         );
     }
 
     #[test]
     fn ia15_ib401_split_delta() {
-        use crate::geometries::SphereGeometry;
-        use crate::math::Matrix4;
-        use super::super::bvhcast_parity::prepare_brush_geometry;
         use super::super::brush::CsgBrush;
+        use super::super::bvhcast_parity::prepare_brush_geometry;
+        use super::super::geometry_prep::index_at;
+        use super::super::js_topology::{
+            is_tri_degenerate, js_tri_from_indices, matrix_a_to_b_brushes, JsVec3,
+        };
         use super::super::operations::collect_intersecting_triangles;
         use super::super::triangle_splitter::TriangleSplitter;
-        use super::super::js_topology::{is_tri_degenerate, js_tri_from_indices, matrix_a_to_b_brushes, JsVec3};
-        use super::super::geometry_prep::index_at;
         use super::super::triangle_utils::hash_coord;
+        use crate::geometries::SphereGeometry;
+        use crate::math::Matrix4;
 
-        fn ord_key(t: super::super::js_topology::JsTriangle) -> (i32, i32, i32, i32, i32, i32, i32, i32, i32) {
+        fn ord_key(
+            t: super::super::js_topology::JsTriangle,
+        ) -> (i32, i32, i32, i32, i32, i32, i32, i32, i32) {
             (
-                hash_coord(t.a.x), hash_coord(t.a.y), hash_coord(t.a.z),
-                hash_coord(t.b.x), hash_coord(t.b.y), hash_coord(t.b.z),
-                hash_coord(t.c.x), hash_coord(t.c.y), hash_coord(t.c.z),
+                hash_coord(t.a.x),
+                hash_coord(t.a.y),
+                hash_coord(t.a.z),
+                hash_coord(t.b.x),
+                hash_coord(t.b.y),
+                hash_coord(t.b.z),
+                hash_coord(t.c.x),
+                hash_coord(t.c.y),
+                hash_coord(t.c.z),
             )
         }
 
@@ -346,7 +414,8 @@ mod step_tests {
         }
         assert_eq!(splitter.triangle_count(), 26, "j4 count");
         let before = splitter.clipped_js_triangles();
-        let before_keys: std::collections::BTreeSet<_> = before.iter().map(|t| ord_key(*t)).collect();
+        let before_keys: std::collections::BTreeSet<_> =
+            before.iter().map(|t| ord_key(*t)).collect();
 
         let ib = neighbors[5];
         assert_eq!(ib, 401);
@@ -445,18 +514,19 @@ mod step_tests {
 
     #[test]
     fn shell_split_sphere_addition_matches_js() {
-        use std::collections::HashSet;
-        use crate::geometries::SphereGeometry;
-        use crate::math::Matrix4;
-        use super::super::bvhcast_parity::{load_shell_split_reference, prepare_brush_geometry};
         use super::super::brush::CsgBrush;
+        use super::super::bvhcast_parity::{load_shell_split_reference, prepare_brush_geometry};
         use super::super::operations::{
-            collect_intersecting_triangles, shell_split_clipped_count, shell_split_clipped_tri_keys,
-            shell_split_tri_keys,
+            collect_intersecting_triangles, shell_split_clipped_count,
+            shell_split_clipped_tri_keys, shell_split_tri_keys,
         };
         use super::super::topology::tri_key_overlap;
+        use crate::geometries::SphereGeometry;
+        use crate::math::Matrix4;
+        use std::collections::HashSet;
 
-        const REF: &[u8] = include_bytes!("../../tests/parity/scenes/rust/shell-split-sphere-addition.bin");
+        const REF: &[u8] =
+            include_bytes!("../../tests/parity/scenes/rust/shell-split-sphere-addition.bin");
         let reference = load_shell_split_reference(REF);
 
         let mut ev = CsgEvaluator::new();
@@ -480,8 +550,7 @@ mod step_tests {
         );
 
         let clipped = shell_split_clipped_count(&mut acc, &mut sphere);
-        let clipped_total_delta =
-            (clipped as i64 - reference.clipped_total as i64).unsigned_abs();
+        let clipped_total_delta = (clipped as i64 - reference.clipped_total as i64).unsigned_abs();
         assert!(
             clipped_total_delta <= 50,
             "shell split clipped_total native={clipped} ref={} delta={clipped_total_delta}",
@@ -513,10 +582,9 @@ mod step_tests {
         let clipped_ratio =
             clipped_overlap.exact_shared as f64 / ref_clipped_set.len().max(1) as f64;
         let kept_ratio = kept_overlap.exact_shared as f64 / ref_set.len().max(1) as f64;
-        let clipped_partial = clipped_overlap.partial_shared as f64
-            / native_clipped_set.len().max(1) as f64;
-        let kept_partial =
-            kept_overlap.partial_shared as f64 / native_set.len().max(1) as f64;
+        let clipped_partial =
+            clipped_overlap.partial_shared as f64 / native_clipped_set.len().max(1) as f64;
+        let kept_partial = kept_overlap.partial_shared as f64 / native_set.len().max(1) as f64;
 
         eprintln!(
             "shell split: clipped_total native={clipped} ref={} clipped_keys native={} ref={} exact={:.1}% partial={:.1}% kept_exact={:.1}% kept_partial={:.1}%",
@@ -604,7 +672,10 @@ mod step_tests {
             b: super::super::js_topology::JsVec3::new(clip[3], clip[4], clip[5]),
             c: super::super::js_topology::JsVec3::new(clip[6], clip[7], clip[8]),
         };
-        eprintln!("tri52 intersects={}", clip_tri.intersects_triangle(tri, true));
+        eprintln!(
+            "tri52 intersects={}",
+            clip_tri.intersects_triangle(tri, true)
+        );
         let plane = clip_tri.get_plane();
         let arr = [tri.a, tri.b, tri.c];
         for t in 0..3 {
@@ -613,7 +684,10 @@ mod step_tests {
             let end = arr[t_next];
             let sd = plane.distance_to_point(start);
             let ed = plane.distance_to_point(end);
-            eprintln!("  edge {t}: sd={sd:.17e} ed={ed:.17e} coplanar_edge={}", sd.abs() < 1e-10 && ed.abs() < 1e-10);
+            eprintln!(
+                "  edge {t}: sd={sd:.17e} ed={ed:.17e} coplanar_edge={}",
+                sd.abs() < 1e-10 && ed.abs() < 1e-10
+            );
         }
         let mut hit_vec = super::super::js_topology::JsVec3::default();
         let mut intersects = 0usize;
@@ -627,9 +701,7 @@ mod step_tests {
                 eprintln!("  edge {t}: skip start on plane");
                 continue;
             }
-            let mut did = plane
-                .intersect_line(start, end, &mut hit_vec)
-                .is_some();
+            let mut did = plane.intersect_line(start, end, &mut hit_vec).is_some();
             if !did && ed.abs() < 1e-10 {
                 hit_vec = end;
                 did = true;
@@ -646,13 +718,21 @@ mod step_tests {
         }
         eprintln!("  manual intersects={intersects}");
         let single_vert = 0usize;
-        let mut fs = super::super::js_topology::JsVec3::new(-0.53125922098630896, -0.04235038547663728, -0.1);
-        let mut fe = super::super::js_topology::JsVec3::new(-0.52622909572515220, -0.08055789995397628, -0.1);
+        let mut fs = super::super::js_topology::JsVec3::new(
+            -0.53125922098630896,
+            -0.04235038547663728,
+            -0.1,
+        );
+        let mut fe = super::super::js_topology::JsVec3::new(
+            -0.52622909572515220,
+            -0.08055789995397628,
+            -0.1,
+        );
         std::mem::swap(&mut fs, &mut fe);
         let next_vert1 = 1usize;
         let next_vert2 = 2usize;
-        let use_first = arr[next_vert1].distance_to_squared(fs)
-            < arr[next_vert2].distance_to_squared(fe);
+        let use_first =
+            arr[next_vert1].distance_to_squared(fs) < arr[next_vert2].distance_to_squared(fe);
         let next_tri1 = if use_first {
             super::super::js_topology::JsTriangle {
                 a: arr[next_vert1],
@@ -720,15 +800,20 @@ mod step_tests {
 
     #[test]
     fn ia3_ib525_split_matches_js() {
-        
         use super::super::topology::TriKey;
         use super::super::triangle_utils::hash_coord;
 
         fn to_tri_key(t: &[f64]) -> TriKey {
             TriKey((
-                hash_coord(t[0]), hash_coord(t[1]), hash_coord(t[2]),
-                hash_coord(t[3]), hash_coord(t[4]), hash_coord(t[5]),
-                hash_coord(t[6]), hash_coord(t[7]), hash_coord(t[8]),
+                hash_coord(t[0]),
+                hash_coord(t[1]),
+                hash_coord(t[2]),
+                hash_coord(t[3]),
+                hash_coord(t[4]),
+                hash_coord(t[5]),
+                hash_coord(t[6]),
+                hash_coord(t[7]),
+                hash_coord(t[8]),
             ))
         }
 
@@ -773,9 +858,15 @@ mod step_tests {
 
         fn ord_key(t: JsTriangle) -> (i32, i32, i32, i32, i32, i32, i32, i32, i32) {
             (
-                hash_coord(t.a.x), hash_coord(t.a.y), hash_coord(t.a.z),
-                hash_coord(t.b.x), hash_coord(t.b.y), hash_coord(t.b.z),
-                hash_coord(t.c.x), hash_coord(t.c.y), hash_coord(t.c.z),
+                hash_coord(t.a.x),
+                hash_coord(t.a.y),
+                hash_coord(t.a.z),
+                hash_coord(t.b.x),
+                hash_coord(t.b.y),
+                hash_coord(t.b.z),
+                hash_coord(t.c.x),
+                hash_coord(t.c.y),
+                hash_coord(t.c.z),
             )
         }
 
@@ -800,7 +891,10 @@ mod step_tests {
             b: JsVec3::new(clip[3], clip[4], clip[5]),
             c: JsVec3::new(clip[6], clip[7], clip[8]),
         };
-        eprintln!("tri153 intersects={}", clip_tri.intersects_triangle(tri, true));
+        eprintln!(
+            "tri153 intersects={}",
+            clip_tri.intersects_triangle(tri, true)
+        );
         let plane = clip_tri.get_plane();
         let arr = [tri.a, tri.b, tri.c];
         for t in 0..3 {
@@ -816,16 +910,16 @@ mod step_tests {
         eprintln!("tri153 after ib=500: count={}", splitter.triangle_count());
         for (i, t) in splitter.clipped_js_triangles().iter().enumerate() {
             let k = ord_key(*t);
-            eprintln!(
-                "  out{i} {k:?} degen={}",
-                is_tri_degenerate(*t, 1e-14)
-            );
+            eprintln!("  out{i} {k:?} degen={}", is_tri_degenerate(*t, 1e-14));
         }
         let has_extra = splitter
             .clipped_js_triangles()
             .iter()
             .any(|t| ord_key(*t) == EXTRA_J12);
-        assert!(!has_extra, "tri153 must not produce EXTRA_J12 (js does not)");
+        assert!(
+            !has_extra,
+            "tri153 must not produce EXTRA_J12 (js does not)"
+        );
         // Native may remove tri entirely when split outputs are degenerate; JS keeps original.
         assert!(
             splitter.triangle_count() <= 1,
@@ -862,7 +956,10 @@ mod step_tests {
             splitter.split_by_triangle(clip_tri);
             let d = splitter.triangle_count() as i32 - 1;
             if d != 0 {
-                eprintln!("native tri {i} delta={d} count={}", splitter.triangle_count());
+                eprintln!(
+                    "native tri {i} delta={d} count={}",
+                    splitter.triangle_count()
+                );
             }
             total += d;
         }
@@ -891,7 +988,8 @@ mod step_tests {
         i += 1;
         let mut vals = Vec::new();
         while i < s.len() && vals.len() < 9 {
-            while i < s.len() && (s.as_bytes()[i] == b',' || s.as_bytes()[i].is_ascii_whitespace()) {
+            while i < s.len() && (s.as_bytes()[i] == b',' || s.as_bytes()[i].is_ascii_whitespace())
+            {
                 i += 1;
             }
             let start = i;
@@ -923,7 +1021,9 @@ mod step_tests {
             i += 1;
             let mut tri = Vec::new();
             while i < s.len() && s.as_bytes()[i] != b']' {
-                while i < s.len() && (s.as_bytes()[i] == b',' || s.as_bytes()[i].is_ascii_whitespace()) {
+                while i < s.len()
+                    && (s.as_bytes()[i] == b',' || s.as_bytes()[i].is_ascii_whitespace())
+                {
                     i += 1;
                 }
                 let start = i;
@@ -942,13 +1042,13 @@ mod step_tests {
 
     #[test]
     fn shell_ia3_neighbor310_split_matches_js() {
+        use super::super::brush::CsgBrush;
+        use super::super::bvhcast_parity::prepare_brush_geometry;
+        use super::super::js_topology::{js_tri_from_indices, matrix_a_to_b_brushes};
+        use super::super::operations::collect_intersecting_triangles;
+        use super::super::triangle_splitter::TriangleSplitter;
         use crate::geometries::SphereGeometry;
         use crate::math::Matrix4;
-        use super::super::bvhcast_parity::prepare_brush_geometry;
-        use super::super::brush::CsgBrush;
-        use super::super::operations::collect_intersecting_triangles;
-        use super::super::js_topology::{js_tri_from_indices, matrix_a_to_b_brushes};
-        use super::super::triangle_splitter::TriangleSplitter;
 
         let mut ev = CsgEvaluator::new();
         let shell = step1_shell_cut(&mut ev);
@@ -987,9 +1087,15 @@ mod step_tests {
         let tri_b = js_tri_from_indices(b_pos, j0, j1, j2, None);
         eprintln!(
             "ib=310 clip: {:.17} {:.17} {:.17} | {:.17} {:.17} {:.17} | {:.17} {:.17} {:.17}",
-            tri_b.a.x, tri_b.a.y, tri_b.a.z,
-            tri_b.b.x, tri_b.b.y, tri_b.b.z,
-            tri_b.c.x, tri_b.c.y, tri_b.c.z,
+            tri_b.a.x,
+            tri_b.a.y,
+            tri_b.a.z,
+            tri_b.b.x,
+            tri_b.b.y,
+            tri_b.b.z,
+            tri_b.c.x,
+            tri_b.c.y,
+            tri_b.c.z,
         );
         splitter.split_by_triangle(tri_b);
         let count = splitter.triangle_count();
@@ -1001,13 +1107,13 @@ mod step_tests {
     }
 
     fn ia3_replay_through_j(j_end: usize) -> (usize, Vec<Vec<f64>>, u32) {
+        use super::super::brush::CsgBrush;
+        use super::super::bvhcast_parity::prepare_brush_geometry;
+        use super::super::js_topology::{js_tri_from_indices, matrix_a_to_b_brushes};
+        use super::super::operations::collect_intersecting_triangles;
+        use super::super::triangle_splitter::TriangleSplitter;
         use crate::geometries::SphereGeometry;
         use crate::math::Matrix4;
-        use super::super::bvhcast_parity::prepare_brush_geometry;
-        use super::super::brush::CsgBrush;
-        use super::super::operations::collect_intersecting_triangles;
-        use super::super::js_topology::{js_tri_from_indices, matrix_a_to_b_brushes};
-        use super::super::triangle_splitter::TriangleSplitter;
 
         let mut ev = CsgEvaluator::new();
         let shell = step1_shell_cut(&mut ev);
@@ -1047,18 +1153,28 @@ mod step_tests {
                 ]
             })
             .collect();
-        (ib, snap, if splitter.coplanar_triangle_used { 1 } else { 0 })
+        (
+            ib,
+            snap,
+            if splitter.coplanar_triangle_used {
+                1
+            } else {
+                0
+            },
+        )
     }
 
     #[test]
     fn shell_ia15_neighbor354_split_matches_js() {
+        use super::super::brush::CsgBrush;
+        use super::super::bvhcast_parity::prepare_brush_geometry;
+        use super::super::js_topology::{
+            is_tri_degenerate, js_tri_from_indices, matrix_a_to_b_brushes,
+        };
+        use super::super::operations::collect_intersecting_triangles;
+        use super::super::triangle_splitter::TriangleSplitter;
         use crate::geometries::SphereGeometry;
         use crate::math::Matrix4;
-        use super::super::bvhcast_parity::prepare_brush_geometry;
-        use super::super::brush::CsgBrush;
-        use super::super::operations::collect_intersecting_triangles;
-        use super::super::js_topology::{is_tri_degenerate, js_tri_from_indices, matrix_a_to_b_brushes};
-        use super::super::triangle_splitter::TriangleSplitter;
 
         let mut ev = CsgEvaluator::new();
         let shell = step1_shell_cut(&mut ev);
@@ -1082,9 +1198,15 @@ mod step_tests {
         let tri_a = js_tri_from_indices(pos, i0, i1, i2, Some(&matrix));
         eprintln!(
             "tri_a: {:.17} {:.17} {:.17} | {:.17} {:.17} {:.17} | {:.17} {:.17} {:.17}",
-            tri_a.a.x, tri_a.a.y, tri_a.a.z,
-            tri_a.b.x, tri_a.b.y, tri_a.b.z,
-            tri_a.c.x, tri_a.c.y, tri_a.c.z,
+            tri_a.a.x,
+            tri_a.a.y,
+            tri_a.a.z,
+            tri_a.b.x,
+            tri_a.b.y,
+            tri_a.b.z,
+            tri_a.c.x,
+            tri_a.c.y,
+            tri_a.c.z,
         );
         let mut splitter = TriangleSplitter::new();
         splitter.reset();
@@ -1123,7 +1245,10 @@ mod step_tests {
         let j2 = super::super::geometry_prep::index_at(&sphere.geometry, ib, 2);
         let clip = js_tri_from_indices(b_pos, j0, j1, j2, None);
         for (ti, t) in splitter.clipped_js_triangles().iter().enumerate() {
-            eprintln!("pre-split tri {ti} intersects={}", clip.intersects_triangle(*t, true));
+            eprintln!(
+                "pre-split tri {ti} intersects={}",
+                clip.intersects_triangle(*t, true)
+            );
         }
         splitter.split_by_triangle(clip);
         let count = splitter.triangle_count();
@@ -1149,12 +1274,17 @@ mod step_tests {
             .count();
         eprintln!("after ib=354: count={count} degen={degen} (JS ref 8)");
         // Isolated cascade can diverge by one split; full step2 pipeline is 100% at soup level.
-        assert!(count <= 10, "neighbor 354 split count {count} unexpectedly high");
+        assert!(
+            count <= 10,
+            "neighbor 354 split count {count} unexpectedly high"
+        );
     }
 
     #[test]
     fn step2_live_sphere_topology_matches_js() {
-        use super::super::topology::{assert_topology_partial_overlap, topology_overlap, triangle_keys};
+        use super::super::topology::{
+            assert_topology_partial_overlap, topology_overlap, triangle_keys,
+        };
         const AFTER_SPHERE: &[u8] =
             include_bytes!("../../tests/parity/scenes/rust/bvh-csg-after-sphere.geom.bin");
         let mut ev = CsgEvaluator::new();
@@ -1291,7 +1421,11 @@ mod step_tests {
         let o = topology_overlap(&native, &reference);
         eprintln!(
             "step3 topology: native={} ref={} shared={} only_native={} only_ref={} exact={:.1}%",
-            o.native_tris, o.reference_tris, o.shared, o.only_native, o.only_reference,
+            o.native_tris,
+            o.reference_tris,
+            o.shared,
+            o.only_native,
+            o.only_reference,
             o.shared as f64 / o.reference_tris.max(1) as f64 * 100.0
         );
         assert_eq!(o.only_native, 0, "step3 only_native={}", o.only_native);
@@ -1310,11 +1444,14 @@ mod step_tests {
         let o = topology_overlap(&native, &reference);
         eprintln!(
             "step4 topology: native={} ref={} shared={} only_native={} only_ref={} exact={:.1}%",
-            o.native_tris, o.reference_tris, o.shared, o.only_native, o.only_reference,
+            o.native_tris,
+            o.reference_tris,
+            o.shared,
+            o.only_native,
+            o.only_reference,
             o.shared as f64 / o.reference_tris.max(1) as f64 * 100.0
         );
         assert_eq!(o.only_native, 0, "step4 only_native={}", o.only_native);
         assert_eq!(o.only_reference, 0, "step4 only_ref={}", o.only_reference);
     }
-
 }

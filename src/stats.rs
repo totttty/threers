@@ -31,14 +31,18 @@ impl Default for Stats {
 }
 
 impl Stats {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn begin(&mut self) {
         self.last_t = Some(web_time::Instant::now());
     }
 
     pub fn end(&mut self) {
-        let Some(t0) = self.last_t else { return; };
+        let Some(t0) = self.last_t else {
+            return;
+        };
         let dt = web_time::Instant::now().duration_since(t0);
         self.tick(dt);
     }

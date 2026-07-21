@@ -1,4 +1,4 @@
-use super::{Vector3, Quaternion};
+use super::{Quaternion, Vector3};
 
 /// A 4x4 column-major matrix (same layout as three.js's `Matrix4`).
 ///
@@ -18,10 +18,7 @@ impl Matrix4 {
     pub const fn identity() -> Self {
         Self {
             elements: [
-                1.0, 0.0, 0.0, 0.0,
-                0.0, 1.0, 0.0, 0.0,
-                0.0, 0.0, 1.0, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
             ],
         }
     }
@@ -46,16 +43,34 @@ impl Matrix4 {
         let x2 = q.x + q.x;
         let y2 = q.y + q.y;
         let z2 = q.z + q.z;
-        let xx = q.x * x2; let xy = q.x * y2; let xz = q.x * z2;
-        let yy = q.y * y2; let yz = q.y * z2; let zz = q.z * z2;
-        let wx = q.w * x2; let wy = q.w * y2; let wz = q.w * z2;
+        let xx = q.x * x2;
+        let xy = q.x * y2;
+        let xz = q.x * z2;
+        let yy = q.y * y2;
+        let yz = q.y * z2;
+        let zz = q.z * z2;
+        let wx = q.w * x2;
+        let wy = q.w * y2;
+        let wz = q.w * z2;
 
         Self {
             elements: [
-                1.0 - (yy + zz), xy + wz,       xz - wy,       0.0,
-                xy - wz,         1.0 - (xx + zz), yz + wx,     0.0,
-                xz + wy,         yz - wx,       1.0 - (xx + yy), 0.0,
-                0.0,             0.0,           0.0,           1.0,
+                1.0 - (yy + zz),
+                xy + wz,
+                xz - wy,
+                0.0,
+                xy - wz,
+                1.0 - (xx + zz),
+                yz + wx,
+                0.0,
+                xz + wy,
+                yz - wx,
+                1.0 - (xx + yy),
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
             ],
         }
     }
@@ -63,9 +78,15 @@ impl Matrix4 {
     /// Compose a transformation from position, rotation, and scale (same order as three.js).
     pub fn compose(position: Vector3, quaternion: Quaternion, scale: Vector3) -> Self {
         let mut m = Self::from_quaternion(quaternion);
-        m.elements[0] *= scale.x; m.elements[1] *= scale.x; m.elements[2] *= scale.x;
-        m.elements[4] *= scale.y; m.elements[5] *= scale.y; m.elements[6] *= scale.y;
-        m.elements[8] *= scale.z; m.elements[9] *= scale.z; m.elements[10] *= scale.z;
+        m.elements[0] *= scale.x;
+        m.elements[1] *= scale.x;
+        m.elements[2] *= scale.x;
+        m.elements[4] *= scale.y;
+        m.elements[5] *= scale.y;
+        m.elements[6] *= scale.y;
+        m.elements[8] *= scale.z;
+        m.elements[9] *= scale.z;
+        m.elements[10] *= scale.z;
         m.elements[12] = position.x;
         m.elements[13] = position.y;
         m.elements[14] = position.z;
@@ -78,10 +99,9 @@ impl Matrix4 {
         let mut r = [0.0f32; 16];
         for col in 0..4 {
             for row in 0..4 {
-                r[col * 4 + row] =
-                    a[row]      * b[col * 4]
-                    + a[row + 4]  * b[col * 4 + 1]
-                    + a[row + 8]  * b[col * 4 + 2]
+                r[col * 4 + row] = a[row] * b[col * 4]
+                    + a[row + 4] * b[col * 4 + 1]
+                    + a[row + 8] * b[col * 4 + 2]
                     + a[row + 12] * b[col * 4 + 3];
             }
         }
@@ -94,10 +114,22 @@ impl Matrix4 {
         let nf = 1.0 / (near - far);
         Self {
             elements: [
-                f / aspect, 0.0, 0.0,                    0.0,
-                0.0,        f,   0.0,                    0.0,
-                0.0,        0.0, (far + near) * nf,      -1.0,
-                0.0,        0.0, 2.0 * far * near * nf,  0.0,
+                f / aspect,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                f,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                (far + near) * nf,
+                -1.0,
+                0.0,
+                0.0,
+                2.0 * far * near * nf,
+                0.0,
             ],
         }
     }
@@ -108,10 +140,22 @@ impl Matrix4 {
         let p = 1.0 / (far - near);
         Self {
             elements: [
-                2.0 * w, 0.0,     0.0,      0.0,
-                0.0,     2.0 * h, 0.0,      0.0,
-                0.0,     0.0,     -1.0 * p, 0.0,
-                -(right + left) * w, -(top + bottom) * h, -near * p, 1.0,
+                2.0 * w,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                2.0 * h,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                -1.0 * p,
+                0.0,
+                -(right + left) * w,
+                -(top + bottom) * h,
+                -near * p,
+                1.0,
             ],
         }
     }
@@ -120,29 +164,79 @@ impl Matrix4 {
     pub fn invert(&self) -> Self {
         let m = &self.elements;
         let mut inv = [0.0f32; 16];
-        inv[0]  =  m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
-        inv[4]  = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
-        inv[8]  =  m[4]*m[9]*m[15]  - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
-        inv[12] = -m[4]*m[9]*m[14]  + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
-        inv[1]  = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
-        inv[5]  =  m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
-        inv[9]  = -m[0]*m[9]*m[15]  + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
-        inv[13] =  m[0]*m[9]*m[14]  - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
-        inv[2]  =  m[1]*m[6]*m[15]  - m[1]*m[7]*m[14]  - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7]  - m[13]*m[3]*m[6];
-        inv[6]  = -m[0]*m[6]*m[15]  + m[0]*m[7]*m[14]  + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7]  + m[12]*m[3]*m[6];
-        inv[10] =  m[0]*m[5]*m[15]  - m[0]*m[7]*m[13]  - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7]  - m[12]*m[3]*m[5];
-        inv[14] = -m[0]*m[5]*m[14]  + m[0]*m[6]*m[13]  + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6]  + m[12]*m[2]*m[5];
-        inv[3]  = -m[1]*m[6]*m[11]  + m[1]*m[7]*m[10]  + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7]   + m[9]*m[3]*m[6];
-        inv[7]  =  m[0]*m[6]*m[11]  - m[0]*m[7]*m[10]  - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7]   - m[8]*m[3]*m[6];
-        inv[11] = -m[0]*m[5]*m[11]  + m[0]*m[7]*m[9]   + m[4]*m[1]*m[11] - m[4]*m[3]*m[9]  - m[8]*m[1]*m[7]   + m[8]*m[3]*m[5];
-        inv[15] =  m[0]*m[5]*m[10]  - m[0]*m[6]*m[9]   - m[4]*m[1]*m[10] + m[4]*m[2]*m[9]  + m[8]*m[1]*m[6]   - m[8]*m[2]*m[5];
+        inv[0] = m[5] * m[10] * m[15] - m[5] * m[11] * m[14] - m[9] * m[6] * m[15]
+            + m[9] * m[7] * m[14]
+            + m[13] * m[6] * m[11]
+            - m[13] * m[7] * m[10];
+        inv[4] = -m[4] * m[10] * m[15] + m[4] * m[11] * m[14] + m[8] * m[6] * m[15]
+            - m[8] * m[7] * m[14]
+            - m[12] * m[6] * m[11]
+            + m[12] * m[7] * m[10];
+        inv[8] = m[4] * m[9] * m[15] - m[4] * m[11] * m[13] - m[8] * m[5] * m[15]
+            + m[8] * m[7] * m[13]
+            + m[12] * m[5] * m[11]
+            - m[12] * m[7] * m[9];
+        inv[12] = -m[4] * m[9] * m[14] + m[4] * m[10] * m[13] + m[8] * m[5] * m[14]
+            - m[8] * m[6] * m[13]
+            - m[12] * m[5] * m[10]
+            + m[12] * m[6] * m[9];
+        inv[1] = -m[1] * m[10] * m[15] + m[1] * m[11] * m[14] + m[9] * m[2] * m[15]
+            - m[9] * m[3] * m[14]
+            - m[13] * m[2] * m[11]
+            + m[13] * m[3] * m[10];
+        inv[5] = m[0] * m[10] * m[15] - m[0] * m[11] * m[14] - m[8] * m[2] * m[15]
+            + m[8] * m[3] * m[14]
+            + m[12] * m[2] * m[11]
+            - m[12] * m[3] * m[10];
+        inv[9] = -m[0] * m[9] * m[15] + m[0] * m[11] * m[13] + m[8] * m[1] * m[15]
+            - m[8] * m[3] * m[13]
+            - m[12] * m[1] * m[11]
+            + m[12] * m[3] * m[9];
+        inv[13] = m[0] * m[9] * m[14] - m[0] * m[10] * m[13] - m[8] * m[1] * m[14]
+            + m[8] * m[2] * m[13]
+            + m[12] * m[1] * m[10]
+            - m[12] * m[2] * m[9];
+        inv[2] = m[1] * m[6] * m[15] - m[1] * m[7] * m[14] - m[5] * m[2] * m[15]
+            + m[5] * m[3] * m[14]
+            + m[13] * m[2] * m[7]
+            - m[13] * m[3] * m[6];
+        inv[6] = -m[0] * m[6] * m[15] + m[0] * m[7] * m[14] + m[4] * m[2] * m[15]
+            - m[4] * m[3] * m[14]
+            - m[12] * m[2] * m[7]
+            + m[12] * m[3] * m[6];
+        inv[10] = m[0] * m[5] * m[15] - m[0] * m[7] * m[13] - m[4] * m[1] * m[15]
+            + m[4] * m[3] * m[13]
+            + m[12] * m[1] * m[7]
+            - m[12] * m[3] * m[5];
+        inv[14] = -m[0] * m[5] * m[14] + m[0] * m[6] * m[13] + m[4] * m[1] * m[14]
+            - m[4] * m[2] * m[13]
+            - m[12] * m[1] * m[6]
+            + m[12] * m[2] * m[5];
+        inv[3] = -m[1] * m[6] * m[11] + m[1] * m[7] * m[10] + m[5] * m[2] * m[11]
+            - m[5] * m[3] * m[10]
+            - m[9] * m[2] * m[7]
+            + m[9] * m[3] * m[6];
+        inv[7] = m[0] * m[6] * m[11] - m[0] * m[7] * m[10] - m[4] * m[2] * m[11]
+            + m[4] * m[3] * m[10]
+            + m[8] * m[2] * m[7]
+            - m[8] * m[3] * m[6];
+        inv[11] = -m[0] * m[5] * m[11] + m[0] * m[7] * m[9] + m[4] * m[1] * m[11]
+            - m[4] * m[3] * m[9]
+            - m[8] * m[1] * m[7]
+            + m[8] * m[3] * m[5];
+        inv[15] = m[0] * m[5] * m[10] - m[0] * m[6] * m[9] - m[4] * m[1] * m[10]
+            + m[4] * m[2] * m[9]
+            + m[8] * m[1] * m[6]
+            - m[8] * m[2] * m[5];
 
-        let det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
+        let det = m[0] * inv[0] + m[1] * inv[4] + m[2] * inv[8] + m[3] * inv[12];
         if det == 0.0 {
             return Self::identity();
         }
         let inv_det = 1.0 / det;
-        for x in inv.iter_mut() { *x *= inv_det; }
+        for x in inv.iter_mut() {
+            *x *= inv_det;
+        }
         Self { elements: inv }
     }
 
@@ -154,10 +248,22 @@ impl Matrix4 {
         let sz_inv = 1.0 / Vector3::new(m[8], m[9], m[10]).length();
         Self {
             elements: [
-                m[0] * sx_inv, m[1] * sx_inv, m[2] * sx_inv, 0.0,
-                m[4] * sy_inv, m[5] * sy_inv, m[6] * sy_inv, 0.0,
-                m[8] * sz_inv, m[9] * sz_inv, m[10] * sz_inv, 0.0,
-                0.0, 0.0, 0.0, 1.0,
+                m[0] * sx_inv,
+                m[1] * sx_inv,
+                m[2] * sx_inv,
+                0.0,
+                m[4] * sy_inv,
+                m[5] * sy_inv,
+                m[6] * sy_inv,
+                0.0,
+                m[8] * sz_inv,
+                m[9] * sz_inv,
+                m[10] * sz_inv,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
             ],
         }
     }
@@ -168,7 +274,9 @@ impl Matrix4 {
         let mut sx = Vector3::new(m[0], m[1], m[2]).length();
         let sy = Vector3::new(m[4], m[5], m[6]).length();
         let sz = Vector3::new(m[8], m[9], m[10]).length();
-        if self.determinant() < 0.0 { sx = -sx; }
+        if self.determinant() < 0.0 {
+            sx = -sx;
+        }
         let position = Vector3::new(m[12], m[13], m[14]);
         let rotation_only = Self::identity().with_basis(
             Vector3::new(m[0], m[1], m[2]) * (1.0 / sx),
@@ -180,27 +288,53 @@ impl Matrix4 {
     }
 
     fn with_basis(mut self, x: Vector3, y: Vector3, z: Vector3) -> Self {
-        self.elements[0] = x.x; self.elements[1] = x.y; self.elements[2] = x.z;
-        self.elements[4] = y.x; self.elements[5] = y.y; self.elements[6] = y.z;
-        self.elements[8] = z.x; self.elements[9] = z.y; self.elements[10] = z.z;
+        self.elements[0] = x.x;
+        self.elements[1] = x.y;
+        self.elements[2] = x.z;
+        self.elements[4] = y.x;
+        self.elements[5] = y.y;
+        self.elements[6] = y.z;
+        self.elements[8] = z.x;
+        self.elements[9] = z.y;
+        self.elements[10] = z.z;
         self
     }
 
     pub fn determinant(&self) -> f32 {
         let m = &self.elements;
-        let n11 = m[0]; let n12 = m[4]; let n13 = m[8];  let n14 = m[12];
-        let n21 = m[1]; let n22 = m[5]; let n23 = m[9];  let n24 = m[13];
-        let n31 = m[2]; let n32 = m[6]; let n33 = m[10]; let n34 = m[14];
-        let n41 = m[3]; let n42 = m[7]; let n43 = m[11]; let n44 = m[15];
-        n41 * (
-            n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34
-        ) + n42 * (
-            n11 * n23 * n34 - n11 * n24 * n33 + n14 * n21 * n33 - n13 * n21 * n34 + n13 * n24 * n31 - n14 * n23 * n31
-        ) + n43 * (
-            n11 * n24 * n32 - n11 * n22 * n34 - n14 * n21 * n32 + n12 * n21 * n34 + n14 * n22 * n31 - n12 * n24 * n31
-        ) + n44 * (
-            -n13 * n22 * n31 - n11 * n23 * n32 + n11 * n22 * n33 + n13 * n21 * n32 - n12 * n21 * n33 + n12 * n23 * n31
-        )
+        let n11 = m[0];
+        let n12 = m[4];
+        let n13 = m[8];
+        let n14 = m[12];
+        let n21 = m[1];
+        let n22 = m[5];
+        let n23 = m[9];
+        let n24 = m[13];
+        let n31 = m[2];
+        let n32 = m[6];
+        let n33 = m[10];
+        let n34 = m[14];
+        let n41 = m[3];
+        let n42 = m[7];
+        let n43 = m[11];
+        let n44 = m[15];
+        n41 * (n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33
+            + n12 * n24 * n33
+            + n13 * n22 * n34
+            - n12 * n23 * n34)
+            + n42
+                * (n11 * n23 * n34 - n11 * n24 * n33 + n14 * n21 * n33 - n13 * n21 * n34
+                    + n13 * n24 * n31
+                    - n14 * n23 * n31)
+            + n43
+                * (n11 * n24 * n32 - n11 * n22 * n34 - n14 * n21 * n32
+                    + n12 * n21 * n34
+                    + n14 * n22 * n31
+                    - n12 * n24 * n31)
+            + n44
+                * (-n13 * n22 * n31 - n11 * n23 * n32 + n11 * n22 * n33 + n13 * n21 * n32
+                    - n12 * n21 * n33
+                    + n12 * n23 * n31)
     }
 
     /// Build an Object3D-style orientation matrix where local -Z points from
@@ -209,7 +343,9 @@ impl Matrix4 {
     /// matrix variant.
     pub fn target_look_at(eye: Vector3, target: Vector3, up: Vector3) -> Self {
         let mut z = eye - target;
-        if z.length_sq() == 0.0 { z = Vector3::new(0.0, 0.0, 1.0); }
+        if z.length_sq() == 0.0 {
+            z = Vector3::new(0.0, 0.0, 1.0);
+        }
         let z = z.normalize();
         let mut x = up.cross(z);
         if x.length_sq() == 0.0 {
@@ -224,9 +360,15 @@ impl Matrix4 {
         let x = x.normalize();
         let y = z.cross(x);
         let mut m = Self::identity();
-        m.elements[0] = x.x; m.elements[1] = x.y; m.elements[2]  = x.z;
-        m.elements[4] = y.x; m.elements[5] = y.y; m.elements[6]  = y.z;
-        m.elements[8] = z.x; m.elements[9] = z.y; m.elements[10] = z.z;
+        m.elements[0] = x.x;
+        m.elements[1] = x.y;
+        m.elements[2] = x.z;
+        m.elements[4] = y.x;
+        m.elements[5] = y.y;
+        m.elements[6] = y.z;
+        m.elements[8] = z.x;
+        m.elements[9] = z.y;
+        m.elements[10] = z.z;
         m
     }
 
@@ -236,9 +378,15 @@ impl Matrix4 {
         let x = up.cross(z).normalize();
         let y = z.cross(x);
         let mut m = Self::identity();
-        m.elements[0] = x.x; m.elements[1] = y.x; m.elements[2] = z.x;
-        m.elements[4] = x.y; m.elements[5] = y.y; m.elements[6] = z.y;
-        m.elements[8] = x.z; m.elements[9] = y.z; m.elements[10] = z.z;
+        m.elements[0] = x.x;
+        m.elements[1] = y.x;
+        m.elements[2] = z.x;
+        m.elements[4] = x.y;
+        m.elements[5] = y.y;
+        m.elements[6] = z.y;
+        m.elements[8] = x.z;
+        m.elements[9] = y.z;
+        m.elements[10] = z.z;
         m.elements[12] = -x.dot(eye);
         m.elements[13] = -y.dot(eye);
         m.elements[14] = -z.dot(eye);

@@ -8,7 +8,9 @@ pub struct Box2 {
 }
 
 impl Default for Box2 {
-    fn default() -> Self { Self::empty() }
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 impl Box2 {
@@ -29,13 +31,18 @@ impl Box2 {
 
     pub fn from_points(points: &[Vector2]) -> Self {
         let mut b = Self::empty();
-        for p in points { b.expand_by_point(*p); }
+        for p in points {
+            b.expand_by_point(*p);
+        }
         b
     }
 
     pub fn from_center_and_size(center: Vector2, size: Vector2) -> Self {
         let half = size * 0.5;
-        Self { min: center - half, max: center + half }
+        Self {
+            min: center - half,
+            max: center + half,
+        }
     }
 
     pub fn expand_by_point(&mut self, p: Vector2) -> &mut Self {
@@ -55,26 +62,37 @@ impl Box2 {
     }
 
     pub fn center(&self) -> Vector2 {
-        if self.is_empty() { Vector2::ZERO } else { (self.min + self.max) * 0.5 }
+        if self.is_empty() {
+            Vector2::ZERO
+        } else {
+            (self.min + self.max) * 0.5
+        }
     }
 
     pub fn size(&self) -> Vector2 {
-        if self.is_empty() { Vector2::ZERO } else { self.max - self.min }
+        if self.is_empty() {
+            Vector2::ZERO
+        } else {
+            self.max - self.min
+        }
     }
 
     pub fn contains_point(&self, p: Vector2) -> bool {
-        p.x >= self.min.x && p.x <= self.max.x
-            && p.y >= self.min.y && p.y <= self.max.y
+        p.x >= self.min.x && p.x <= self.max.x && p.y >= self.min.y && p.y <= self.max.y
     }
 
     pub fn contains_box(&self, other: &Self) -> bool {
-        self.min.x <= other.min.x && other.max.x <= self.max.x
-            && self.min.y <= other.min.y && other.max.y <= self.max.y
+        self.min.x <= other.min.x
+            && other.max.x <= self.max.x
+            && self.min.y <= other.min.y
+            && other.max.y <= self.max.y
     }
 
     pub fn intersects_box(&self, other: &Self) -> bool {
-        !(other.max.x < self.min.x || other.min.x > self.max.x
-            || other.max.y < self.min.y || other.min.y > self.max.y)
+        !(other.max.x < self.min.x
+            || other.min.x > self.max.x
+            || other.max.y < self.min.y
+            || other.min.y > self.max.y)
     }
 
     pub fn clamp_point(&self, p: Vector2) -> Vector2 {
@@ -86,15 +104,24 @@ impl Box2 {
     }
 
     pub fn union(&self, other: &Self) -> Self {
-        Self { min: self.min.min(other.min), max: self.max.max(other.max) }
+        Self {
+            min: self.min.min(other.min),
+            max: self.max.max(other.max),
+        }
     }
 
     pub fn intersect(&self, other: &Self) -> Self {
-        Self { min: self.min.max(other.min), max: self.max.min(other.max) }
+        Self {
+            min: self.min.max(other.min),
+            max: self.max.min(other.max),
+        }
     }
 
     pub fn translate(&self, offset: Vector2) -> Self {
-        Self { min: self.min + offset, max: self.max + offset }
+        Self {
+            min: self.min + offset,
+            max: self.max + offset,
+        }
     }
 }
 

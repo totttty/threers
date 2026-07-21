@@ -106,11 +106,7 @@ pub fn assert_topology_overlap(
 
 fn tri_key_verts(k: TriKey) -> [[i32; 3]; 3] {
     let t = k.0;
-    [
-        [t.0, t.1, t.2],
-        [t.3, t.4, t.5],
-        [t.6, t.7, t.8],
-    ]
+    [[t.0, t.1, t.2], [t.3, t.4, t.5], [t.6, t.7, t.8]]
 }
 
 fn shared_vert_count(a: TriKey, b: TriKey) -> usize {

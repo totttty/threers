@@ -4,23 +4,22 @@
 //! and writes to a swapchain view or [`super::RenderTarget`]. Post-fx passes
 //! share WGSL in [`super::shader`] (`POSTFX_SHADER`, effect kinds 0–30).
 
+use bytemuck::{Pod, Zeroable};
 use std::collections::HashMap;
 use std::sync::Arc;
-use bytemuck::{Pod, Zeroable};
 
-use crate::core::{BufferGeometry, ObjectKind};
+use super::gpu_mesh::{geom_cache_key, GpuMesh};
+use super::gpu_texture::{cube_cache_key, tex_cache_key, GpuCubeTexture, GpuTexture};
+use super::shader::{
+    MAX_DIR_LIGHTS, MAX_HEMI_LIGHTS, MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS, SHADER_SOURCE,
+};
 use crate::cameras::Camera;
+use crate::core::{BufferGeometry, ObjectKind};
 use crate::lights::Light;
 use crate::materials::{Material, MaterialKind, MaterialTextureSlots};
 use crate::math::{Matrix3, Matrix4, Vector3};
 use crate::scene::Scene;
-use crate::textures::{Texture, TextureFormat, CubeTexture};
-use super::gpu_mesh::{GpuMesh, geom_cache_key};
-use super::gpu_texture::{GpuTexture, GpuCubeTexture, tex_cache_key, cube_cache_key};
-use super::shader::{
-    SHADER_SOURCE,
-    MAX_DIR_LIGHTS, MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS, MAX_HEMI_LIGHTS,
-};
+use crate::textures::{CubeTexture, Texture, TextureFormat};
 
 fn rt_sample_format(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
     if format == wgpu::TextureFormat::Rgba16Float {
@@ -125,6 +124,87 @@ impl Default for FrameUniforms {
     }
 }
 
+/// Build the environment `@group(3)` bind group. The layout (13 bindings: env
+/// cube + samplers, three shadow maps + comparison samplers, the CubeUV atlas,
+/// and the screen-space glass color/depth/back-depth) is fixed here in one place,
+/// so the four construction sites (default, shadow-dummies, per-frame, glass)
+/// just pass the 13 views/samplers in binding order and a new binding is added
+/// once. Texture vs. sampler wrapping is encoded by the arg position.
+macro_rules! env_bind_group {
+    ($device:expr, $bgl:expr, $label:expr,
+     $t0:expr, $s1:expr, $t2:expr, $s3:expr, $t4:expr, $s5:expr,
+     $t6:expr, $s7:expr, $t8:expr, $t9:expr, $s10:expr, $t11:expr, $t12:expr $(,)?) => {
+        $device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some($label),
+            layout: $bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView($t0),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler($s1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView($t2),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler($s3),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView($t4),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler($s5),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView($t6),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler($s7),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView($t8),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView($t9),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::Sampler($s10),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView($t11),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: wgpu::BindingResource::TextureView($t12),
+                },
+            ],
+        })
+    };
+}
+
+/// Uniform for the TAA resolve pass — see `TAA_SHADER`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
+struct TaaUniforms {
+    inv_view_proj: [f32; 16],
+    prev_view_proj: [f32; 16],
+    /// x: width, y: height, z: history weight, w: first-frame flag.
+    params: [f32; 4],
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
 struct MeshUniforms {
@@ -139,20 +219,23 @@ struct MeshUniforms {
     params2: [f32; 4],
     /// Physical layers: x: clearcoat, y: clearcoat_roughness, z: ior, w: transmission
     params3: [f32; 4],
+    /// Physical volume: x: thickness (glass refraction/march depth),
+    /// y: dispersion, z: vertex_emissive. w reserved.
+    params4: [f32; 4],
     /// x: material kind, y: texture flags
     flags: [u32; 4],
 }
 
 // Texture-flag bits — keep in sync with shader.rs FLAG_*.
-const FLAG_MAP: u32           = 1;
-const FLAG_NORMAL_MAP: u32    = 2;
+const FLAG_MAP: u32 = 1;
+const FLAG_NORMAL_MAP: u32 = 2;
 const FLAG_ROUGHNESS_MAP: u32 = 4;
 const FLAG_METALNESS_MAP: u32 = 8;
-const FLAG_AO_MAP: u32        = 16;
-const FLAG_EMISSIVE_MAP: u32  = 32;
-const FLAG_MATCAP_MAP: u32    = 64;
-const FLAG_DASHED: u32        = 128;
-const FLAG_SHADOW_MAT: u32    = 256;
+const FLAG_AO_MAP: u32 = 16;
+const FLAG_EMISSIVE_MAP: u32 = 32;
+const FLAG_MATCAP_MAP: u32 = 64;
+const FLAG_DASHED: u32 = 128;
+const FLAG_SHADOW_MAT: u32 = 256;
 const FLAG_RECEIVE_SHADOW: u32 = 512;
 
 struct CachedGpuMesh {
@@ -174,11 +257,20 @@ pub struct PostFxCamera {
 impl Default for PostFxCamera {
     fn default() -> Self {
         let mut id = [0f32; 16];
-        id[0] = 1.0; id[5] = 1.0; id[10] = 1.0; id[15] = 1.0;
-        Self { near: 0.1, far: 100.0, kernel_radius: 8.0, kernel_size: 32, proj: id, inv_proj: id }
+        id[0] = 1.0;
+        id[5] = 1.0;
+        id[10] = 1.0;
+        id[15] = 1.0;
+        Self {
+            near: 0.1,
+            far: 100.0,
+            kernel_radius: 8.0,
+            kernel_size: 32,
+            proj: id,
+            inv_proj: id,
+        }
     }
 }
-
 
 /// GPU renderer: scene draws, shadow maps, environment sampling, post-fx.
 pub struct Renderer {
@@ -186,6 +278,26 @@ pub struct Renderer {
     queue: Arc<wgpu::Queue>,
     pipeline_tri: wgpu::RenderPipeline,
     pipeline_tri_alpha: wgpu::RenderPipeline,
+    // Single-layer glass (depth prepass + LessEqual color pass), sRGB + f16.
+    pipeline_glass_depth: wgpu::RenderPipeline,
+    pipeline_glass_color: wgpu::RenderPipeline,
+    pipeline_glass_depth_f16: wgpu::RenderPipeline,
+    pipeline_glass_color_f16: wgpu::RenderPipeline,
+    // Weighted-blended OIT: accumulation pipeline (MRT) + resolve (sRGB + f16).
+    pipeline_oit: wgpu::RenderPipeline,
+    pipeline_oit_resolve: wgpu::RenderPipeline,
+    pipeline_oit_resolve_f16: wgpu::RenderPipeline,
+    oit_resolve_bgl: wgpu::BindGroupLayout,
+    // accum(Rgba16F) + revealage(R16F) targets + the resolve bind group, keyed by size.
+    oit_targets: Option<(
+        u32,
+        u32,
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::BindGroup,
+    )>,
     /// No-cull triangle pipeline, used for `side: BackSide` / `side: DoubleSide`
     /// materials. Without this, three.js apps using BackSide for skybox-style
     /// "inside of a box" rendering silently get culled-to-nothing.
@@ -250,7 +362,18 @@ pub struct Renderer {
     mesh_bgl: wgpu::BindGroupLayout,
     tex_bgl: wgpu::BindGroupLayout,
     env_bgl: wgpu::BindGroupLayout,
+    /// Bind group layout for custom-shader draws: mesh uniform (binding 0) plus
+    /// `ShaderMaterial` user data (binding 1 uniform + bindings 2-4 storage), all
+    /// in @group(1) to stay within WebGPU's 4-bind-group limit.
+    custom_mesh_bgl: wgpu::BindGroupLayout,
+    /// Pipeline layout for custom-shader materials ([frame, custom_mesh, tex, env]).
+    custom_pipeline_layout: wgpu::PipelineLayout,
+    /// Lazily-compiled custom-shader pipelines, keyed by (fragment-source hash,
+    /// is-half-float-target, is-transparent).
+    custom_pipelines: HashMap<(u64, bool, bool), wgpu::RenderPipeline>,
     depth_view: wgpu::TextureView,
+    /// The renderer's own depth texture (COPY_SRC) for the direct-`render` path.
+    depth_texture: wgpu::Texture,
     /// 1×1 placeholder depth texture for postfx binding 6 when hw depth is unused.
     hw_depth_tex: wgpu::Texture,
     depth_size: (u32, u32),
@@ -304,26 +427,455 @@ pub struct Renderer {
     #[allow(dead_code)]
     default_black: GpuTexture,
 
+    // --- Screen-space refraction glass (TransparencyMode::Refract) ---
+    /// Mipmapped capture of the opaque scene, sampled by the glass shader for
+    /// screen-space refraction/reflection. `(w, h, texture, all-mips view,
+    /// per-mip render views, mip count, format)`.
+    ss_color: Option<SsColor>,
+    /// Filtering sampler (trilinear) for `ss_color` — roughness selects the LOD.
+    ss_glass_sampler: wgpu::Sampler,
+    /// Sampleable copy of the opaque depth (COPY_DST | TEXTURE_BINDING), marched
+    /// by the glass shader. `(w, h, texture, view)`.
+    ss_depth: Option<(u32, u32, wgpu::Texture, wgpu::TextureView)>,
+    /// Nearest glass **back-face** depth (RENDER_ATTACHMENT | TEXTURE_BINDING),
+    /// used to derive the per-pixel glass thickness for two-surface refraction.
+    ss_back_depth: Option<(u32, u32, wgpu::Texture, wgpu::TextureView)>,
+    /// Depth-only pipeline rendering glass back faces (cull front) into ss_back_depth.
+    pipeline_ss_back_depth: wgpu::RenderPipeline,
+    /// 1×1 placeholder depth bound at env-group binding 11/12 when no glass draws.
+    ss_depth_placeholder_view: wgpu::TextureView,
+    /// Fullscreen "sample one texture → write" pipeline (mip downsample + blit),
+    /// one per framebuffer format.
+    pipeline_ss_blit: wgpu::RenderPipeline,
+    pipeline_ss_blit_f16: wgpu::RenderPipeline,
+    /// Glass surface pipelines (screen-space refraction/reflection).
+    pipeline_ss_glass: wgpu::RenderPipeline,
+    pipeline_ss_glass_f16: wgpu::RenderPipeline,
+    /// BGL for the blit/downsample pipeline (texture + sampler).
+    ss_blit_bgl: wgpu::BindGroupLayout,
+
+    // --- Temporal anti-aliasing (opt-in via `set_taa`) ---
+    taa_enabled: bool,
+    taa_frame: u32,
+    taa_prev_view_proj: [f32; 16],
+    /// Ping-pong history: `(w, h, texA, viewA, texB, viewB)`; frame parity picks
+    /// read vs. write.
+    taa_history: Option<(
+        u32,
+        u32,
+        wgpu::Texture,
+        wgpu::TextureView,
+        wgpu::Texture,
+        wgpu::TextureView,
+    )>,
+    taa_uniform: wgpu::Buffer,
+    taa_bgl: wgpu::BindGroupLayout,
+    taa_sampler: wgpu::Sampler,
+    pipeline_taa: wgpu::RenderPipeline,
+    pipeline_taa_f16: wgpu::RenderPipeline,
+
     color_format: wgpu::TextureFormat,
+}
+
+/// Mipmapped opaque-scene capture used by the screen-space glass pass.
+struct SsColor {
+    width: u32,
+    height: u32,
+    #[allow(dead_code)]
+    texture: wgpu::Texture,
+    /// View over all mips — bound to the glass shader for LOD sampling.
+    all_mips_view: wgpu::TextureView,
+    /// One single-mip view per level — render targets for the downsample chain.
+    mip_render_views: Vec<wgpu::TextureView>,
+    /// One single-mip sample view per level — sources for the downsample chain.
+    mip_sample_views: Vec<wgpu::TextureView>,
+    mips: u32,
+    format: wgpu::TextureFormat,
 }
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
+// ---- ShaderMaterial (custom-shader) support ----------------------------------
+
+/// Cache key for a custom shader = a hash of its fragment source.
+fn custom_shader_hash(src: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    src.hash(&mut h);
+    h.finish()
+}
+
+/// Assemble a full WGSL module for a custom shader: the built-in preamble
+/// (everything before the built-in `fs_main` — structs, `vs_main`, bindings for
+/// groups 0-3, and all helper functions), then the `@group(4)` user bindings,
+/// then the user's fragment.
+fn custom_shader_module_source(fragment: &str) -> String {
+    let preamble = SHADER_SOURCE
+        .split("@fragment")
+        .next()
+        .unwrap_or(SHADER_SOURCE);
+    // User data lives in @group(1) alongside the mesh uniform (binding 0), to
+    // stay within WebGPU's 4-bind-group limit.
+    let user_bindings = "\n\
+struct ThreersUserData { data: array<vec4<f32>, 16>, };\n\
+@group(1) @binding(1) var<uniform> u_data: ThreersUserData;\n\
+@group(1) @binding(2) var<storage, read> u_s0: array<f32>;\n\
+@group(1) @binding(3) var<storage, read> u_s1: array<f32>;\n\
+@group(1) @binding(4) var<storage, read> u_s2: array<f32>;\n";
+    format!("{preamble}{user_bindings}\n{fragment}\n")
+}
+
+/// Compile a custom-shader pipeline (alpha-blended, no depth write — treated as
+/// transparent for correct compositing).
+fn build_custom_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    fragment: &str,
+    format: wgpu::TextureFormat,
+    transparent: bool,
+) -> wgpu::RenderPipeline {
+    let source = custom_shader_module_source(fragment);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("threers custom shader"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let vertex_buffers = [wgpu::VertexBufferLayout {
+        array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: 12,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: 24,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: 32,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Float32x4,
+            },
+        ],
+    }];
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("threers custom pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: &module,
+            entry_point: "vs_main",
+            buffers: &vertex_buffers,
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &module,
+            entry_point: "fs_main",
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                // Transparent: alpha-blend, no depth write (sorted back-to-front).
+                // Opaque: replace + depth write, so the surface self-occludes.
+                blend: Some(if transparent {
+                    wgpu::BlendState::ALPHA_BLENDING
+                } else {
+                    wgpu::BlendState::REPLACE
+                }),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: primitive(
+            wgpu::PrimitiveTopology::TriangleList,
+            Some(wgpu::Face::Back),
+        ),
+        depth_stencil: Some(depth_stencil(!transparent, wgpu::CompareFunction::Less)),
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+    })
+}
+
+/// Build the custom @group(1) bind group: the mesh uniform (binding 0, shared
+/// with the standard path) plus the `ShaderMaterial` user uniform (binding 1)
+/// and three storage arrays (bindings 2-4). Returns the bind group plus the new
+/// buffers it owns (kept alive by the caller until the render pass is submitted).
+fn build_user_bind_group(
+    device: &wgpu::Device,
+    bgl: &wgpu::BindGroupLayout,
+    mesh_uniform: &wgpu::Buffer,
+    data: &[[f32; 4]; 16],
+    storage: &[Vec<f32>; 3],
+) -> (wgpu::BindGroup, Vec<wgpu::Buffer>) {
+    use wgpu::util::DeviceExt;
+    let flat: Vec<f32> = data.iter().flat_map(|v| v.iter().copied()).collect();
+    let mut buffers = vec![
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("threers user uniform"),
+            contents: bytemuck::cast_slice(&flat),
+            usage: wgpu::BufferUsages::UNIFORM,
+        }),
+    ];
+    for s in storage.iter() {
+        buffers.push(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("threers user storage"),
+                contents: bytemuck::cast_slice(s),
+                usage: wgpu::BufferUsages::STORAGE,
+            }),
+        );
+    }
+    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("threers custom mesh+user bg"),
+        layout: bgl,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: mesh_uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: buffers[0].as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: buffers[1].as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: buffers[2].as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: buffers[3].as_entire_binding(),
+            },
+        ],
+    });
+    (bg, buffers)
+}
+
 impl Renderer {
     /// Shared device handle. Used by callers (e.g. async readback) that need
     /// to encode commands or allocate buffers outside the renderer's own loop.
-    pub fn device_arc(&self) -> Arc<wgpu::Device> { self.device.clone() }
+    pub fn device_arc(&self) -> Arc<wgpu::Device> {
+        self.device.clone()
+    }
     /// Shared queue handle (same use case as `device_arc`).
-    pub fn queue_arc(&self) -> Arc<wgpu::Queue> { self.queue.clone() }
+    pub fn queue_arc(&self) -> Arc<wgpu::Queue> {
+        self.queue.clone()
+    }
 
     fn ensure_geometry(&mut self, geom: &std::sync::Arc<BufferGeometry>) {
         let key = geom_cache_key(geom);
         let ver = geom.geometry_version;
-        let stale = self.geom_cache.get(&key).map(|e| e.version != ver).unwrap_or(true);
+        let stale = self
+            .geom_cache
+            .get(&key)
+            .map(|e| e.version != ver)
+            .unwrap_or(true);
         if stale {
             let mesh = GpuMesh::upload(&self.device, geom);
-            self.geom_cache.insert(key, CachedGpuMesh { version: ver, mesh });
+            self.geom_cache
+                .insert(key, CachedGpuMesh { version: ver, mesh });
         }
+    }
+
+    /// (Re)create the OIT accumulation + revealage targets at `w×h` and their
+    /// resolve bind group. No-op if already the right size.
+    /// (Re)create the mipmapped opaque-scene capture used by the screen-space
+    /// glass pass. Sized `w×h` in `format` (must match the framebuffer format so
+    /// the opaque pipelines can render into mip 0). The mip chain feeds the
+    /// roughness→LOD blur of the refracted/reflected image.
+    fn ensure_ss_targets(&mut self, w: u32, h: u32, format: wgpu::TextureFormat) {
+        let (w, h) = (w.max(1), h.max(1));
+        if let Some(c) = &self.ss_color {
+            if c.width == w && c.height == h && c.format == format {
+                return;
+            }
+        }
+        // ~8 mips is plenty for a roughness blur; cap so the smallest is ≥1px.
+        let max_mips = 32 - (w.max(h)).leading_zeros();
+        let mips = max_mips.clamp(1, 8);
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("threers ss color capture"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mips,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let all_mips_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut mip_render_views = Vec::with_capacity(mips as usize);
+        let mut mip_sample_views = Vec::with_capacity(mips as usize);
+        for m in 0..mips {
+            mip_render_views.push(texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("threers ss mip render"),
+                base_mip_level: m,
+                mip_level_count: Some(1),
+                ..Default::default()
+            }));
+            mip_sample_views.push(texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("threers ss mip sample"),
+                base_mip_level: m,
+                mip_level_count: Some(1),
+                ..Default::default()
+            }));
+        }
+        self.ss_color = Some(SsColor {
+            width: w,
+            height: h,
+            texture,
+            all_mips_view,
+            mip_render_views,
+            mip_sample_views,
+            mips,
+            format,
+        });
+
+        // Sampleable copy of the opaque depth (marched by the glass shader).
+        let need_depth = match &self.ss_depth {
+            Some((cw, ch, ..)) => *cw != w || *ch != h,
+            None => true,
+        };
+        if need_depth {
+            let dtex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers ss depth copy"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let dview = dtex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.ss_depth = Some((w, h, dtex, dview));
+            // Glass back-face depth target (rendered into, then sampled).
+            let btex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers ss back depth"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let bview = btex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.ss_back_depth = Some((w, h, btex, bview));
+        }
+    }
+
+    /// Enable/disable temporal anti-aliasing. When enabled, the renderer jitters
+    /// the projection each frame and blends against a reprojected history buffer.
+    /// Only active on the `render_to` path (needs a sampleable color target).
+    pub fn set_taa(&mut self, enabled: bool) {
+        if !enabled {
+            self.taa_frame = 0;
+            self.taa_history = None;
+        }
+        self.taa_enabled = enabled;
+    }
+
+    /// Reset TAA accumulation (call on a hard cut / scene change to avoid ghosting).
+    pub fn reset_taa(&mut self) {
+        self.taa_frame = 0;
+    }
+
+    fn ensure_taa_targets(&mut self, w: u32, h: u32, format: wgpu::TextureFormat) {
+        let (w, h) = (w.max(1), h.max(1));
+        if let Some((cw, ch, ..)) = &self.taa_history {
+            if *cw == w && *ch == h {
+                return;
+            }
+        }
+        let mk = || {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("threers taa history"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            (tex, view)
+        };
+        let (a, av) = mk();
+        let (b, bv) = mk();
+        self.taa_history = Some((w, h, a, av, b, bv));
+        self.taa_frame = 0;
+    }
+
+    fn ensure_oit_targets(&mut self, w: u32, h: u32) {
+        let (w, h) = (w.max(1), h.max(1));
+        if let Some((cw, ch, ..)) = &self.oit_targets {
+            if *cw == w && *ch == h {
+                return;
+            }
+        }
+        let mk = |fmt: wgpu::TextureFormat, label: &str| {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: fmt,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            (tex, view)
+        };
+        let (accum, accum_view) = mk(wgpu::TextureFormat::Rgba16Float, "threers oit accum");
+        let (reveal, reveal_view) = mk(wgpu::TextureFormat::R16Float, "threers oit reveal");
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("threers oit resolve bg"),
+            layout: &self.oit_resolve_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&accum_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&reveal_view),
+                },
+            ],
+        });
+        self.oit_targets = Some((w, h, accum, accum_view, reveal, reveal_view, bg));
     }
 
     /// Create pipelines and default 1×1 fallback textures.
@@ -397,8 +949,13 @@ impl Renderer {
         let tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers tex bgl"),
             entries: &[
-                tex_entry(0), tex_entry(1), tex_entry(2),
-                tex_entry(3), tex_entry(4), tex_entry(5), tex_entry(6),
+                tex_entry(0),
+                tex_entry(1),
+                tex_entry(2),
+                tex_entry(3),
+                tex_entry(4),
+                tex_entry(5),
+                tex_entry(6),
                 wgpu::BindGroupLayoutEntry {
                     binding: 7,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -485,6 +1042,47 @@ impl Renderer {
                     },
                     count: None,
                 },
+                // 9/10: screen-space glass — mipmapped opaque-scene capture +
+                // its trilinear sampler (only read by the fs_ss_glass entry).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 10,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // 11: sampleable opaque depth; 12: glass back-face depth (both
+                // marched/read by fs_ss_glass via textureLoad, no sampler).
+                // 1×1 placeholders bound otherwise.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 11,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 12,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
 
@@ -497,30 +1095,90 @@ impl Renderer {
         // Skinned pipeline layout: same as the base 4 groups, but group 1 uses
         // the skinned mesh BGL (uniform + bones storage). Stays at 4 groups —
         // WebGPU's default `maxBindGroups` limit.
-        let pipeline_layout_skinned = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("threers skinned layout"),
-            bind_group_layouts: &[&frame_bgl, &mesh_skinned_bgl, &tex_bgl, &env_bgl],
-            push_constant_ranges: &[],
+        let pipeline_layout_skinned =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers skinned layout"),
+                bind_group_layouts: &[&frame_bgl, &mesh_skinned_bgl, &tex_bgl, &env_bgl],
+                push_constant_ranges: &[],
+            });
+
+        // ShaderMaterial data rides in @group(1) alongside the mesh uniform
+        // (WebGPU's default maxBindGroups is 4, so we can't add a 5th group):
+        //   binding 0 = mesh uniform (as usual), binding 1 = user uniform block,
+        //   bindings 2..4 = read-only storage arrays.
+        let storage_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let uniform_entry = |binding: u32, vis: wgpu::ShaderStages| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: vis,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+        let custom_mesh_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("threers custom mesh+user bgl"),
+            entries: &[
+                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
+                uniform_entry(1, wgpu::ShaderStages::FRAGMENT),
+                storage_entry(2),
+                storage_entry(3),
+                storage_entry(4),
+            ],
         });
+        let custom_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers custom (shader material) layout"),
+                bind_group_layouts: &[&frame_bgl, &custom_mesh_bgl, &tex_bgl, &env_bgl],
+                push_constant_ranges: &[],
+            });
 
         let vertex_buffers = [wgpu::VertexBufferLayout {
             array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                wgpu::VertexAttribute { offset:  0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
-                wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
-                wgpu::VertexAttribute { offset: 24, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
-                wgpu::VertexAttribute { offset: 32, shader_location: 3, format: wgpu::VertexFormat::Float32x4 },
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                },
+                wgpu::VertexAttribute {
+                    offset: 24,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x2,
+                },
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
             ],
         }];
 
-        let make_pipeline = |fmt: wgpu::TextureFormat, topology: wgpu::PrimitiveTopology, cull: Option<wgpu::Face>, label: &str| {
+        let make_pipeline = |fmt: wgpu::TextureFormat,
+                             topology: wgpu::PrimitiveTopology,
+                             cull: Option<wgpu::Face>,
+                             label: &str| {
             let alpha = label.contains("alpha");
-            // PolygonMode::Line needs the POLYGON_MODE_LINE feature, which is
-            // generally unavailable in browser WebGPU. The wireframe pipeline
-            // instead uses LineList primitives over the triangle indices —
-            // we'll feed it edge indices at draw time.
-            let polygon_mode = wgpu::PolygonMode::Fill;
+            // Note: PolygonMode::Line needs the POLYGON_MODE_LINE feature, which
+            // is generally unavailable in browser WebGPU. The wireframe pipeline
+            // instead uses LineList primitives over the triangle indices (fed as
+            // edge indices at draw time), so every pipeline stays Fill.
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -535,37 +1193,430 @@ impl Renderer {
                     entry_point: "fs_main",
                     targets: &[Some(wgpu::ColorTargetState {
                         format: fmt,
-                        blend: Some(if alpha { wgpu::BlendState::ALPHA_BLENDING } else { wgpu::BlendState::REPLACE }),
+                        blend: Some(if alpha {
+                            wgpu::BlendState::ALPHA_BLENDING
+                        } else {
+                            wgpu::BlendState::REPLACE
+                        }),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),
                 }),
-                primitive: wgpu::PrimitiveState {
-                    topology,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: cull,
-                    polygon_mode,
-                    unclipped_depth: false,
-                    conservative: false,
+                primitive: primitive(topology, cull),
+                // Transparent: don't write depth, so back fragments behind a
+                // transparent surface still composite correctly.
+                depth_stencil: Some(depth_stencil(!alpha, wgpu::CompareFunction::Less)),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            })
+        };
+        // Single-layer "glass" pipelines. `depth_only` (the prepass) writes the
+        // nearest glass depth with no color; the color pass alpha-blends only the
+        // fragments at that nearest depth (LessEqual) and doesn't write depth.
+        let make_glass_pipeline = |fmt: wgpu::TextureFormat, depth_only: bool, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &vertex_buffers,
+                    compilation_options: Default::default(),
                 },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    // Transparent: don't write depth, so back fragments behind a
-                    // transparent surface still composite correctly.
-                    depth_write_enabled: !alpha,
-                    depth_compare: wgpu::CompareFunction::Less,
-                    stencil: Default::default(),
-                    bias: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: if depth_only {
+                            wgpu::ColorWrites::empty()
+                        } else {
+                            wgpu::ColorWrites::ALL
+                        },
+                    })],
+                    compilation_options: Default::default(),
                 }),
+                primitive: primitive(
+                    wgpu::PrimitiveTopology::TriangleList,
+                    Some(wgpu::Face::Back),
+                ),
+                depth_stencil: Some(depth_stencil(
+                    depth_only,
+                    if depth_only {
+                        wgpu::CompareFunction::Less
+                    } else {
+                        wgpu::CompareFunction::LessEqual
+                    },
+                )),
                 multisample: wgpu::MultisampleState::default(),
                 multiview: None,
             })
         };
         let f16_format = wgpu::TextureFormat::Rgba16Float;
-        let pipeline_tri       = make_pipeline(color_format, wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back), "threers tri pipeline");
-        let pipeline_tri_alpha = make_pipeline(color_format, wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back), "threers tri alpha pipeline");
-        let pipeline_tri_nocull = make_pipeline(color_format, wgpu::PrimitiveTopology::TriangleList, None,                   "threers tri nocull pipeline");
+        let pipeline_glass_depth =
+            make_glass_pipeline(color_format, true, "threers glass depth pipeline");
+        let pipeline_glass_color =
+            make_glass_pipeline(color_format, false, "threers glass color pipeline");
+        let pipeline_glass_depth_f16 =
+            make_glass_pipeline(f16_format, true, "threers glass depth f16 pipeline");
+        let pipeline_glass_color_f16 =
+            make_glass_pipeline(f16_format, false, "threers glass color f16 pipeline");
+
+        // Screen-space refraction glass: opaque single-surface pass (writes depth,
+        // Less test, no blend — it composites the refracted/reflected background
+        // itself), sampling the captured ss-color from env-group binding 9.
+        let make_ss_glass_pipeline = |fmt: wgpu::TextureFormat, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &vertex_buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_ss_glass",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(
+                    wgpu::PrimitiveTopology::TriangleList,
+                    Some(wgpu::Face::Back),
+                ),
+                depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            })
+        };
+        let pipeline_ss_glass = make_ss_glass_pipeline(color_format, "threers ss glass pipeline");
+        let pipeline_ss_glass_f16 =
+            make_ss_glass_pipeline(f16_format, "threers ss glass f16 pipeline");
+
+        // Fullscreen "sample one texture → write" pipeline, used both to build
+        // the ss-color mip chain (downsample) and to blit the capture back to the
+        // frame target before the glass draws over it.
+        let ss_blit_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("threers ss blit bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let ss_blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers ss blit layout"),
+            bind_group_layouts: &[&ss_blit_bgl],
+            push_constant_ranges: &[],
+        });
+        let ss_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("threers ss blit shader"),
+            source: wgpu::ShaderSource::Wgsl(super::shader::SS_BLIT_SHADER.into()),
+        });
+        let make_ss_blit_pipeline = |fmt: wgpu::TextureFormat, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&ss_blit_layout),
+                vertex: wgpu::VertexState {
+                    module: &ss_blit_shader,
+                    entry_point: "vs_main",
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &ss_blit_shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            })
+        };
+        let pipeline_ss_blit = make_ss_blit_pipeline(color_format, "threers ss blit pipeline");
+        let pipeline_ss_blit_f16 =
+            make_ss_blit_pipeline(f16_format, "threers ss blit f16 pipeline");
+
+        // Depth-only pass over glass back faces (cull front) → the exit depth of
+        // the glass volume, for two-surface (thick) refraction. vs_main only uses
+        // groups 0/1, so the layout is just frame + mesh.
+        let ss_back_depth_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers ss back depth layout"),
+            bind_group_layouts: &[&frame_bgl, &mesh_bgl],
+            push_constant_ranges: &[],
+        });
+        let pipeline_ss_back_depth =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("threers ss back depth pipeline"),
+                layout: Some(&ss_back_depth_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &vertex_buffers,
+                    compilation_options: Default::default(),
+                },
+                fragment: None,
+                primitive: primitive(
+                    wgpu::PrimitiveTopology::TriangleList,
+                    Some(wgpu::Face::Front),
+                ),
+                depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            });
+
+        // --- Temporal anti-aliasing resolve ---
+        let taa_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("threers taa uniform"),
+            size: std::mem::size_of::<TaaUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let taa_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("threers taa sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let tex_entry = |binding, depth| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: if depth {
+                    wgpu::TextureSampleType::Depth
+                } else {
+                    wgpu::TextureSampleType::Float { filterable: true }
+                },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let taa_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("threers taa bgl"),
+            entries: &[
+                tex_entry(0, false), // current
+                tex_entry(1, false), // history
+                tex_entry(2, true),  // depth
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let taa_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers taa layout"),
+            bind_group_layouts: &[&taa_bgl],
+            push_constant_ranges: &[],
+        });
+        let taa_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("threers taa shader"),
+            source: wgpu::ShaderSource::Wgsl(super::shader::TAA_SHADER.into()),
+        });
+        let make_taa = |fmt: wgpu::TextureFormat, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&taa_layout),
+                vertex: wgpu::VertexState {
+                    module: &taa_shader,
+                    entry_point: "vs_main",
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &taa_shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            })
+        };
+        let pipeline_taa = make_taa(color_format, "threers taa pipeline");
+        let pipeline_taa_f16 = make_taa(f16_format, "threers taa f16 pipeline");
+
+        // --- Weighted-blended OIT ---
+        // Accumulation pass: fs_oit writes to accum (additive) + revealage
+        // (multiplicative), depth-tested against opaque but not writing depth.
+        let oit_accum_format = wgpu::TextureFormat::Rgba16Float;
+        let oit_reveal_format = wgpu::TextureFormat::R16Float;
+        let add_blend = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let mul_blend = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::OneMinusSrc,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let pipeline_oit = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("threers oit accum pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &vertex_buffers,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_oit",
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: oit_accum_format,
+                        blend: Some(wgpu::BlendState {
+                            color: add_blend,
+                            alpha: add_blend,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: oit_reveal_format,
+                        blend: Some(wgpu::BlendState {
+                            color: mul_blend,
+                            alpha: mul_blend,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
+                compilation_options: Default::default(),
+            }),
+            primitive: primitive(
+                wgpu::PrimitiveTopology::TriangleList,
+                Some(wgpu::Face::Back),
+            ),
+            depth_stencil: Some(depth_stencil(false, wgpu::CompareFunction::Less)),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+        // Resolve pass: composite accum/revealage over the opaque image.
+        let oit_resolve_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("threers oit resolve bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let resolve_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("threers oit resolve shader"),
+            source: wgpu::ShaderSource::Wgsl(super::shader::OIT_RESOLVE_SHADER.into()),
+        });
+        let resolve_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("threers oit resolve layout"),
+            bind_group_layouts: &[&oit_resolve_bgl],
+            push_constant_ranges: &[],
+        });
+        let make_resolve = |fmt: wgpu::TextureFormat, label: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&resolve_layout),
+                vertex: wgpu::VertexState {
+                    module: &resolve_shader,
+                    entry_point: "vs_main",
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &resolve_shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: fmt,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            })
+        };
+        let pipeline_oit_resolve = make_resolve(color_format, "threers oit resolve pipeline");
+        let pipeline_oit_resolve_f16 = make_resolve(f16_format, "threers oit resolve f16 pipeline");
+        let pipeline_tri = make_pipeline(
+            color_format,
+            wgpu::PrimitiveTopology::TriangleList,
+            Some(wgpu::Face::Back),
+            "threers tri pipeline",
+        );
+        let pipeline_tri_alpha = make_pipeline(
+            color_format,
+            wgpu::PrimitiveTopology::TriangleList,
+            Some(wgpu::Face::Back),
+            "threers tri alpha pipeline",
+        );
+        let pipeline_tri_nocull = make_pipeline(
+            color_format,
+            wgpu::PrimitiveTopology::TriangleList,
+            None,
+            "threers tri nocull pipeline",
+        );
         let make_sky_pipeline = |fmt: wgpu::TextureFormat, label: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
@@ -586,22 +1637,8 @@ impl Renderer {
                     })],
                     compilation_options: Default::default(),
                 }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: false,
-                    depth_compare: wgpu::CompareFunction::LessEqual,
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: Some(depth_stencil(false, wgpu::CompareFunction::LessEqual)),
                 multisample: wgpu::MultisampleState::default(),
                 multiview: None,
             })
@@ -611,16 +1648,61 @@ impl Renderer {
         // wgpu requires the NON_FILL_POLYGON_MODE feature for Line/Point polygon modes on
         // some backends. If unsupported, this falls back to a no-op (renders nothing extra),
         // but Chromium's WebGPU/SwiftShader path tends to allow it.
-        let pipeline_tri_wire  = make_pipeline(color_format, wgpu::PrimitiveTopology::LineList,     None,                   "threers tri wire pipeline");
-        let pipeline_line      = make_pipeline(color_format, wgpu::PrimitiveTopology::LineList,     None,                   "threers line pipeline");
-        let pipeline_point     = make_pipeline(color_format, wgpu::PrimitiveTopology::PointList,    None,                   "threers point pipeline");
-        let pipeline_tri_f16       = make_pipeline(f16_format, wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back), "threers tri f16 pipeline");
-        let pipeline_tri_alpha_f16 = make_pipeline(f16_format, wgpu::PrimitiveTopology::TriangleList, Some(wgpu::Face::Back), "threers tri alpha f16 pipeline");
-        let pipeline_tri_nocull_f16 = make_pipeline(f16_format, wgpu::PrimitiveTopology::TriangleList, None, "threers tri nocull f16 pipeline");
+        let pipeline_tri_wire = make_pipeline(
+            color_format,
+            wgpu::PrimitiveTopology::LineList,
+            None,
+            "threers tri wire pipeline",
+        );
+        let pipeline_line = make_pipeline(
+            color_format,
+            wgpu::PrimitiveTopology::LineList,
+            None,
+            "threers line pipeline",
+        );
+        let pipeline_point = make_pipeline(
+            color_format,
+            wgpu::PrimitiveTopology::PointList,
+            None,
+            "threers point pipeline",
+        );
+        let pipeline_tri_f16 = make_pipeline(
+            f16_format,
+            wgpu::PrimitiveTopology::TriangleList,
+            Some(wgpu::Face::Back),
+            "threers tri f16 pipeline",
+        );
+        let pipeline_tri_alpha_f16 = make_pipeline(
+            f16_format,
+            wgpu::PrimitiveTopology::TriangleList,
+            Some(wgpu::Face::Back),
+            "threers tri alpha f16 pipeline",
+        );
+        let pipeline_tri_nocull_f16 = make_pipeline(
+            f16_format,
+            wgpu::PrimitiveTopology::TriangleList,
+            None,
+            "threers tri nocull f16 pipeline",
+        );
         let pipeline_tri_sky_f16 = make_sky_pipeline(f16_format, "threers tri sky f16 pipeline");
-        let pipeline_tri_wire_f16  = make_pipeline(f16_format, wgpu::PrimitiveTopology::LineList, None, "threers tri wire f16 pipeline");
-        let pipeline_line_f16      = make_pipeline(f16_format, wgpu::PrimitiveTopology::LineList, None, "threers line f16 pipeline");
-        let pipeline_point_f16     = make_pipeline(f16_format, wgpu::PrimitiveTopology::PointList, None, "threers point f16 pipeline");
+        let pipeline_tri_wire_f16 = make_pipeline(
+            f16_format,
+            wgpu::PrimitiveTopology::LineList,
+            None,
+            "threers tri wire f16 pipeline",
+        );
+        let pipeline_line_f16 = make_pipeline(
+            f16_format,
+            wgpu::PrimitiveTopology::LineList,
+            None,
+            "threers line f16 pipeline",
+        );
+        let pipeline_point_f16 = make_pipeline(
+            f16_format,
+            wgpu::PrimitiveTopology::PointList,
+            None,
+            "threers point f16 pipeline",
+        );
 
         // Instanced pipeline: vertex layout slot 0 (per-vertex), slot 1 per-instance mat4.
         let vertex_buffers_instanced = [
@@ -628,20 +1710,52 @@ impl Renderer {
                 array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
-                    wgpu::VertexAttribute { offset:  0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
-                    wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
-                    wgpu::VertexAttribute { offset: 24, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
-                    wgpu::VertexAttribute { offset: 32, shader_location: 3, format: wgpu::VertexFormat::Float32x4 },
+                    wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x3,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 12,
+                        shader_location: 1,
+                        format: wgpu::VertexFormat::Float32x3,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 24,
+                        shader_location: 2,
+                        format: wgpu::VertexFormat::Float32x2,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 32,
+                        shader_location: 3,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
                 ],
             },
             wgpu::VertexBufferLayout {
                 array_stride: 64,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &[
-                    wgpu::VertexAttribute { offset:  0, shader_location: 4, format: wgpu::VertexFormat::Float32x4 },
-                    wgpu::VertexAttribute { offset: 16, shader_location: 5, format: wgpu::VertexFormat::Float32x4 },
-                    wgpu::VertexAttribute { offset: 32, shader_location: 6, format: wgpu::VertexFormat::Float32x4 },
-                    wgpu::VertexAttribute { offset: 48, shader_location: 7, format: wgpu::VertexFormat::Float32x4 },
+                    wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 4,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 16,
+                        shader_location: 5,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 32,
+                        shader_location: 6,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 48,
+                        shader_location: 7,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
                 ],
             },
         ];
@@ -651,18 +1765,42 @@ impl Renderer {
                 array_stride: GpuMesh::VERTEX_STRIDE as wgpu::BufferAddress,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
-                    wgpu::VertexAttribute { offset:  0, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
-                    wgpu::VertexAttribute { offset: 12, shader_location: 1, format: wgpu::VertexFormat::Float32x3 },
-                    wgpu::VertexAttribute { offset: 24, shader_location: 2, format: wgpu::VertexFormat::Float32x2 },
-                    wgpu::VertexAttribute { offset: 32, shader_location: 3, format: wgpu::VertexFormat::Float32x4 },
+                    wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x3,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 12,
+                        shader_location: 1,
+                        format: wgpu::VertexFormat::Float32x3,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 24,
+                        shader_location: 2,
+                        format: wgpu::VertexFormat::Float32x2,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 32,
+                        shader_location: 3,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
                 ],
             },
             wgpu::VertexBufferLayout {
                 array_stride: 32,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
-                    wgpu::VertexAttribute { offset:  0, shader_location: 4, format: wgpu::VertexFormat::Float32x4 },
-                    wgpu::VertexAttribute { offset: 16, shader_location: 5, format: wgpu::VertexFormat::Float32x4 },
+                    wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 4,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 16,
+                        shader_location: 5,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
                 ],
             },
         ];
@@ -685,22 +1823,11 @@ impl Renderer {
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            primitive: primitive(
+                wgpu::PrimitiveTopology::TriangleList,
+                Some(wgpu::Face::Back),
+            ),
+            depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
@@ -723,22 +1850,11 @@ impl Renderer {
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            primitive: primitive(
+                wgpu::PrimitiveTopology::TriangleList,
+                Some(wgpu::Face::Back),
+            ),
+            depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
@@ -762,63 +1878,42 @@ impl Renderer {
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            primitive: primitive(
+                wgpu::PrimitiveTopology::TriangleList,
+                Some(wgpu::Face::Back),
+            ),
+            depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
-        let pipeline_instanced_f16 = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("threers instanced f16 pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_instanced",
-                buffers: &vertex_buffers_instanced,
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: f16_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-        });
+        let pipeline_instanced_f16 =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("threers instanced f16 pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_instanced",
+                    buffers: &vertex_buffers_instanced,
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: f16_format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(
+                    wgpu::PrimitiveTopology::TriangleList,
+                    Some(wgpu::Face::Back),
+                ),
+                depth_stencil: Some(depth_stencil(true, wgpu::CompareFunction::Less)),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            });
 
         let pipeline_sprite = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("threers sprite pipeline"),
@@ -839,22 +1934,8 @@ impl Renderer {
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+            depth_stencil: Some(depth_stencil(false, wgpu::CompareFunction::LessEqual)),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
@@ -877,22 +1958,8 @@ impl Renderer {
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
+            primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+            depth_stencil: Some(depth_stencil(false, wgpu::CompareFunction::LessEqual)),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
@@ -910,15 +1977,11 @@ impl Renderer {
                     compilation_options: Default::default(),
                 },
                 fragment: None,
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Front),
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
+                primitive: primitive(
+                    wgpu::PrimitiveTopology::TriangleList,
+                    Some(wgpu::Face::Front),
+                ),
+                // Shadow bias reduces acne; keep the explicit DepthStencilState.
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH_FORMAT,
                     depth_write_enabled: true,
@@ -935,8 +1998,10 @@ impl Renderer {
             })
         };
         let pipeline_shadow = make_shadow_pipeline("vs_shadow", "threers shadow pipeline");
-        let pipeline_shadow_spot = make_shadow_pipeline("vs_shadow_spot", "threers spot shadow pipeline");
-        let pipeline_shadow_point = make_shadow_pipeline("vs_shadow_point", "threers point shadow pipeline");
+        let pipeline_shadow_spot =
+            make_shadow_pipeline("vs_shadow_spot", "threers spot shadow pipeline");
+        let pipeline_shadow_point =
+            make_shadow_pipeline("vs_shadow_point", "threers point shadow pipeline");
 
         // Post-fx fullscreen-quad pipeline. Reads one input texture, writes
         // to a render attachment matching the surface format.
@@ -1037,11 +2102,12 @@ impl Renderer {
                 },
             ],
         });
-        let postfx_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("threers postfx pipeline layout"),
-            bind_group_layouts: &[&postfx_bgl],
-            push_constant_ranges: &[],
-        });
+        let postfx_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers postfx pipeline layout"),
+                bind_group_layouts: &[&postfx_bgl],
+                push_constant_ranges: &[],
+            });
         let pipeline_postfx = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("threers postfx pipeline"),
             layout: Some(&postfx_pipeline_layout),
@@ -1061,15 +2127,7 @@ impl Renderer {
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
+            primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
@@ -1112,7 +2170,11 @@ impl Renderer {
         });
         let ssao_noise_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers ssao noise"),
-            size: wgpu::Extent3d { width: 4, height: 4, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1123,7 +2185,11 @@ impl Renderer {
         let ssao_noise_view = ssao_noise_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let glitch_disp_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers glitch disp"),
-            size: wgpu::Extent3d { width: 64, height: 64, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1134,7 +2200,11 @@ impl Renderer {
         let glitch_disp_view = glitch_disp_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let glitch_snow_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers glitch snow"),
-            size: wgpu::Extent3d { width: 800, height: 600, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 800,
+                height: 600,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1145,7 +2215,11 @@ impl Renderer {
         let glitch_snow_view = glitch_snow_tex.create_view(&wgpu::TextureViewDescriptor::default());
         let rgba_upload_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers rgba upload"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1182,97 +2256,75 @@ impl Renderer {
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
+            primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
-        let pipeline_postfx_outline_add = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("threers postfx outline additive pipeline"),
-            layout: Some(&postfx_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &postfx_shader,
-                entry_point: "vs_main",
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &postfx_shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent::REPLACE,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-        });
-        let pipeline_postfx_multiply = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("threers postfx multiply pipeline"),
-            layout: Some(&postfx_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &postfx_shader,
-                entry_point: "vs_main",
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &postfx_shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::Dst,
-                            dst_factor: wgpu::BlendFactor::Zero,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent::REPLACE,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-        });
+        let pipeline_postfx_outline_add =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("threers postfx outline additive pipeline"),
+                layout: Some(&postfx_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &postfx_shader,
+                    entry_point: "vs_main",
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &postfx_shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::SrcAlpha,
+                                dst_factor: wgpu::BlendFactor::One,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent::REPLACE,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            });
+        let pipeline_postfx_multiply =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("threers postfx multiply pipeline"),
+                layout: Some(&postfx_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &postfx_shader,
+                    entry_point: "vs_main",
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &postfx_shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::Dst,
+                                dst_factor: wgpu::BlendFactor::Zero,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent::REPLACE,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            });
         let postfx_f16_format = wgpu::TextureFormat::Rgba16Float;
         let pipeline_postfx_f16 = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("threers postfx f16 pipeline"),
@@ -1293,78 +2345,71 @@ impl Renderer {
                 })],
                 compilation_options: Default::default(),
             }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
+            primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
         });
-        let pipeline_postfx_add_f16 = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("threers postfx additive f16 pipeline"),
-            layout: Some(&postfx_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &postfx_shader,
-                entry_point: "vs_main",
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &postfx_shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: postfx_f16_format,
-                    blend: Some(wgpu::BlendState {
-                        color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::One,
-                            operation: wgpu::BlendOperation::Add,
-                        },
-                        alpha: wgpu::BlendComponent::REPLACE,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-        });
+        let pipeline_postfx_add_f16 =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("threers postfx additive f16 pipeline"),
+                layout: Some(&postfx_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &postfx_shader,
+                    entry_point: "vs_main",
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &postfx_shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: postfx_f16_format,
+                        blend: Some(wgpu::BlendState {
+                            color: wgpu::BlendComponent {
+                                src_factor: wgpu::BlendFactor::One,
+                                dst_factor: wgpu::BlendFactor::One,
+                                operation: wgpu::BlendOperation::Add,
+                            },
+                            alpha: wgpu::BlendComponent::REPLACE,
+                        }),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+            });
 
         let sprite_quad = {
             let mut g = crate::core::BufferGeometry::new();
-            g.set_attribute("position", crate::core::BufferAttribute::new(vec![
-                -0.5, -0.5, 0.0,
-                 0.5, -0.5, 0.0,
-                 0.5,  0.5, 0.0,
-                -0.5,  0.5, 0.0,
-            ], 3));
-            g.set_attribute("uv", crate::core::BufferAttribute::new(vec![
-                0.0, 1.0,  1.0, 1.0,  1.0, 0.0,  0.0, 0.0,
-            ], 2));
+            g.set_attribute(
+                "position",
+                crate::core::BufferAttribute::new(
+                    vec![
+                        -0.5, -0.5, 0.0, 0.5, -0.5, 0.0, 0.5, 0.5, 0.0, -0.5, 0.5, 0.0,
+                    ],
+                    3,
+                ),
+            );
+            g.set_attribute(
+                "uv",
+                crate::core::BufferAttribute::new(vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0], 2),
+            );
             g.set_index(vec![0, 1, 2, 0, 2, 3]);
             GpuMesh::upload(&device, &g)
         };
 
-        let depth_view = create_depth_view(&device, width, height);
+        let (depth_texture, depth_view) = create_depth_view(&device, width, height);
         let hw_depth_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers postfx hw depth placeholder"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1372,6 +2417,9 @@ impl Renderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
+        // 1×1 depth bound at env-group binding 11 when no glass draws.
+        let ss_depth_placeholder_view =
+            hw_depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         let frame_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("threers frame uniform"),
@@ -1431,21 +2479,37 @@ impl Renderer {
             ..Default::default()
         });
 
-        let default_white_srgb = GpuTexture::upload(&device, &queue,
-            &Texture::solid([255, 255, 255, 255], TextureFormat::Rgba8UnormSrgb));
-        let default_white_linear = GpuTexture::upload(&device, &queue,
-            &Texture::solid([255, 255, 255, 255], TextureFormat::Rgba8Unorm));
-        let default_normal = GpuTexture::upload(&device, &queue,
-            &Texture::solid([128, 128, 255, 255], TextureFormat::Rgba8Unorm));
-        let default_black = GpuTexture::upload(&device, &queue,
-            &Texture::solid([0, 0, 0, 255], TextureFormat::Rgba8Unorm));
+        let default_white_srgb = GpuTexture::upload(
+            &device,
+            &queue,
+            &Texture::solid([255, 255, 255, 255], TextureFormat::Rgba8UnormSrgb),
+        );
+        let default_white_linear = GpuTexture::upload(
+            &device,
+            &queue,
+            &Texture::solid([255, 255, 255, 255], TextureFormat::Rgba8Unorm),
+        );
+        let default_normal = GpuTexture::upload(
+            &device,
+            &queue,
+            &Texture::solid([128, 128, 255, 255], TextureFormat::Rgba8Unorm),
+        );
+        let default_black = GpuTexture::upload(
+            &device,
+            &queue,
+            &Texture::solid([0, 0, 0, 255], TextureFormat::Rgba8Unorm),
+        );
 
         // Default 1x1 environment cubemap: all-black faces (zero env contribution).
         let default_env_cube = {
             let face_data = [0u8; 4];
             let faces = [
-                face_data.to_vec(), face_data.to_vec(), face_data.to_vec(),
-                face_data.to_vec(), face_data.to_vec(), face_data.to_vec(),
+                face_data.to_vec(),
+                face_data.to_vec(),
+                face_data.to_vec(),
+                face_data.to_vec(),
+                face_data.to_vec(),
+                face_data.to_vec(),
             ];
             let src = CubeTexture::new(1, TextureFormat::Rgba8UnormSrgb, faces);
             GpuCubeTexture::upload(&device, &queue, &src)
@@ -1457,12 +2521,27 @@ impl Renderer {
             mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        // Trilinear sampler for the screen-space glass capture — roughness maps
+        // to a mip LOD so rough glass blurs its refracted/reflected image.
+        let ss_glass_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("threers ss glass sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         // Shadow depth texture for the directional light's depth pre-pass.
         // 1024×1024 directional shadow map.
         const SHADOW_SIZE: u32 = 1024;
         let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers shadow depth"),
-            size: wgpu::Extent3d { width: SHADOW_SIZE, height: SHADOW_SIZE, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: SHADOW_SIZE,
+                height: SHADOW_SIZE,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1483,7 +2562,11 @@ impl Renderer {
 
         let spot_shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers spot shadow depth"),
-            size: wgpu::Extent3d { width: SHADOW_SIZE, height: SHADOW_SIZE, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: SHADOW_SIZE,
+                height: SHADOW_SIZE,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1506,7 +2589,11 @@ impl Renderer {
         const POINT_SHADOW_SIZE: u32 = 512;
         let point_shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers point shadow depth cube"),
-            size: wgpu::Extent3d { width: POINT_SHADOW_SIZE, height: POINT_SHADOW_SIZE, depth_or_array_layers: 6 },
+            size: wgpu::Extent3d {
+                width: POINT_SHADOW_SIZE,
+                height: POINT_SHADOW_SIZE,
+                depth_or_array_layers: 6,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1519,16 +2606,22 @@ impl Renderer {
             dimension: Some(wgpu::TextureViewDimension::Cube),
             ..Default::default()
         });
-        let mk_face = |i: u32| point_shadow_tex.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("threers point shadow face"),
-            dimension: Some(wgpu::TextureViewDimension::D2),
-            base_array_layer: i,
-            array_layer_count: Some(1),
-            ..Default::default()
-        });
+        let mk_face = |i: u32| {
+            point_shadow_tex.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("threers point shadow face"),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: i,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        };
         let point_shadow_face_views: [wgpu::TextureView; 6] = [
-            mk_face(0), mk_face(1), mk_face(2),
-            mk_face(3), mk_face(4), mk_face(5),
+            mk_face(0),
+            mk_face(1),
+            mk_face(2),
+            mk_face(3),
+            mk_face(4),
+            mk_face(5),
         ];
         let point_shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("threers point shadow sampler"),
@@ -1543,7 +2636,11 @@ impl Renderer {
 
         let default_cube_uv_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers default cube uv"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1552,28 +2649,45 @@ impl Renderer {
             view_formats: &[],
         });
         queue.write_texture(
-            wgpu::ImageCopyTexture { texture: &default_cube_uv_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::ImageCopyTexture {
+                texture: &default_cube_uv_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &[0u8, 0, 0, 255],
-            wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
-        let default_cube_uv_view = default_cube_uv_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let default_cube_uv_view =
+            default_cube_uv_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let env_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("threers env bg"),
-            layout: &env_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&default_env_cube.view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&env_sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&shadow_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&shadow_sampler) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&spot_shadow_view) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&spot_shadow_sampler) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&point_shadow_cube_view) },
-                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&point_shadow_sampler) },
-                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&default_cube_uv_view) },
-            ],
-        });
+        let env_bind_group = env_bind_group!(
+            device,
+            &env_bgl,
+            "threers env bg",
+            &default_env_cube.view,
+            &env_sampler,
+            &shadow_view,
+            &shadow_sampler,
+            &spot_shadow_view,
+            &spot_shadow_sampler,
+            &point_shadow_cube_view,
+            &point_shadow_sampler,
+            &default_cube_uv_view,
+            &default_cube_uv_view,
+            &ss_glass_sampler,
+            &ss_depth_placeholder_view,
+            &ss_depth_placeholder_view,
+        );
 
         // Dummy 1x1 depth textures used by `shadow_env_bind_group` so the
         // shadow passes can satisfy the pipeline layout without binding the
@@ -1581,18 +2695,29 @@ impl Renderer {
         // RenderAttachment + TextureBinding usage of the same resource).
         let dummy_depth_2d = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers dummy depth 2d"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        let dummy_depth_2d_view = dummy_depth_2d.create_view(&wgpu::TextureViewDescriptor::default());
+        let dummy_depth_2d_view =
+            dummy_depth_2d.create_view(&wgpu::TextureViewDescriptor::default());
         let dummy_depth_cube = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers dummy depth cube"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 6,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: DEPTH_FORMAT,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1603,25 +2728,57 @@ impl Renderer {
             dimension: Some(wgpu::TextureViewDimension::Cube),
             ..Default::default()
         });
-        let shadow_env_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("threers shadow env bg (dummies)"),
-            layout: &env_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&default_env_cube.view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&env_sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&dummy_depth_2d_view) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&shadow_sampler) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&dummy_depth_2d_view) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&spot_shadow_sampler) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&dummy_depth_cube_view) },
-                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&point_shadow_sampler) },
-                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&default_cube_uv_view) },
-            ],
-        });
+        let shadow_env_bind_group = env_bind_group!(
+            device,
+            &env_bgl,
+            "threers shadow env bg (dummies)",
+            &default_env_cube.view,
+            &env_sampler,
+            &dummy_depth_2d_view,
+            &shadow_sampler,
+            &dummy_depth_2d_view,
+            &spot_shadow_sampler,
+            &dummy_depth_cube_view,
+            &point_shadow_sampler,
+            &default_cube_uv_view,
+            &default_cube_uv_view,
+            &ss_glass_sampler,
+            &ss_depth_placeholder_view,
+            &ss_depth_placeholder_view,
+        );
 
         Self {
             device,
             queue,
+            pipeline_glass_depth,
+            pipeline_glass_color,
+            pipeline_glass_depth_f16,
+            pipeline_glass_color_f16,
+            pipeline_oit,
+            pipeline_oit_resolve,
+            pipeline_oit_resolve_f16,
+            oit_resolve_bgl,
+            oit_targets: None,
+            ss_color: None,
+            ss_glass_sampler,
+            ss_depth: None,
+            ss_back_depth: None,
+            pipeline_ss_back_depth,
+            ss_depth_placeholder_view,
+            pipeline_ss_blit,
+            pipeline_ss_blit_f16,
+            pipeline_ss_glass,
+            pipeline_ss_glass_f16,
+            ss_blit_bgl,
+            taa_enabled: false,
+            taa_frame: 0,
+            taa_prev_view_proj: [0.0; 16],
+            taa_history: None,
+            taa_uniform,
+            taa_bgl,
+            taa_sampler,
+            pipeline_taa,
+            pipeline_taa_f16,
             pipeline_tri,
             pipeline_tri_alpha,
             pipeline_tri_nocull,
@@ -1670,7 +2827,11 @@ impl Renderer {
             mesh_bgl,
             tex_bgl,
             env_bgl,
+            custom_mesh_bgl,
+            custom_pipeline_layout,
+            custom_pipelines: HashMap::new(),
             depth_view,
+            depth_texture,
             hw_depth_tex,
             depth_size: (width, height),
             geom_cache: HashMap::new(),
@@ -1711,11 +2872,15 @@ impl Renderer {
         }
     }
 
-    pub fn color_format(&self) -> wgpu::TextureFormat { self.color_format }
+    pub fn color_format(&self) -> wgpu::TextureFormat {
+        self.color_format
+    }
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if (width, height) != self.depth_size && width > 0 && height > 0 {
-            self.depth_view = create_depth_view(&self.device, width, height);
+            let (tex, view) = create_depth_view(&self.device, width, height);
+            self.depth_texture = tex;
+            self.depth_view = view;
             self.depth_size = (width, height);
         }
     }
@@ -1746,7 +2911,10 @@ impl Renderer {
         camera: PostFxCamera,
     ) {
         let output_format = if output_rt_id != 0 {
-            self.rt_registry.get(&output_rt_id).map(|rt| rt.format).unwrap_or(self.color_format)
+            self.rt_registry
+                .get(&output_rt_id)
+                .map(|rt| rt.format)
+                .unwrap_or(self.color_format)
         } else {
             self.color_format
         };
@@ -1780,7 +2948,9 @@ impl Renderer {
             None
         };
         let depth_ref = depth_owned.as_ref().unwrap_or(&input_view);
-        let input_is_f16 = self.rt_registry.get(&input_rt_id)
+        let input_is_f16 = self
+            .rt_registry
+            .get(&input_rt_id)
             .map(|rt| rt.format == wgpu::TextureFormat::Rgba16Float)
             .unwrap_or(false);
         // Kind 0 copies stored RT texels 1:1. Default: linear (non-sRGB-decode)
@@ -1806,7 +2976,9 @@ impl Renderer {
                     ..Default::default()
                 })
             })
-        } else { None };
+        } else {
+            None
+        };
         let input_raw = if kind0_byte_copy {
             self.rt_registry.get(&input_rt_id).map(|rt| {
                 rt.color_texture.create_view(&wgpu::TextureViewDescriptor {
@@ -1815,7 +2987,9 @@ impl Renderer {
                     ..Default::default()
                 })
             })
-        } else { None };
+        } else {
+            None
+        };
         let depth_linear = if use_linear_depth && depth_rt_id != 0 {
             self.rt_registry.get(&depth_rt_id).map(|rt| {
                 rt.color_texture.create_view(&wgpu::TextureViewDescriptor {
@@ -1824,7 +2998,9 @@ impl Renderer {
                     ..Default::default()
                 })
             })
-        } else { None };
+        } else {
+            None
+        };
         let normal_linear = if use_linear_depth {
             self.rt_registry.get(&normal_rt_id).map(|rt| {
                 rt.color_texture.create_view(&wgpu::TextureViewDescriptor {
@@ -1833,8 +3009,13 @@ impl Renderer {
                     ..Default::default()
                 })
             })
-        } else { None };
-        let input_bind = input_raw.as_ref().or(input_linear.as_ref()).unwrap_or(&input_view);
+        } else {
+            None
+        };
+        let input_bind = input_raw
+            .as_ref()
+            .or(input_linear.as_ref())
+            .unwrap_or(&input_view);
         let depth_bind = depth_linear.as_ref().unwrap_or(depth_ref);
         let mut params2 = params2;
         if kind0_byte_copy {
@@ -1868,21 +3049,46 @@ impl Renderer {
             Some(n) => {
                 let normal_bind = normal_linear.as_ref().unwrap_or(&n);
                 self.apply_postfx_ex(
-                    input_bind, output_view, depth_bind, normal_bind, hw_depth_bind,
-                    kind, time, params2, params3, width, height, additive, camera, use_hw_depth,
+                    input_bind,
+                    output_view,
+                    depth_bind,
+                    normal_bind,
+                    hw_depth_bind,
+                    kind,
+                    time,
+                    params2,
+                    params3,
+                    width,
+                    height,
+                    additive,
+                    camera,
+                    use_hw_depth,
                     output_format,
                     flip_y,
                 );
                 self.rt_view_cache.insert(normal_rt_id, n);
             }
             None => {
-                let fallback_normal = self.default_normal.texture.create_view(
-                    &wgpu::TextureViewDescriptor::default(),
-                );
+                let fallback_normal = self
+                    .default_normal
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
                 let normal_bind = normal_linear.as_ref().unwrap_or(&fallback_normal);
                 self.apply_postfx_ex(
-                    input_bind, output_view, depth_bind, normal_bind, hw_depth_bind,
-                    kind, time, params2, params3, width, height, additive, camera, use_hw_depth,
+                    input_bind,
+                    output_view,
+                    depth_bind,
+                    normal_bind,
+                    hw_depth_bind,
+                    kind,
+                    time,
+                    params2,
+                    params3,
+                    width,
+                    height,
+                    additive,
+                    camera,
+                    use_hw_depth,
                     output_format,
                     flip_y,
                 );
@@ -1911,16 +3117,29 @@ impl Renderer {
         width: u32,
         height: u32,
     ) {
-        let fallback_normal = self.default_normal.texture.create_view(
-            &wgpu::TextureViewDescriptor::default(),
-        );
+        let fallback_normal = self
+            .default_normal
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let hw_fallback = self.hw_depth_tex.create_view(&wgpu::TextureViewDescriptor {
             aspect: wgpu::TextureAspect::DepthOnly,
             ..Default::default()
         });
         self.apply_postfx_ex(
-            input_view, output_view, input_view, &fallback_normal, &hw_fallback,
-            kind, time, params2, params3, width, height, false, PostFxCamera::default(), false,
+            input_view,
+            output_view,
+            input_view,
+            &fallback_normal,
+            &hw_fallback,
+            kind,
+            time,
+            params2,
+            params3,
+            width,
+            height,
+            false,
+            PostFxCamera::default(),
+            false,
             self.color_format,
             !matches!(kind, 4 | 5 | 25 | 26),
         );
@@ -1962,7 +3181,11 @@ impl Renderer {
             params: [
                 kind as f32,
                 time,
-                if kind == 5 || kind == 25 || kind == 26 { params3[3] } else { 0.0 },
+                if kind == 5 || kind == 25 || kind == 26 {
+                    params3[3]
+                } else {
+                    0.0
+                },
                 if use_hw_depth { 1.0 } else { 0.0 },
             ],
             params2,
@@ -1973,7 +3196,12 @@ impl Renderer {
                 if linear_output { 1.0 } else { 0.0 },
                 if flip_y { 1.0 } else { 0.0 },
             ],
-            ssao0: [camera.near, camera.far, camera.kernel_radius, camera.kernel_size as f32],
+            ssao0: [
+                camera.near,
+                camera.far,
+                camera.kernel_radius,
+                camera.kernel_size as f32,
+            ],
             inv_proj: camera.inv_proj,
             proj: camera.proj,
         };
@@ -1989,18 +3217,47 @@ impl Renderer {
             label: Some("threers postfx bg"),
             layout: &self.postfx_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(input_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.postfx_sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(depth_view) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(
-                    if kind == 5 || kind == 25 || kind == 26 { &self.postfx_sampler } else { &self.postfx_nearest_sampler }
-                ) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(normal_view) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(hw_depth_view) },
-                wgpu::BindGroupEntry { binding: 7, resource: self.ssao_kernel_buffer.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(
-                    if kind == 26 {
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(input_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.postfx_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(
+                        if kind == 5 || kind == 25 || kind == 26 {
+                            &self.postfx_sampler
+                        } else {
+                            &self.postfx_nearest_sampler
+                        },
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(hw_depth_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: self.ssao_kernel_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(if kind == 26 {
                         &self.glitch_snow_view
                     } else if kind == 5 || kind == 25 {
                         &self.glitch_disp_view
@@ -2008,16 +3265,19 @@ impl Renderer {
                         &self.glitch_snow_view
                     } else {
                         &self.ssao_noise_view
-                    }
-                ) },
-                wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::Sampler(
-                    &self.postfx_noise_sampler
-                ) },
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::Sampler(&self.postfx_noise_sampler),
+                },
             ],
         });
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("threers postfx encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("threers postfx encoder"),
+            });
         {
             let multiply = kind == 15;
             let load_op = if additive || multiply {
@@ -2073,7 +3333,8 @@ impl Renderer {
                 data[i * 4 + 2] = kernel[base + 2];
             }
         }
-        self.queue.write_buffer(&self.ssao_kernel_buffer, 0, bytemuck::cast_slice(&data));
+        self.queue
+            .write_buffer(&self.ssao_kernel_buffer, 0, bytemuck::cast_slice(&data));
     }
 
     /// Upload GLSL-baked dotscreen pattern (R32Float; binding 8 when kind=3 params3.w>0.5).
@@ -2099,7 +3360,11 @@ impl Renderer {
         if self.rgba_upload_tex.width() != w || self.rgba_upload_tex.height() != h {
             self.rgba_upload_tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("threers rgba upload"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -2107,9 +3372,9 @@ impl Renderer {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            self.rgba_upload_view = self.rgba_upload_tex.create_view(
-                &wgpu::TextureViewDescriptor::default(),
-            );
+            self.rgba_upload_view = self
+                .rgba_upload_tex
+                .create_view(&wgpu::TextureViewDescriptor::default());
         }
         const ALIGN: u32 = 256;
         let unpadded = w * 4;
@@ -2133,14 +3398,19 @@ impl Renderer {
                 bytes_per_row: Some(padded),
                 rows_per_image: Some(h),
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
-        let upload_view = self.rgba_upload_tex.create_view(
-            &wgpu::TextureViewDescriptor::default(),
-        );
-        let fallback_normal = self.default_normal.texture.create_view(
-            &wgpu::TextureViewDescriptor::default(),
-        );
+        let upload_view = self
+            .rgba_upload_tex
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let fallback_normal = self
+            .default_normal
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let hw_fallback = self.hw_depth_tex.create_view(&wgpu::TextureViewDescriptor {
             aspect: wgpu::TextureAspect::DepthOnly,
             ..Default::default()
@@ -2172,7 +3442,11 @@ impl Renderer {
         if self.glitch_snow_tex.width() != w || self.glitch_snow_tex.height() != h {
             self.glitch_snow_tex = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("threers glitch snow"),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -2180,7 +3454,9 @@ impl Renderer {
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
-            self.glitch_snow_view = self.glitch_snow_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.glitch_snow_view = self
+                .glitch_snow_tex
+                .create_view(&wgpu::TextureViewDescriptor::default());
         }
         self.queue.write_texture(
             wgpu::ImageCopyTexture {
@@ -2195,7 +3471,11 @@ impl Renderer {
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -2215,7 +3495,11 @@ impl Renderer {
                 bytes_per_row: Some(sz * 4),
                 rows_per_image: Some(sz),
             },
-            wgpu::Extent3d { width: sz, height: sz, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: sz,
+                height: sz,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -2238,7 +3522,11 @@ impl Renderer {
                 bytes_per_row: Some(16),
                 rows_per_image: Some(4),
             },
-            wgpu::Extent3d { width: 4, height: 4, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -2254,7 +3542,9 @@ impl Renderer {
         let (orig_w, orig_h) = self.depth_size;
         let orig_depth = std::mem::replace(
             &mut self.depth_view,
-            target.depth_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            target
+                .depth_texture
+                .create_view(&wgpu::TextureViewDescriptor::default()),
         );
         self.depth_size = (target.side, target.side);
         let face_view = &target.face_views[face % 6];
@@ -2265,24 +3555,74 @@ impl Renderer {
 
     /// Render `scene` from `camera` into an offscreen [`RenderTarget`]. Uses
     /// the target's own depth buffer (required even when RT size matches the canvas).
-    pub fn render_to(&mut self, scene: &mut crate::scene::Scene, camera: &dyn Camera, target: &super::RenderTarget) {
+    pub fn render_to(
+        &mut self,
+        scene: &mut crate::scene::Scene,
+        camera: &dyn Camera,
+        target: &super::RenderTarget,
+    ) {
         let (orig_w, orig_h) = self.depth_size;
         let orig_depth = std::mem::replace(&mut self.depth_view, target.depth_view_clone());
         self.depth_size = (target.width, target.height);
         let linear_fb = target.format == wgpu::TextureFormat::Rgba16Float;
-        self.render(scene, camera, &target.color_view, linear_fb);
+        // The target owns the live depth this pass — pass it as the copy source
+        // for the screen-space glass ray march.
+        self.render_inner(
+            scene,
+            camera,
+            &target.color_view,
+            linear_fb,
+            Some(&target.depth_texture),
+            Some(&target.color_texture),
+        );
         self.depth_view = orig_depth;
         self.depth_size = (orig_w, orig_h);
     }
 
     /// Draw `scene` from `camera` into `target_view`.
     /// `linear_framebuffer`: when true, skip sRGB encode (HalfFloat / postfx RT).
-    pub fn render(&mut self, scene: &mut Scene, camera: &dyn Camera, target_view: &wgpu::TextureView, linear_framebuffer: bool) {
+    pub fn render(
+        &mut self,
+        scene: &mut Scene,
+        camera: &dyn Camera,
+        target_view: &wgpu::TextureView,
+        linear_framebuffer: bool,
+    ) {
+        self.render_inner(scene, camera, target_view, linear_framebuffer, None, None);
+    }
+
+    /// Body of [`render`]. `depth_src` is the depth texture backing the current
+    /// depth attachment (the external target's, via `render_to`) — the copy
+    /// source for the screen-space glass `ss_depth`; `None` uses the renderer's
+    /// own depth (the direct-`render`/surface path).
+    fn render_inner(
+        &mut self,
+        scene: &mut Scene,
+        camera: &dyn Camera,
+        target_view: &wgpu::TextureView,
+        linear_framebuffer: bool,
+        depth_src: Option<&wgpu::Texture>,
+        color_src: Option<&wgpu::Texture>,
+    ) {
         scene.update_world();
 
+        // TAA active only when we have a sampleable color+depth target.
+        let taa_active = self.taa_enabled && color_src.is_some() && depth_src.is_some();
+
         let view_m = camera.view_matrix();
-        let proj_m = camera.projection_matrix();
+        let mut proj_m = camera.projection_matrix();
+        // Un-jittered view-projection is kept for TAA reprojection.
+        let unjittered = proj_m.multiply(&view_m);
+        if taa_active {
+            // Sub-pixel Halton jitter in NDC (± half a pixel).
+            let jx = (halton(self.taa_frame + 1, 2) - 0.5) * 2.0 / self.depth_size.0 as f32;
+            let jy = (halton(self.taa_frame + 1, 3) - 0.5) * 2.0 / self.depth_size.1 as f32;
+            proj_m.elements[8] += jx;
+            proj_m.elements[9] += jy;
+        }
         let view_proj = proj_m.multiply(&view_m).elements;
+        let taa_inv_vp = unjittered.invert().elements;
+        let taa_unjittered_vp = unjittered.elements;
 
         // tone_mapping_exposure[2] is the "IBL on" flag — the PBR shader's
         // env-map branch is gated on it. Enable whenever the scene has any
@@ -2293,11 +3633,31 @@ impl Renderer {
             view: view_m.elements,
             projection: proj_m.elements,
             view_proj,
-            camera_position: [camera.position().x, camera.position().y, camera.position().z, 0.0],
+            camera_position: [
+                camera.position().x,
+                camera.position().y,
+                camera.position().z,
+                0.0,
+            ],
             fog_color: [scene.fog.color.r, scene.fog.color.g, scene.fog.color.b, 1.0],
-            fog_params: [scene.fog.near, scene.fog.far, scene.fog.density, scene.fog.mode as f32],
-            tone_mapping_exposure: [0.0, 1.0, if has_env { 1.0 } else { 0.0 }, if linear_framebuffer { 1.0 } else { 0.0 }],
-            viewport_size: [self.depth_size.0 as f32, self.depth_size.1 as f32, cam_near, cam_far],
+            fog_params: [
+                scene.fog.near,
+                scene.fog.far,
+                scene.fog.density,
+                scene.fog.mode as f32,
+            ],
+            tone_mapping_exposure: [
+                0.0,
+                1.0,
+                if has_env { 1.0 } else { 0.0 },
+                if linear_framebuffer { 1.0 } else { 0.0 },
+            ],
+            viewport_size: [
+                self.depth_size.0 as f32,
+                self.depth_size.1 as f32,
+                cam_near,
+                cam_far,
+            ],
             ..FrameUniforms::default()
         };
 
@@ -2311,7 +3671,30 @@ impl Renderer {
         let mut point_caster: Option<(Vector3, f32, crate::lights::ShadowSettings)> = None;
 
         #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Topology { Triangle, TriangleAlpha, TriangleWire, TriangleNoCull, Sky, Line, #[allow(dead_code)] Point, Sprite, Instanced, Skinned }
+        enum Topology {
+            Triangle,
+            TriangleAlpha,
+            TriangleWire,
+            TriangleNoCull,
+            Sky,
+            Line,
+            #[allow(dead_code)]
+            Point,
+            Sprite,
+            Instanced,
+            Skinned,
+            /// Single-layer glass depth prepass (writes depth, no color).
+            GlassDepth,
+            /// Single-layer glass color pass (LessEqual, alpha blend, no depth write).
+            GlassColor,
+            /// Weighted-blended OIT surface (drawn into accum+revealage MRT).
+            Oit,
+            /// Screen-space refraction glass (drawn in a dedicated pass that
+            /// samples the captured opaque color + depth).
+            Refract,
+            /// Custom-shader material: (fragment-source hash, is-transparent).
+            Custom(u64, bool),
+        }
         struct DrawMesh {
             key: *const BufferGeometry,
             topology: Topology,
@@ -2319,6 +3702,7 @@ impl Renderer {
             view_z: f32,
             render_order: i32,
             cast_shadow: bool,
+            refract_capture: bool,
             alpha_test: f32,
             model: [f32; 16],
             normal_matrix: [f32; 16],
@@ -2333,6 +3717,7 @@ impl Renderer {
             normal_scale: [f32; 2],
             toon_steps: u32,
             physical: [f32; 4],
+            physical2: [f32; 4],
             shader_flags: u32,
             kind: MaterialKind,
             slots: MaterialTextureSlots,
@@ -2341,19 +3726,30 @@ impl Renderer {
             instance_count: u32,
             /// Index into `skin_data` for Topology::Skinned.
             skin_idx: usize,
+            /// Index into `shader_data` for Topology::Custom.
+            shader_idx: usize,
         }
         let mut draws: Vec<DrawMesh> = Vec::new();
+        // Per-custom-shader-material draw data (parallel to Topology::Custom).
+        struct ShaderDrawData {
+            fragment: String,
+            data: [[f32; 4]; 16],
+            storage: [Vec<f32>; 3],
+        }
+        let mut shader_data: Vec<ShaderDrawData> = Vec::new();
         let mut instance_buffers: Vec<wgpu::Buffer> = Vec::new();
-        struct SkinData { bone_buf: wgpu::Buffer, bg: Option<wgpu::BindGroup> }
+        struct SkinData {
+            bone_buf: wgpu::Buffer,
+            bg: Option<wgpu::BindGroup>,
+        }
         let mut skin_data: Vec<SkinData> = Vec::new();
 
         // Helper: build a DrawMesh from a geometry+material pair under a given topology.
-        let make_draw = |
-            geom: &std::sync::Arc<BufferGeometry>,
-            mat: &Material,
-            obj: &crate::core::Object3D,
-            topology: Topology,
-        | -> DrawMesh {
+        let make_draw = |geom: &std::sync::Arc<BufferGeometry>,
+                         mat: &Material,
+                         obj: &crate::core::Object3D,
+                         topology: Topology|
+         -> DrawMesh {
             let key = geom_cache_key(geom);
             let nm3 = Matrix3::normal_matrix(&obj.matrix_world);
             // Mirror materials repurpose the normal_matrix slot for the
@@ -2370,12 +3766,20 @@ impl Renderer {
                 + view_m.elements[10] * world_pos.z
                 + view_m.elements[14];
             let topology = if topology == Topology::Triangle {
-                if matches!(mat, Material::Sky(_)) { Topology::Sky }
-                else if mat.wireframe() { Topology::TriangleWire }
-                else if mat.transparent() { Topology::TriangleAlpha }
-                else if mat.side() != 0 { Topology::TriangleNoCull }
-                else { Topology::Triangle }
-            } else { topology };
+                if matches!(mat, Material::Sky(_)) {
+                    Topology::Sky
+                } else if mat.wireframe() {
+                    Topology::TriangleWire
+                } else if mat.transparent() {
+                    Topology::TriangleAlpha
+                } else if mat.side() != 0 {
+                    Topology::TriangleNoCull
+                } else {
+                    Topology::Triangle
+                }
+            } else {
+                topology
+            };
             let c = mat.color();
             let e = mat.emissive();
             // For MeshDistanceMaterial, pack the reference position into the
@@ -2383,9 +3787,13 @@ impl Renderer {
             // For SkyMaterial, pack the sun position into specular.
             let s = match mat {
                 Material::Distance(m) => crate::math::Color::new(
-                    m.reference_position.x, m.reference_position.y, m.reference_position.z),
-                Material::Sky(m) => crate::math::Color::new(
-                    m.sun_position.x, m.sun_position.y, m.sun_position.z),
+                    m.reference_position.x,
+                    m.reference_position.y,
+                    m.reference_position.z,
+                ),
+                Material::Sky(m) => {
+                    crate::math::Color::new(m.sun_position.x, m.sun_position.y, m.sun_position.z)
+                }
                 _ => mat.specular(),
             };
             // For SkyMaterial, pack atmospheric tuning into params.x/y (replacing
@@ -2397,8 +3805,14 @@ impl Renderer {
                 _ => (mat.shininess(), mat.opacity()),
             };
             let physical = match mat {
-                Material::Physical(m) => [m.clearcoat, m.clearcoat_roughness, m.ior, m.transmission],
+                Material::Physical(m) => {
+                    [m.clearcoat, m.clearcoat_roughness, m.ior, m.transmission]
+                }
                 Material::Line(m) => [m.dash_scale, m.dash_size, m.gap_size, 0.0],
+                _ => [0.0; 4],
+            };
+            let physical2 = match mat {
+                Material::Physical(m) => [m.thickness, m.dispersion, m.vertex_emissive, 0.0],
                 _ => [0.0; 4],
             };
             let mut shader_flags = match mat {
@@ -2415,11 +3829,23 @@ impl Renderer {
                 view_z,
                 render_order: obj.render_order,
                 cast_shadow: obj.cast_shadow,
+                refract_capture: obj.refract_capture,
                 alpha_test: mat.alpha_test(),
                 model: obj.matrix_world.elements,
                 normal_matrix,
                 color: [c.r, c.g, c.b, mat.opacity()],
-                emissive: [e.r, e.g, e.b, 0.0],
+                // emissive.w carries the physical-material anisotropy strength
+                // (0 = isotropic); the shader stretches the specular lobe along
+                // the surface tangent by this amount. Non-physical mats leave 0.
+                emissive: [
+                    e.r,
+                    e.g,
+                    e.b,
+                    match mat {
+                        Material::Physical(m) => m.anisotropy,
+                        _ => 0.0,
+                    },
+                ],
                 specular: [s.r, s.g, s.b, 0.0],
                 shininess_or_near: shin_or_near,
                 opacity_or_far,
@@ -2437,19 +3863,23 @@ impl Renderer {
                 normal_scale: [mat.normal_scale().x, mat.normal_scale().y],
                 toon_steps: mat.toon_steps(),
                 physical,
+                physical2,
                 shader_flags,
                 kind: mat.kind(),
                 slots: mat.texture_slots(),
                 instance_buf_idx: usize::MAX,
                 instance_count: 1,
                 skin_idx: usize::MAX,
+                shader_idx: usize::MAX,
             }
         };
 
         let cam_layers = camera.layers();
         let root = scene.root;
         scene.arena.traverse_visible(root, &mut |_id, obj| {
-            if !cam_layers.test(&obj.layers) { return; }
+            if !cam_layers.test(&obj.layers) {
+                return;
+            }
             match &obj.kind {
                 ObjectKind::Light(light) => match light {
                     Light::Ambient(l) => {
@@ -2458,7 +3888,9 @@ impl Renderer {
                         ambient[2] += l.color.b * l.intensity;
                     }
                     Light::Directional(l) => {
-                        if n_dir >= MAX_DIR_LIGHTS { return; }
+                        if n_dir >= MAX_DIR_LIGHTS {
+                            return;
+                        }
                         // three.js: direction = normalize(target - position); default target (0,0,0).
                         let pos = obj.world_position();
                         let dir = {
@@ -2481,7 +3913,9 @@ impl Renderer {
                         n_dir += 1;
                     }
                     Light::Point(l) => {
-                        if n_point >= MAX_POINT_LIGHTS { return; }
+                        if n_point >= MAX_POINT_LIGHTS {
+                            return;
+                        }
                         let p = obj.world_position();
                         let c = l.color;
                         frame_u.point_lights[n_point] = PointLightGpu {
@@ -2496,7 +3930,9 @@ impl Renderer {
                         n_point += 1;
                     }
                     Light::Spot(l) => {
-                        if n_spot >= MAX_SPOT_LIGHTS { return; }
+                        if n_spot >= MAX_SPOT_LIGHTS {
+                            return;
+                        }
                         let p = obj.world_position();
                         let dir = transform_direction(&obj.matrix_world, l.direction).normalize();
                         let c = l.color;
@@ -2514,7 +3950,9 @@ impl Renderer {
                         n_spot += 1;
                     }
                     Light::Hemisphere(l) => {
-                        if n_hemi >= MAX_HEMI_LIGHTS { return; }
+                        if n_hemi >= MAX_HEMI_LIGHTS {
+                            return;
+                        }
                         let up = transform_direction(&obj.matrix_world, Vector3::UP).normalize();
                         frame_u.hemi_lights[n_hemi] = HemiLightGpu {
                             sky_color: [
@@ -2537,7 +3975,48 @@ impl Renderer {
                 },
                 ObjectKind::Mesh(mesh) => {
                     self.ensure_geometry(&mesh.geometry);
-                    draws.push(make_draw(&mesh.geometry, &mesh.material, obj, Topology::Triangle));
+                    let mut d = make_draw(&mesh.geometry, &mesh.material, obj, Topology::Triangle);
+                    // Custom-shader material: route to a per-source pipeline and
+                    // stash its user data for the @group(4) bind group.
+                    if let Material::Shader(sm) = &*mesh.material {
+                        let hash = custom_shader_hash(&sm.fragment);
+                        let transparent = sm.transparent || sm.opacity < 1.0;
+                        d.topology = Topology::Custom(hash, transparent);
+                        d.shader_idx = shader_data.len();
+                        let pad = |s: &Vec<f32>| {
+                            if s.is_empty() {
+                                vec![0.0f32]
+                            } else {
+                                s.clone()
+                            }
+                        };
+                        shader_data.push(ShaderDrawData {
+                            fragment: sm.fragment.clone(),
+                            data: sm.data_slots(),
+                            storage: [pad(&sm.storage0), pad(&sm.storage1), pad(&sm.storage2)],
+                        });
+                    }
+                    // Route transparent PhysicalMaterials to single-layer glass
+                    // (depth prepass + color) or weighted-blended OIT.
+                    if d.topology == Topology::TriangleAlpha {
+                        match mesh.material.transparency_mode() {
+                            crate::materials::TransparencyMode::Glass => {
+                                draws.push(make_draw(
+                                    &mesh.geometry,
+                                    &mesh.material,
+                                    obj,
+                                    Topology::GlassDepth,
+                                ));
+                                d.topology = Topology::GlassColor;
+                            }
+                            crate::materials::TransparencyMode::Oit => d.topology = Topology::Oit,
+                            crate::materials::TransparencyMode::Refract => {
+                                d.topology = Topology::Refract
+                            }
+                            crate::materials::TransparencyMode::Blend => {}
+                        }
+                    }
+                    draws.push(d);
                 }
                 ObjectKind::LineSegments(ls) => {
                     self.ensure_geometry(&ls.geometry);
@@ -2580,31 +4059,48 @@ impl Renderer {
                             let px = positions.array[vi * 3] as f32;
                             let py = positions.array[vi * 3 + 1] as f32;
                             let pz = positions.array[vi * 3 + 2] as f32;
-                            let m_local = crate::math::Matrix4::translation(crate::math::Vector3::new(px, py, pz));
+                            let m_local = crate::math::Matrix4::translation(
+                                crate::math::Vector3::new(px, py, pz),
+                            );
                             let mut model = obj.matrix_world.multiply(&m_local);
                             // Project the point centre to view space to get its z, then
                             // size the quad to match the requested pixel size at that depth.
-                            let wp = crate::math::Vector3::new(model.elements[12], model.elements[13], model.elements[14]);
-                            let vz = (view_m.elements[2] * wp.x + view_m.elements[6] * wp.y
-                                + view_m.elements[10] * wp.z + view_m.elements[14]).abs().max(0.0001);
+                            let wp = crate::math::Vector3::new(
+                                model.elements[12],
+                                model.elements[13],
+                                model.elements[14],
+                            );
+                            let vz = (view_m.elements[2] * wp.x
+                                + view_m.elements[6] * wp.y
+                                + view_m.elements[10] * wp.z
+                                + view_m.elements[14])
+                                .abs()
+                                .max(0.0001);
                             let half_ndc = (size / canvas_w) * vz / proj00;
                             // Sprite vs uses `in.position * sx`; the unit quad has corners
                             // at ±0.5, so we want sx == size_in_world. Multiply by 2 because
                             // pixel size means total quad width, not half.
                             let sx = half_ndc * 2.0;
                             let mut e = model.elements;
-                            for k in 0..3 { e[k    ] *= sx; }
-                            for k in 0..3 { e[4 + k] *= sx; }
+                            for k in 0..3 {
+                                e[k] *= sx;
+                            }
+                            for k in 0..3 {
+                                e[4 + k] *= sx;
+                            }
                             model.elements = e;
                             let world_pos = crate::math::Vector3::new(e[12], e[13], e[14]);
-                            let svz = view_m.elements[2] * world_pos.x + view_m.elements[6] * world_pos.y
-                                + view_m.elements[10] * world_pos.z + view_m.elements[14];
+                            let svz = view_m.elements[2] * world_pos.x
+                                + view_m.elements[6] * world_pos.y
+                                + view_m.elements[10] * world_pos.z
+                                + view_m.elements[14];
                             draws.push(DrawMesh {
                                 key: std::ptr::null::<BufferGeometry>(),
                                 topology: Topology::Sprite,
                                 view_z: svz,
                                 render_order: obj.render_order,
                                 cast_shadow: false,
+                                refract_capture: true,
                                 alpha_test: 0.0,
                                 model: model.elements,
                                 normal_matrix: mat3_to_mat4_array(&nm3),
@@ -2619,12 +4115,14 @@ impl Renderer {
                                 normal_scale: [1.0, 1.0],
                                 toon_steps: 0,
                                 physical: [0.0; 4],
+                                physical2: [0.0; 4],
                                 shader_flags: 0,
                                 kind: crate::materials::MaterialKind::Basic,
                                 slots: mat.texture_slots(),
                                 instance_buf_idx: usize::MAX,
                                 instance_count: 1,
                                 skin_idx: usize::MAX,
+                                shader_idx: usize::MAX,
                             });
                         }
                     }
@@ -2636,14 +4134,17 @@ impl Renderer {
                     let nm3 = Matrix3::normal_matrix(&obj.matrix_world);
                     let c = mat.color();
                     let sp = obj.world_position();
-                    let svz = view_m.elements[2] * sp.x + view_m.elements[6] * sp.y
-                        + view_m.elements[10] * sp.z + view_m.elements[14];
+                    let svz = view_m.elements[2] * sp.x
+                        + view_m.elements[6] * sp.y
+                        + view_m.elements[10] * sp.z
+                        + view_m.elements[14];
                     draws.push(DrawMesh {
                         key: std::ptr::null::<BufferGeometry>(),
                         topology: Topology::Sprite,
                         view_z: svz,
                         render_order: obj.render_order,
                         cast_shadow: false,
+                        refract_capture: true,
                         alpha_test: 0.0,
                         model: obj.matrix_world.elements,
                         normal_matrix: mat3_to_mat4_array(&nm3),
@@ -2658,19 +4159,25 @@ impl Renderer {
                         normal_scale: [1.0, 1.0],
                         toon_steps: 0,
                         physical: [0.0; 4],
+                        physical2: [0.0; 4],
                         shader_flags: 0,
                         kind: mat.kind(),
                         slots: mat.texture_slots(),
                         instance_buf_idx: usize::MAX,
                         instance_count: 1,
                         skin_idx: usize::MAX,
+                        shader_idx: usize::MAX,
                     });
                 }
                 ObjectKind::InstancedMesh(im) => {
                     self.ensure_geometry(&im.geometry);
-                    if im.transforms.is_empty() { return; }
+                    if im.transforms.is_empty() {
+                        return;
+                    }
                     let mut matrices: Vec<f32> = Vec::with_capacity(im.transforms.len() * 16);
-                    for t in &im.transforms { matrices.extend_from_slice(&t.elements); }
+                    for t in &im.transforms {
+                        matrices.extend_from_slice(&t.elements);
+                    }
                     let buf = wgpu::util::DeviceExt::create_buffer_init(
                         &*self.device,
                         &wgpu::util::BufferInitDescriptor {
@@ -2695,7 +4202,12 @@ impl Renderer {
                         let weights = sm.geometry.get_attribute("weight");
                         let (Some(j), Some(w)) = (joints, weights) else {
                             // Geometry isn't skin-equipped; draw at rest.
-                            draws.push(make_draw(&sm.geometry, &sm.material, obj, Topology::Triangle));
+                            draws.push(make_draw(
+                                &sm.geometry,
+                                &sm.material,
+                                obj,
+                                Topology::Triangle,
+                            ));
                             return;
                         };
                         let count = j.count();
@@ -2715,7 +4227,8 @@ impl Renderer {
                         self.skin_attr_cache.insert(key, buf);
                     }
                     // Upload bone matrices (per-frame, per-skinned-mesh).
-                    let mut bone_data: Vec<f32> = Vec::with_capacity(sm.skeleton.bone_matrices.len() * 16);
+                    let mut bone_data: Vec<f32> =
+                        Vec::with_capacity(sm.skeleton.bone_matrices.len() * 16);
                     if sm.skeleton.bone_matrices.is_empty() {
                         // Identity fallback to keep storage buffer non-empty.
                         let id = crate::math::Matrix4::identity();
@@ -2749,25 +4262,39 @@ impl Renderer {
         // Sort: opaque first (stable order), then transparents back-to-front so
         // alpha blending composites correctly. Sprites are already alpha-blended
         // and we treat them as transparent for ordering purposes.
+        // Draw order class: opaque(0) → glass depth prepass(1) → glass color(2) →
+        // ordinary alpha & OIT(3). Glass must run after opaque (so its prepass
+        // sees opaque depth) and before ordinary alpha (which blends over it).
         fn ord_class(t: Topology) -> u8 {
             match t {
-                Topology::TriangleAlpha | Topology::Sprite => 1,
+                Topology::GlassDepth => 1,
+                Topology::GlassColor => 2,
+                Topology::TriangleAlpha | Topology::Sprite | Topology::Oit | Topology::Refract => 3,
+                Topology::Custom(_, transparent) => {
+                    if transparent {
+                        3
+                    } else {
+                        0
+                    }
+                }
                 _ => 0,
             }
         }
         draws.sort_by(|a, b| {
-            ord_class(a.topology).cmp(&ord_class(b.topology))
+            ord_class(a.topology)
+                .cmp(&ord_class(b.topology))
                 .then(a.render_order.cmp(&b.render_order))
                 .then_with(|| {
-                // For transparents we want farther-from-camera first. view_z is
-                // negative for objects in front of the camera; a smaller (more
-                // negative) value means farther away.
-                if ord_class(a.topology) == 1 {
-                    a.view_z.partial_cmp(&b.view_z).unwrap_or(std::cmp::Ordering::Equal)
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            })
+                    // For ordinary transparents we want farther-from-camera first.
+                    // view_z is negative in front of the camera; smaller = farther.
+                    if ord_class(a.topology) == 3 {
+                        a.view_z
+                            .partial_cmp(&b.view_z)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    } else {
+                        std::cmp::Ordering::Equal
+                    }
+                })
         });
 
         frame_u.ambient = [ambient[0], ambient[1], ambient[2], 0.0];
@@ -2781,7 +4308,8 @@ impl Renderer {
             let s = settings.camera_size;
             let light_eye = -dir.normalize() * (s * 1.5);
             let light_view = Matrix4::look_at(light_eye, Vector3::ZERO, Vector3::UP);
-            let light_proj = Matrix4::orthographic(-s, s, s, -s, settings.camera_near, settings.camera_far);
+            let light_proj =
+                Matrix4::orthographic(-s, s, s, -s, settings.camera_near, settings.camera_far);
             let light_vp = light_proj.multiply(&light_view);
             frame_u.shadow_vp = light_vp.elements;
             frame_u.shadow_params[0] = 1.0;
@@ -2795,7 +4323,8 @@ impl Renderer {
             let light_view = Matrix4::look_at(pos, target, Vector3::UP);
             // Perspective frustum: fov = 2 * outer_angle to cover the cone.
             let fov = (angle * 2.0).clamp(0.05, std::f32::consts::PI - 0.05);
-            let light_proj = Matrix4::perspective(fov, 1.0, settings.camera_near, settings.camera_far);
+            let light_proj =
+                Matrix4::perspective(fov, 1.0, settings.camera_near, settings.camera_far);
             let light_vp = light_proj.multiply(&light_view);
             frame_u.spot_shadow_vp = light_vp.elements;
             frame_u.shadow_params[2] = 1.0;
@@ -2814,7 +4343,12 @@ impl Renderer {
                     self.cube_cache.insert(k, gc);
                 }
                 if let Some(atlas) = &env.cube_uv_atlas {
-                    env_map_params = [atlas.texel_width, atlas.texel_height, atlas.lod_max as f32, 1.0];
+                    env_map_params = [
+                        atlas.texel_width,
+                        atlas.texel_height,
+                        atlas.lod_max as f32,
+                        1.0,
+                    ];
                 }
             }
             frame_u.env_map_params = env_map_params;
@@ -2827,33 +4361,43 @@ impl Renderer {
                 &self.default_cube_uv_view
             };
             let view: &wgpu::TextureView = if let Some(rt_id) = scene.environment_cube_rt {
-                self.cube_rt_view_cache.get(&rt_id).unwrap_or(&self.default_env_cube.view)
+                self.cube_rt_view_cache
+                    .get(&rt_id)
+                    .unwrap_or(&self.default_env_cube.view)
             } else if let Some(env) = &scene.environment {
                 &self.cube_cache[&cube_cache_key(env)].view
             } else {
                 &self.default_env_cube.view
             };
-            self.env_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("threers env bg"),
-                layout: &self.env_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.env_sampler) },
-                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.shadow_view) },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.shadow_sampler) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&self.spot_shadow_view) },
-                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&self.spot_shadow_sampler) },
-                    wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&self.point_shadow_cube_view) },
-                    wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&self.point_shadow_sampler) },
-                    wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(cube_uv_view) },
-                ],
-            });
+            self.env_bind_group = env_bind_group!(
+                self.device,
+                &self.env_bgl,
+                "threers env bg",
+                view,
+                &self.env_sampler,
+                &self.shadow_view,
+                &self.shadow_sampler,
+                &self.spot_shadow_view,
+                &self.spot_shadow_sampler,
+                &self.point_shadow_cube_view,
+                &self.point_shadow_sampler,
+                cube_uv_view,
+                &self.default_cube_uv_view,
+                &self.ss_glass_sampler,
+                &self.ss_depth_placeholder_view,
+                &self.ss_depth_placeholder_view,
+            );
             self.env_cached_key = env_key;
             self.env_cached_rt_id = env_rt_id;
         }
         if let Some(env) = &scene.environment {
             if let Some(atlas) = &env.cube_uv_atlas {
-                frame_u.env_map_params = [atlas.texel_width, atlas.texel_height, atlas.lod_max as f32, 1.0];
+                frame_u.env_map_params = [
+                    atlas.texel_width,
+                    atlas.texel_height,
+                    atlas.lod_max as f32,
+                    1.0,
+                ];
             }
         }
 
@@ -2900,25 +4444,46 @@ impl Renderer {
                     label: Some("threers mesh skinned bg"),
                     layout: &self.mesh_skinned_bgl,
                     entries: &[
-                        wgpu::BindGroupEntry { binding: 0, resource: mesh_uniform_buf.as_entire_binding() },
-                        wgpu::BindGroupEntry { binding: 1, resource: sd.bone_buf.as_entire_binding() },
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: mesh_uniform_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: sd.bone_buf.as_entire_binding(),
+                        },
                     ],
                 }));
             }
         }
 
         // -- Upload uniforms + rebuild per-mesh tex bind groups. --
-        self.queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_u));
+        self.queue
+            .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_u));
         let mut new_tex_bgs: Vec<wgpu::BindGroup> = Vec::with_capacity(draws.len());
         for (i, d) in draws.iter().enumerate() {
             let mut flags: u32 = 0;
-            if d.slots.map.is_some()           { flags |= FLAG_MAP; }
-            if d.slots.normal_map.is_some()    { flags |= FLAG_NORMAL_MAP; }
-            if d.slots.roughness_map.is_some() { flags |= FLAG_ROUGHNESS_MAP; }
-            if d.slots.metalness_map.is_some() { flags |= FLAG_METALNESS_MAP; }
-            if d.slots.ao_map.is_some()        { flags |= FLAG_AO_MAP; }
-            if d.slots.emissive_map.is_some()  { flags |= FLAG_EMISSIVE_MAP; }
-            if d.slots.matcap_map.is_some()    { flags |= FLAG_MATCAP_MAP; }
+            if d.slots.map.is_some() {
+                flags |= FLAG_MAP;
+            }
+            if d.slots.normal_map.is_some() {
+                flags |= FLAG_NORMAL_MAP;
+            }
+            if d.slots.roughness_map.is_some() {
+                flags |= FLAG_ROUGHNESS_MAP;
+            }
+            if d.slots.metalness_map.is_some() {
+                flags |= FLAG_METALNESS_MAP;
+            }
+            if d.slots.ao_map.is_some() {
+                flags |= FLAG_AO_MAP;
+            }
+            if d.slots.emissive_map.is_some() {
+                flags |= FLAG_EMISSIVE_MAP;
+            }
+            if d.slots.matcap_map.is_some() {
+                flags |= FLAG_MATCAP_MAP;
+            }
 
             let u = MeshUniforms {
                 model: d.model,
@@ -2926,7 +4491,12 @@ impl Renderer {
                 color: d.color,
                 emissive: d.emissive,
                 specular: d.specular,
-                params: [d.shininess_or_near, d.opacity_or_far, d.roughness, d.metalness],
+                params: [
+                    d.shininess_or_near,
+                    d.opacity_or_far,
+                    d.roughness,
+                    d.metalness,
+                ],
                 params2: [
                     d.ao_intensity,
                     d.normal_scale[0],
@@ -2934,9 +4504,11 @@ impl Renderer {
                     f32::from_bits(d.toon_steps),
                 ],
                 params3: d.physical,
+                params4: d.physical2,
                 flags: [d.kind as u32, flags, d.shader_flags, d.alpha_test.to_bits()],
             };
-            self.queue.write_buffer(&self.per_mesh[i].0, 0, bytemuck::bytes_of(&u));
+            self.queue
+                .write_buffer(&self.per_mesh[i].0, 0, bytemuck::bytes_of(&u));
 
             new_tex_bgs.push(self.build_tex_bg(&d.slots));
         }
@@ -2945,9 +4517,11 @@ impl Renderer {
             self.per_mesh[i].2 = bg;
         }
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("threers encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("threers encoder"),
+            });
 
         // Shadow depth pre-pass: render scene from the directional light's POV.
         if shadow_caster.is_some() {
@@ -2968,8 +4542,12 @@ impl Renderer {
             spass.set_pipeline(&self.pipeline_shadow);
             spass.set_bind_group(0, &self.frame_bind_group, &[]);
             for (i, d) in draws.iter().enumerate() {
-                if !d.cast_shadow { continue; }
-                if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull { continue; }
+                if !d.cast_shadow {
+                    continue;
+                }
+                if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull {
+                    continue;
+                }
                 let gm = &self.geom_cache[&d.key].mesh;
                 spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
                 spass.set_bind_group(2, &self.per_mesh[i].2, &[]);
@@ -3003,8 +4581,12 @@ impl Renderer {
             spass.set_pipeline(&self.pipeline_shadow_spot);
             spass.set_bind_group(0, &self.frame_bind_group, &[]);
             for (i, d) in draws.iter().enumerate() {
-                if !d.cast_shadow { continue; }
-                if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull { continue; }
+                if !d.cast_shadow {
+                    continue;
+                }
+                if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull {
+                    continue;
+                }
                 let gm = &self.geom_cache[&d.key].mesh;
                 spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
                 spass.set_bind_group(2, &self.per_mesh[i].2, &[]);
@@ -3022,16 +4604,18 @@ impl Renderer {
         // Point-light cubemap depth: 6 face passes, one per cube face.
         if let Some((pos, radius, _)) = point_caster {
             self.queue.submit(Some(encoder.finish()));
-            encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("threers point shadow encoder"),
-            });
+            encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("threers point shadow encoder"),
+                });
             let face_lookat: [(Vector3, Vector3); 6] = [
-                (Vector3::new( 1.0,  0.0,  0.0), Vector3::new(0.0, -1.0,  0.0)),
-                (Vector3::new(-1.0,  0.0,  0.0), Vector3::new(0.0, -1.0,  0.0)),
-                (Vector3::new( 0.0,  1.0,  0.0), Vector3::new(0.0,  0.0,  1.0)),
-                (Vector3::new( 0.0, -1.0,  0.0), Vector3::new(0.0,  0.0, -1.0)),
-                (Vector3::new( 0.0,  0.0,  1.0), Vector3::new(0.0, -1.0,  0.0)),
-                (Vector3::new( 0.0,  0.0, -1.0), Vector3::new(0.0, -1.0,  0.0)),
+                (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
+                (Vector3::new(-1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
+                (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
+                (Vector3::new(0.0, -1.0, 0.0), Vector3::new(0.0, 0.0, -1.0)),
+                (Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, -1.0, 0.0)),
+                (Vector3::new(0.0, 0.0, -1.0), Vector3::new(0.0, -1.0, 0.0)),
             ];
             let fov = std::f32::consts::FRAC_PI_2;
             let proj = Matrix4::perspective(fov, 1.0, 0.1, radius.max(1.0));
@@ -3041,7 +4625,8 @@ impl Renderer {
                 let view = Matrix4::look_at(pos, target, up);
                 let vp = proj.multiply(&view);
                 frame_u.cube_face_vp = vp.elements;
-                self.queue.write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_u));
+                self.queue
+                    .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_u));
 
                 let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("threers point shadow face pass"),
@@ -3060,7 +4645,9 @@ impl Renderer {
                 spass.set_pipeline(&self.pipeline_shadow_point);
                 spass.set_bind_group(0, &self.frame_bind_group, &[]);
                 for (i, d) in draws.iter().enumerate() {
-                    if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull { continue; }
+                    if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull {
+                        continue;
+                    }
                     let gm = &self.geom_cache[&d.key].mesh;
                     spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
                     spass.set_bind_group(2, &self.per_mesh[i].2, &[]);
@@ -3076,29 +4663,89 @@ impl Renderer {
             }
         }
 
+        // Screen-space refraction glass: when any Refract surface is present, the
+        // opaque scene is rendered into the mipped ss-color capture (instead of
+        // straight to the frame target); the glass pass below then refracts and
+        // reflects that capture. Otherwise the main pass targets the frame view
+        // directly, exactly as before.
+        let refract_present = draws.iter().any(|d| d.topology == Topology::Refract);
+        let ss_format = if linear_framebuffer {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            self.color_format
+        };
+        if refract_present {
+            let (w, h) = self.depth_size;
+            self.ensure_ss_targets(w, h, ss_format);
+        }
+
         {
             let bg_color = scene.background;
             // HalfFloat postfx RTs store linear light; sRGB canvas clears use raw bytes
             // (matches three.js gl.clearColor on an sRGB default framebuffer).
+            let bg_alpha = scene.background_alpha as f64;
             let clear = if linear_framebuffer {
                 wgpu::Color {
                     r: bg_color.r.powf(2.2) as f64,
                     g: bg_color.g.powf(2.2) as f64,
                     b: bg_color.b.powf(2.2) as f64,
-                    a: 1.0,
+                    a: bg_alpha,
                 }
             } else {
                 wgpu::Color {
                     r: bg_color.r as f64,
                     g: bg_color.g as f64,
                     b: bg_color.b as f64,
-                    a: 1.0,
+                    a: bg_alpha,
                 }
             };
+            // Screen-space glass redirects the opaque pass into the ss-color
+            // capture (mip 0); otherwise it targets the frame view directly.
+            let main_color_view: &wgpu::TextureView = if refract_present {
+                &self.ss_color.as_ref().unwrap().mip_render_views[0]
+            } else {
+                target_view
+            };
+            // Compile any not-yet-seen custom-shader pipelines and build their
+            // @group(4) user bind groups (buffers kept alive until submit).
+            let mut user_bgs: Vec<Option<wgpu::BindGroup>> = Vec::new();
+            user_bgs.resize_with(draws.len(), || None);
+            let mut _custom_keep_alive: Vec<wgpu::Buffer> = Vec::new();
+            for (i, d) in draws.iter().enumerate() {
+                if let Topology::Custom(hash, transparent) = d.topology {
+                    let sd = &shader_data[d.shader_idx];
+                    let key = (hash, linear_framebuffer, transparent);
+                    if !self.custom_pipelines.contains_key(&key) {
+                        let fmt = if linear_framebuffer {
+                            wgpu::TextureFormat::Rgba16Float
+                        } else {
+                            self.color_format
+                        };
+                        let pipeline = build_custom_pipeline(
+                            &self.device,
+                            &self.custom_pipeline_layout,
+                            &sd.fragment,
+                            fmt,
+                            transparent,
+                        );
+                        self.custom_pipelines.insert(key, pipeline);
+                    }
+                    let (bg, bufs) = build_user_bind_group(
+                        &self.device,
+                        &self.custom_mesh_bgl,
+                        &self.per_mesh[i].0,
+                        &sd.data,
+                        &sd.storage,
+                    );
+                    _custom_keep_alive.extend(bufs);
+                    user_bgs[i] = Some(bg);
+                }
+            }
+
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("threers main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
+                    view: main_color_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(clear),
@@ -3121,32 +4768,50 @@ impl Renderer {
             pass.set_bind_group(3, &self.env_bind_group, &[]);
             let mut last_topology: Option<Topology> = None;
             for (i, d) in draws.iter().enumerate() {
+                // OIT + screen-space-refraction surfaces are drawn in dedicated
+                // later passes, not here.
+                if d.topology == Topology::Oit || d.topology == Topology::Refract {
+                    continue;
+                }
+                // Objects opted out of glass capture draw *over* the glass (a
+                // later overlay pass), so they're not refracted — skip here.
+                if refract_present && !d.refract_capture {
+                    continue;
+                }
                 if last_topology != Some(d.topology) {
                     let pipe = if linear_framebuffer {
                         match d.topology {
-                            Topology::Triangle      => &self.pipeline_tri_f16,
+                            Topology::Triangle => &self.pipeline_tri_f16,
                             Topology::TriangleAlpha => &self.pipeline_tri_alpha_f16,
                             Topology::TriangleNoCull => &self.pipeline_tri_nocull_f16,
-                            Topology::Sky           => &self.pipeline_tri_sky_f16,
-                            Topology::TriangleWire  => &self.pipeline_tri_wire_f16,
-                            Topology::Line          => &self.pipeline_line_f16,
-                            Topology::Point         => &self.pipeline_point_f16,
-                            Topology::Sprite        => &self.pipeline_sprite_f16,
-                            Topology::Instanced     => &self.pipeline_instanced_f16,
-                            Topology::Skinned       => &self.pipeline_skinned_f16,
+                            Topology::GlassDepth => &self.pipeline_glass_depth_f16,
+                            Topology::GlassColor => &self.pipeline_glass_color_f16,
+                            Topology::Sky => &self.pipeline_tri_sky_f16,
+                            Topology::TriangleWire => &self.pipeline_tri_wire_f16,
+                            Topology::Line => &self.pipeline_line_f16,
+                            Topology::Point => &self.pipeline_point_f16,
+                            Topology::Sprite => &self.pipeline_sprite_f16,
+                            Topology::Instanced => &self.pipeline_instanced_f16,
+                            Topology::Skinned => &self.pipeline_skinned_f16,
+                            Topology::Oit | Topology::Refract => continue,
+                            Topology::Custom(h, tr) => &self.custom_pipelines[&(h, true, tr)],
                         }
                     } else {
                         match d.topology {
-                            Topology::Triangle      => &self.pipeline_tri,
+                            Topology::Triangle => &self.pipeline_tri,
                             Topology::TriangleAlpha => &self.pipeline_tri_alpha,
                             Topology::TriangleNoCull => &self.pipeline_tri_nocull,
-                            Topology::Sky           => &self.pipeline_tri_sky,
-                            Topology::TriangleWire  => &self.pipeline_tri_wire,
-                            Topology::Line          => &self.pipeline_line,
-                            Topology::Point         => &self.pipeline_point,
-                            Topology::Sprite        => &self.pipeline_sprite,
-                            Topology::Instanced     => &self.pipeline_instanced,
-                            Topology::Skinned       => &self.pipeline_skinned,
+                            Topology::GlassDepth => &self.pipeline_glass_depth,
+                            Topology::GlassColor => &self.pipeline_glass_color,
+                            Topology::Sky => &self.pipeline_tri_sky,
+                            Topology::TriangleWire => &self.pipeline_tri_wire,
+                            Topology::Line => &self.pipeline_line,
+                            Topology::Point => &self.pipeline_point,
+                            Topology::Sprite => &self.pipeline_sprite,
+                            Topology::Instanced => &self.pipeline_instanced,
+                            Topology::Skinned => &self.pipeline_skinned,
+                            Topology::Oit | Topology::Refract => continue,
+                            Topology::Custom(h, tr) => &self.custom_pipelines[&(h, false, tr)],
                         }
                     };
                     pass.set_pipeline(pipe);
@@ -3166,6 +4831,13 @@ impl Renderer {
                     if let Some(skin_attrs) = self.skin_attr_cache.get(&d.key) {
                         pass.set_vertex_buffer(1, skin_attrs.slice(..));
                     }
+                } else if let Topology::Custom(_, _) = d.topology {
+                    // Custom-shader draws use the combined mesh+user bind group
+                    // at @group(1) (mesh uniform + user data/storage).
+                    if let Some(bg) = &user_bgs[i] {
+                        pass.set_bind_group(1, bg, &[]);
+                    }
+                    pass.set_bind_group(2, &self.per_mesh[i].2, &[]);
                 } else {
                     pass.set_bind_group(1, &self.per_mesh[i].1, &[]);
                     pass.set_bind_group(2, &self.per_mesh[i].2, &[]);
@@ -3174,7 +4846,9 @@ impl Renderer {
                 let instance_count = if d.topology == Topology::Instanced {
                     pass.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
                     d.instance_count
-                } else { 1 };
+                } else {
+                    1
+                };
                 // For TriangleWire we draw the wireframe line-list index buffer
                 // (three.js WebGLGeometries: a,b,b,c,c,a per triangle).
                 let (ib_opt, idx_count) = if d.topology == Topology::TriangleWire {
@@ -3191,15 +4865,535 @@ impl Renderer {
             }
         }
 
+        // --- Weighted-blended OIT: accumulate the OIT surfaces, then resolve
+        // (composite) over the opaque image already in `target_view`. ---
+        if draws.iter().any(|d| d.topology == Topology::Oit) {
+            let (tw, th) = self.depth_size;
+            self.ensure_oit_targets(tw, th);
+            if let Some((_, _, _, accum_view, _, reveal_view, resolve_bg)) =
+                self.oit_targets.as_ref()
+            {
+                // 1) Accumulation pass (accum cleared to 0, revealage cleared to 1).
+                {
+                    let mut opass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("threers oit accum pass"),
+                        color_attachments: &[
+                            Some(wgpu::RenderPassColorAttachment {
+                                view: accum_view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            }),
+                            Some(wgpu::RenderPassColorAttachment {
+                                view: reveal_view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                                        r: 1.0,
+                                        g: 1.0,
+                                        b: 1.0,
+                                        a: 1.0,
+                                    }),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            }),
+                        ],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &self.depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    opass.set_pipeline(&self.pipeline_oit);
+                    opass.set_bind_group(0, &self.frame_bind_group, &[]);
+                    opass.set_bind_group(3, &self.env_bind_group, &[]);
+                    for (i, d) in draws.iter().enumerate() {
+                        if d.topology != Topology::Oit {
+                            continue;
+                        }
+                        let gm = &self.geom_cache[&d.key].mesh;
+                        opass.set_bind_group(1, &self.per_mesh[i].1, &[]);
+                        opass.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                        opass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                        if let Some(ib) = &gm.index_buffer {
+                            opass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                            opass.draw_indexed(0..gm.index_count, 0, 0..1);
+                        } else {
+                            opass.draw(0..gm.vertex_count, 0..1);
+                        }
+                    }
+                }
+                // 2) Resolve over the opaque image (alpha-blended fullscreen).
+                {
+                    let resolve_pipe = if linear_framebuffer {
+                        &self.pipeline_oit_resolve_f16
+                    } else {
+                        &self.pipeline_oit_resolve
+                    };
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("threers oit resolve pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    rpass.set_pipeline(resolve_pipe);
+                    rpass.set_bind_group(0, resolve_bg, &[]);
+                    rpass.draw(0..3, 0..1);
+                }
+            }
+        }
+
+        // --- Screen-space refraction glass: build the ss-color mip chain from
+        // the opaque capture, blit the sharp capture to the frame target, then
+        // draw the glass surface sampling it for refraction + reflection. ---
+        if refract_present {
+            let ssc = self.ss_color.as_ref().unwrap();
+            // Copy the opaque depth into the sampleable ss_depth so the glass
+            // shader can ray-march it for refraction/reflection.
+            if let Some((_, _, ss_dtex, _)) = &self.ss_depth {
+                let src = depth_src.unwrap_or(&self.depth_texture);
+                encoder.copy_texture_to_texture(
+                    wgpu::ImageCopyTexture {
+                        texture: src,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::DepthOnly,
+                    },
+                    wgpu::ImageCopyTexture {
+                        texture: ss_dtex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::DepthOnly,
+                    },
+                    wgpu::Extent3d {
+                        width: ssc.width,
+                        height: ssc.height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            let ss_depth_view = &self.ss_depth.as_ref().unwrap().3;
+            let ss_back_depth_view = &self.ss_back_depth.as_ref().unwrap().3;
+            // Two-surface: render glass back faces (cull front) into ss_back_depth
+            // so the shader can derive per-pixel glass thickness.
+            {
+                let mut bp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers ss back-depth pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: ss_back_depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                bp.set_pipeline(&self.pipeline_ss_back_depth);
+                bp.set_bind_group(0, &self.frame_bind_group, &[]);
+                for (i, d) in draws.iter().enumerate() {
+                    if d.topology != Topology::Refract {
+                        continue;
+                    }
+                    let gm = &self.geom_cache[&d.key].mesh;
+                    bp.set_bind_group(1, &self.per_mesh[i].1, &[]);
+                    bp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                    if let Some(ib) = &gm.index_buffer {
+                        bp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                        bp.draw_indexed(0..gm.index_count, 0, 0..1);
+                    } else {
+                        bp.draw(0..gm.vertex_count, 0..1);
+                    }
+                }
+            }
+            let blit_pipe = if linear_framebuffer {
+                &self.pipeline_ss_blit_f16
+            } else {
+                &self.pipeline_ss_blit
+            };
+            // 1) Downsample chain: build mip m by box-filtering mip m-1.
+            for m in 1..ssc.mips as usize {
+                let src_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("threers ss mip src"),
+                    layout: &self.ss_blit_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(
+                                &ssc.mip_sample_views[m - 1],
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.ss_glass_sampler),
+                        },
+                    ],
+                });
+                let mut mp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers ss mip gen"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &ssc.mip_render_views[m],
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                mp.set_pipeline(blit_pipe);
+                mp.set_bind_group(0, &src_bg, &[]);
+                mp.draw(0..3, 0..1);
+            }
+            // 2) Blit the sharp capture (mip 0) to the frame target so non-glass
+            //    pixels show through; the glass draws over it next.
+            {
+                let blit_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("threers ss blit src"),
+                    layout: &self.ss_blit_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(&ssc.mip_sample_views[0]),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&self.ss_glass_sampler),
+                        },
+                    ],
+                });
+                let mut bp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers ss blit"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                bp.set_pipeline(blit_pipe);
+                bp.set_bind_group(0, &blit_bg, &[]);
+                bp.draw(0..3, 0..1);
+            }
+            // 3) group(3) bind group with the real ss-color at binding 9 (env cube
+            //    + shadows mirror the frame's env bind group).
+            let cube_uv_view: &wgpu::TextureView = if let Some(env) = &scene.environment {
+                self.cube_cache
+                    .get(&cube_cache_key(env))
+                    .and_then(|gc| gc.cube_uv_view.as_ref())
+                    .unwrap_or(&self.default_cube_uv_view)
+            } else {
+                &self.default_cube_uv_view
+            };
+            let env_cube_view: &wgpu::TextureView = if let Some(rt_id) = scene.environment_cube_rt {
+                self.cube_rt_view_cache
+                    .get(&rt_id)
+                    .unwrap_or(&self.default_env_cube.view)
+            } else if let Some(env) = &scene.environment {
+                &self.cube_cache[&cube_cache_key(env)].view
+            } else {
+                &self.default_env_cube.view
+            };
+            let glass_env_bg = env_bind_group!(
+                self.device,
+                &self.env_bgl,
+                "threers glass env bg",
+                env_cube_view,
+                &self.env_sampler,
+                &self.shadow_view,
+                &self.shadow_sampler,
+                &self.spot_shadow_view,
+                &self.spot_shadow_sampler,
+                &self.point_shadow_cube_view,
+                &self.point_shadow_sampler,
+                cube_uv_view,
+                &ssc.all_mips_view,
+                &self.ss_glass_sampler,
+                ss_depth_view,
+                ss_back_depth_view,
+            );
+            // 4) Glass surface pass (Less + depth-write, opaque composite).
+            let glass_pipe = if linear_framebuffer {
+                &self.pipeline_ss_glass_f16
+            } else {
+                &self.pipeline_ss_glass
+            };
+            let mut gp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("threers ss glass pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            gp.set_pipeline(glass_pipe);
+            gp.set_bind_group(0, &self.frame_bind_group, &[]);
+            gp.set_bind_group(3, &glass_env_bg, &[]);
+            for (i, d) in draws.iter().enumerate() {
+                if d.topology != Topology::Refract {
+                    continue;
+                }
+                let gm = &self.geom_cache[&d.key].mesh;
+                gp.set_bind_group(1, &self.per_mesh[i].1, &[]);
+                gp.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                gp.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                if let Some(ib) = &gm.index_buffer {
+                    gp.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                    gp.draw_indexed(0..gm.index_count, 0, 0..1);
+                } else {
+                    gp.draw(0..gm.vertex_count, 0..1);
+                }
+            }
+            drop(gp); // end glass pass before the overlay pass reuses the encoder
+
+            // Overlay pass: objects opted out of glass capture draw here, over the
+            // glass, depth-tested against it (so they stay crisp and un-refracted).
+            if draws.iter().any(|d| !d.refract_capture) {
+                let mut op = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers glass overlay pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                op.set_bind_group(0, &self.frame_bind_group, &[]);
+                op.set_bind_group(3, &self.env_bind_group, &[]);
+                let mut last: Option<Topology> = None;
+                for (i, d) in draws.iter().enumerate() {
+                    if d.refract_capture {
+                        continue;
+                    }
+                    let pipe = match (linear_framebuffer, d.topology) {
+                        (false, Topology::Triangle) => &self.pipeline_tri,
+                        (false, Topology::TriangleAlpha) => &self.pipeline_tri_alpha,
+                        (false, Topology::TriangleNoCull) => &self.pipeline_tri_nocull,
+                        (false, Topology::Line) => &self.pipeline_line,
+                        (false, Topology::Sprite) => &self.pipeline_sprite,
+                        (false, Topology::Instanced) => &self.pipeline_instanced,
+                        (true, Topology::Triangle) => &self.pipeline_tri_f16,
+                        (true, Topology::TriangleAlpha) => &self.pipeline_tri_alpha_f16,
+                        (true, Topology::TriangleNoCull) => &self.pipeline_tri_nocull_f16,
+                        (true, Topology::Line) => &self.pipeline_line_f16,
+                        (true, Topology::Sprite) => &self.pipeline_sprite_f16,
+                        (true, Topology::Instanced) => &self.pipeline_instanced_f16,
+                        _ => continue, // skinned/custom/etc not supported as overlay
+                    };
+                    if last != Some(d.topology) {
+                        op.set_pipeline(pipe);
+                        last = Some(d.topology);
+                    }
+                    let gm = if d.topology == Topology::Sprite {
+                        &self.sprite_quad
+                    } else {
+                        &self.geom_cache[&d.key].mesh
+                    };
+                    op.set_bind_group(1, &self.per_mesh[i].1, &[]);
+                    op.set_bind_group(2, &self.per_mesh[i].2, &[]);
+                    op.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                    let inst = if d.topology == Topology::Instanced {
+                        op.set_vertex_buffer(1, instance_buffers[d.instance_buf_idx].slice(..));
+                        d.instance_count
+                    } else {
+                        1
+                    };
+                    if let Some(ib) = &gm.index_buffer {
+                        op.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                        op.draw_indexed(0..gm.index_count, 0, 0..inst);
+                    } else {
+                        op.draw(0..gm.vertex_count, 0..inst);
+                    }
+                }
+            }
+        }
+
+        // --- Temporal anti-aliasing: reproject + blend the rendered frame with
+        // the accumulated history, then blit the result back to the target. ---
+        if taa_active {
+            let color_tex = color_src.unwrap();
+            let depth_tex = depth_src.unwrap();
+            let (w, h) = self.depth_size;
+            self.ensure_taa_targets(w, h, ss_format);
+            let first = self.taa_frame == 0;
+            let taa_u = TaaUniforms {
+                inv_view_proj: taa_inv_vp,
+                prev_view_proj: self.taa_prev_view_proj,
+                params: [w as f32, h as f32, 0.9, if first { 1.0 } else { 0.0 }],
+            };
+            self.queue
+                .write_buffer(&self.taa_uniform, 0, bytemuck::bytes_of(&taa_u));
+            let cur_view = color_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            // frame N reads what N-1 wrote, writes the other buffer.
+            let (a_view, b_view) = {
+                let (_, _, _, av, _, bv) = self.taa_history.as_ref().unwrap();
+                (av, bv)
+            };
+            let even = self.taa_frame % 2 == 0;
+            let (read_view, write_view) = if even {
+                (b_view, a_view)
+            } else {
+                (a_view, b_view)
+            };
+            let resolve_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("threers taa bg"),
+                layout: &self.taa_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&cur_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(read_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&depth_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(&self.taa_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self.taa_uniform.as_entire_binding(),
+                    },
+                ],
+            });
+            let taa_pipe = if linear_framebuffer {
+                &self.pipeline_taa_f16
+            } else {
+                &self.pipeline_taa
+            };
+            {
+                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers taa resolve"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: write_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                rp.set_pipeline(taa_pipe);
+                rp.set_bind_group(0, &resolve_bg, &[]);
+                rp.draw(0..3, 0..1);
+            }
+            // Blit the resolved history back to the frame target.
+            let blit_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("threers taa blit bg"),
+                layout: &self.ss_blit_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(write_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.ss_glass_sampler),
+                    },
+                ],
+            });
+            let blit_pipe = if linear_framebuffer {
+                &self.pipeline_ss_blit_f16
+            } else {
+                &self.pipeline_ss_blit
+            };
+            {
+                let mut bp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("threers taa blit"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                bp.set_pipeline(blit_pipe);
+                bp.set_bind_group(0, &blit_bg, &[]);
+                bp.draw(0..3, 0..1);
+            }
+        }
+        if taa_active {
+            // (separate block so the history-view borrows above have ended)
+            self.taa_prev_view_proj = taa_unjittered_vp;
+            self.taa_frame += 1;
+        }
+
         self.queue.submit(Some(encoder.finish()));
         let _ = (&self.frame_bgl,);
     }
 
     fn ensure_slot_uploaded(&mut self, slot: &Option<Arc<Texture>>) {
-        let Some(t) = slot else { return; };
+        let Some(t) = slot else {
+            return;
+        };
         // Skip upload for render-target-backed textures — the view lives in
         // the RenderTarget itself.
-        if t.external_rt_id.is_some() { return; }
+        if t.external_rt_id.is_some() {
+            return;
+        }
         let key = tex_cache_key(t);
         if !self.tex_cache.contains_key(&key) {
             let gt = GpuTexture::upload(&self.device, &self.queue, t);
@@ -3207,7 +5401,11 @@ impl Renderer {
         }
     }
 
-    fn view_for<'a>(&'a self, slot: &Option<Arc<Texture>>, default: &'a GpuTexture) -> &'a wgpu::TextureView {
+    fn view_for<'a>(
+        &'a self,
+        slot: &Option<Arc<Texture>>,
+        default: &'a GpuTexture,
+    ) -> &'a wgpu::TextureView {
         match slot {
             Some(t) => {
                 // If this Texture is RT-backed, sample from the RT's color view.
@@ -3225,7 +5423,9 @@ impl Renderer {
     /// Borrow an RT's sample-side view by id. Caller must have previously
     /// `register_render_target`'d this id. Used by post-fx to bind the input.
     pub fn rt_view_cache_get(&self, rt_id: u32) -> &wgpu::TextureView {
-        self.rt_view_cache.get(&rt_id).expect("rt id not registered")
+        self.rt_view_cache
+            .get(&rt_id)
+            .expect("rt id not registered")
     }
 
     /// Register a CubeRenderTarget so scene.environment_cube_rt can sample
@@ -3286,21 +5486,45 @@ impl Renderer {
         let chosen = slots.map.as_ref().or(slots.matcap_map.as_ref());
         let sampler = match chosen {
             Some(t) => self.pick_sampler(t),
-            None    => &self.sampler_linear,
+            None => &self.sampler_linear,
         };
 
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("threers tex bg"),
             layout: &self.tex_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(albedo) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(normal) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(roughness) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(metalness) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(ao) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(emissive) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(matcap) },
-                wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(albedo),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(normal),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(roughness),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(metalness),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(ao),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(emissive),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(matcap),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
         })
     }
@@ -3311,12 +5535,13 @@ impl Renderer {
     fn pick_sampler<'a>(&'a self, t: &Texture) -> &'a wgpu::Sampler {
         use crate::textures::{TextureFilter, TextureWrap};
         let nearest = matches!(t.mag_filter, TextureFilter::Nearest);
-        let repeat  = matches!(t.wrap_s, TextureWrap::Repeat) || matches!(t.wrap_t, TextureWrap::Repeat);
+        let repeat =
+            matches!(t.wrap_s, TextureWrap::Repeat) || matches!(t.wrap_t, TextureWrap::Repeat);
         match (nearest, repeat) {
             (false, false) => &self.sampler_linear,
-            (true,  false) => &self.sampler_nearest_clamp,
-            (false, true)  => &self.sampler_linear_repeat,
-            (true,  true)  => &self.sampler_nearest_repeat,
+            (true, false) => &self.sampler_nearest_clamp,
+            (false, true) => &self.sampler_linear_repeat,
+            (true, true) => &self.sampler_nearest_repeat,
         }
     }
 
@@ -3325,25 +5550,73 @@ impl Renderer {
     }
 }
 
-fn create_depth_view(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
+/// Halton low-discrepancy sequence — the standard source of TAA sub-pixel jitter.
+fn halton(mut index: u32, base: u32) -> f32 {
+    let (mut f, mut r) = (1.0f32, 0.0f32);
+    while index > 0 {
+        f /= base as f32;
+        r += f * (index % base) as f32;
+        index /= base;
+    }
+    r
+}
+
+/// `PrimitiveState` with the fields that never vary across our pipelines filled
+/// in (Ccw front, fill, clipped, non-conservative) — only topology + cull differ.
+fn primitive(topology: wgpu::PrimitiveTopology, cull: Option<wgpu::Face>) -> wgpu::PrimitiveState {
+    wgpu::PrimitiveState {
+        topology,
+        strip_index_format: None,
+        front_face: wgpu::FrontFace::Ccw,
+        cull_mode: cull,
+        polygon_mode: wgpu::PolygonMode::Fill,
+        unclipped_depth: false,
+        conservative: false,
+    }
+}
+
+/// `DepthStencilState` at [`DEPTH_FORMAT`] with default stencil/bias — only the
+/// write flag and compare function differ across our pipelines.
+fn depth_stencil(write: bool, compare: wgpu::CompareFunction) -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: DEPTH_FORMAT,
+        depth_write_enabled: write,
+        depth_compare: compare,
+        stencil: Default::default(),
+        bias: Default::default(),
+    }
+}
+
+fn create_depth_view(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("threers depth"),
-        size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: width.max(1),
+            height: height.max(1),
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        // COPY_SRC so the opaque depth can be copied into the sampleable ss_depth
+        // for the screen-space glass ray march.
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    tex.create_view(&wgpu::TextureViewDescriptor::default())
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    (tex, view)
 }
 
 fn transform_direction(m: &Matrix4, v: Vector3) -> Vector3 {
     let e = &m.elements;
     Vector3::new(
-        e[0] * v.x + e[4] * v.y + e[8]  * v.z,
-        e[1] * v.x + e[5] * v.y + e[9]  * v.z,
+        e[0] * v.x + e[4] * v.y + e[8] * v.z,
+        e[1] * v.x + e[5] * v.y + e[9] * v.z,
         e[2] * v.x + e[6] * v.y + e[10] * v.z,
     )
 }
@@ -3351,9 +5624,6 @@ fn transform_direction(m: &Matrix4, v: Vector3) -> Vector3 {
 fn mat3_to_mat4_array(m: &Matrix3) -> [f32; 16] {
     let e = &m.elements;
     [
-        e[0], e[1], e[2], 0.0,
-        e[3], e[4], e[5], 0.0,
-        e[6], e[7], e[8], 0.0,
-        0.0,  0.0,  0.0,  1.0,
+        e[0], e[1], e[2], 0.0, e[3], e[4], e[5], 0.0, e[6], e[7], e[8], 0.0, 0.0, 0.0, 0.0, 1.0,
     ]
 }

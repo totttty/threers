@@ -1,12 +1,17 @@
-use std::f32::consts::PI;
 use crate::core::{BufferAttribute, BufferGeometry};
 use crate::math::{Vector2, Vector3};
+use std::f32::consts::PI;
 
 pub struct LatheGeometry;
 
 impl LatheGeometry {
     /// Revolve a 2D profile around the Y axis. Matches three.js `LatheGeometry`.
-    pub fn new(points: &[Vector2], segments: usize, phi_start: f32, phi_length: f32) -> BufferGeometry {
+    pub fn new(
+        points: &[Vector2],
+        segments: usize,
+        phi_start: f32,
+        phi_length: f32,
+    ) -> BufferGeometry {
         let segments = segments.max(1);
         let phi_length = phi_length.clamp(0.0, PI * 2.0);
         let pn = points.len().max(2);

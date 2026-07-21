@@ -19,7 +19,10 @@ pub enum XmlError {
 }
 
 pub fn parse(src: &str) -> Result<Element, XmlError> {
-    let mut p = Parser { bytes: src.as_bytes(), pos: 0 };
+    let mut p = Parser {
+        bytes: src.as_bytes(),
+        pos: 0,
+    };
     p.skip_prolog();
     p.skip_ws();
     p.element()
@@ -42,28 +45,41 @@ impl<'a> Parser<'a> {
         loop {
             self.skip_ws();
             if self.starts(b"<?xml") {
-                while self.pos + 1 < self.bytes.len() && !(self.bytes[self.pos] == b'?' && self.bytes[self.pos + 1] == b'>') {
+                while self.pos + 1 < self.bytes.len()
+                    && !(self.bytes[self.pos] == b'?' && self.bytes[self.pos + 1] == b'>')
+                {
                     self.pos += 1;
                 }
                 self.pos = (self.pos + 2).min(self.bytes.len());
             } else if self.starts(b"<!--") {
-                while self.pos + 2 < self.bytes.len() && !(self.bytes[self.pos] == b'-' && self.bytes[self.pos + 1] == b'-' && self.bytes[self.pos + 2] == b'>') {
+                while self.pos + 2 < self.bytes.len()
+                    && !(self.bytes[self.pos] == b'-'
+                        && self.bytes[self.pos + 1] == b'-'
+                        && self.bytes[self.pos + 2] == b'>')
+                {
                     self.pos += 1;
                 }
                 self.pos = (self.pos + 3).min(self.bytes.len());
-            } else { return; }
+            } else {
+                return;
+            }
         }
     }
 
     fn starts(&self, prefix: &[u8]) -> bool {
-        self.pos + prefix.len() <= self.bytes.len() && &self.bytes[self.pos..self.pos + prefix.len()] == prefix
+        self.pos + prefix.len() <= self.bytes.len()
+            && &self.bytes[self.pos..self.pos + prefix.len()] == prefix
     }
 
     fn element(&mut self) -> Result<Element, XmlError> {
         self.skip_ws();
         if self.starts(b"<!--") {
             // skip comment, fall through to next element
-            while self.pos + 2 < self.bytes.len() && !(self.bytes[self.pos] == b'-' && self.bytes[self.pos + 1] == b'-' && self.bytes[self.pos + 2] == b'>') {
+            while self.pos + 2 < self.bytes.len()
+                && !(self.bytes[self.pos] == b'-'
+                    && self.bytes[self.pos + 1] == b'-'
+                    && self.bytes[self.pos + 2] == b'>')
+            {
                 self.pos += 1;
             }
             self.pos = (self.pos + 3).min(self.bytes.len());
@@ -74,7 +90,12 @@ impl<'a> Parser<'a> {
         }
         self.pos += 1;
         let name_start = self.pos;
-        while self.pos < self.bytes.len() && !matches!(self.bytes[self.pos], b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/') {
+        while self.pos < self.bytes.len()
+            && !matches!(
+                self.bytes[self.pos],
+                b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/'
+            )
+        {
             self.pos += 1;
         }
         let name = String::from_utf8_lossy(&self.bytes[name_start..self.pos]).to_string();
@@ -83,7 +104,12 @@ impl<'a> Parser<'a> {
             self.skip_ws();
             if self.starts(b"/>") {
                 self.pos += 2;
-                return Ok(Element { name, attributes, children: Vec::new(), text: String::new() });
+                return Ok(Element {
+                    name,
+                    attributes,
+                    children: Vec::new(),
+                    text: String::new(),
+                });
             }
             if self.starts(b">") {
                 self.pos += 1;
@@ -94,10 +120,14 @@ impl<'a> Parser<'a> {
             while self.pos < self.bytes.len() && self.bytes[self.pos] != b'=' {
                 self.pos += 1;
             }
-            let aname = String::from_utf8_lossy(&self.bytes[a_start..self.pos]).trim().to_string();
+            let aname = String::from_utf8_lossy(&self.bytes[a_start..self.pos])
+                .trim()
+                .to_string();
             self.pos += 1; // skip '='
             self.skip_ws();
-            if self.pos >= self.bytes.len() { return Err(XmlError::Unterminated); }
+            if self.pos >= self.bytes.len() {
+                return Err(XmlError::Unterminated);
+            }
             let quote = self.bytes[self.pos];
             self.pos += 1;
             let v_start = self.pos;
@@ -120,7 +150,12 @@ impl<'a> Parser<'a> {
                     self.pos += 1;
                 }
                 self.pos = (self.pos + 1).min(self.bytes.len());
-                return Ok(Element { name, attributes, children, text });
+                return Ok(Element {
+                    name,
+                    attributes,
+                    children,
+                    text,
+                });
             }
             if self.starts(b"<") {
                 children.push(self.element()?);

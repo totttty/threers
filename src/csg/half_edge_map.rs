@@ -26,13 +26,27 @@ impl HalfEdgeMap {
             }
             for e in 0..3 {
                 let next_e = (e + 1) % 3;
-                let reverse = (hashes[next_e].0, hashes[next_e].1, hashes[next_e].2, hashes[e].0, hashes[e].1, hashes[e].2);
+                let reverse = (
+                    hashes[next_e].0,
+                    hashes[next_e].1,
+                    hashes[next_e].2,
+                    hashes[e].0,
+                    hashes[e].1,
+                    hashes[e].2,
+                );
                 let index = tri * 3 + e;
                 if let Some(other) = map.remove(&reverse) {
                     data[index] = other as i32;
                     data[other] = index as i32;
                 } else {
-                    let forward = (hashes[e].0, hashes[e].1, hashes[e].2, hashes[next_e].0, hashes[next_e].1, hashes[next_e].2);
+                    let forward = (
+                        hashes[e].0,
+                        hashes[e].1,
+                        hashes[e].2,
+                        hashes[next_e].0,
+                        hashes[next_e].1,
+                        hashes[next_e].2,
+                    );
                     map.insert(forward, index);
                 }
             }

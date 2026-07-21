@@ -1,8 +1,15 @@
+use std::collections::HashMap;
+
 use crate::core::{BufferAttribute, BufferGeometry};
 
 /// Minimal Wavefront OBJ parser. Reads `v` (position), `vn` (normal),
 /// `vt` (uv), and `f` (face) records. Negative indices are accepted (offset
 /// from end). Quad and polygon faces are triangulated by fan from vertex 0.
+///
+/// Face-corners that reference the same `v/vt/vn` index triple are **welded**
+/// into a single output vertex (indexed), so adjacent faces share vertices.
+/// This is what makes `compute_vertex_normals` produce *smooth* shading on
+/// normal-less meshes — an unwelded triangle soup can only be flat-shaded.
 pub struct ObjLoader;
 
 impl ObjLoader {
@@ -11,29 +18,40 @@ impl ObjLoader {
         let mut normals: Vec<f32> = Vec::new();
         let mut uvs: Vec<f32> = Vec::new();
 
-        // Resolved per-vertex output (each face vertex becomes a unique vertex).
+        // Welded per-vertex output, keyed by the (v, vt, vn) index triple.
         let mut out_pos: Vec<f32> = Vec::new();
         let mut out_nrm: Vec<f32> = Vec::new();
         let mut out_uv: Vec<f32> = Vec::new();
         let mut out_idx: Vec<u32> = Vec::new();
+        let mut vertex_map: HashMap<(i32, i32, i32), u32> = HashMap::new();
 
         for raw_line in src.lines() {
             let line = raw_line.trim();
-            if line.is_empty() || line.starts_with('#') { continue; }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
             let mut parts = line.split_whitespace();
-            let Some(tag) = parts.next() else { continue; };
+            let Some(tag) = parts.next() else {
+                continue;
+            };
             match tag {
                 "v" => {
                     let xs: Vec<f32> = parts.filter_map(|s| s.parse().ok()).collect();
-                    if xs.len() >= 3 { positions.extend_from_slice(&xs[..3]); }
+                    if xs.len() >= 3 {
+                        positions.extend_from_slice(&xs[..3]);
+                    }
                 }
                 "vn" => {
                     let xs: Vec<f32> = parts.filter_map(|s| s.parse().ok()).collect();
-                    if xs.len() >= 3 { normals.extend_from_slice(&xs[..3]); }
+                    if xs.len() >= 3 {
+                        normals.extend_from_slice(&xs[..3]);
+                    }
                 }
                 "vt" => {
                     let xs: Vec<f32> = parts.filter_map(|s| s.parse().ok()).collect();
-                    if xs.len() >= 2 { uvs.extend_from_slice(&xs[..2]); }
+                    if xs.len() >= 2 {
+                        uvs.extend_from_slice(&xs[..2]);
+                    }
                 }
                 "f" => {
                     // Each token is `v[/vt[/vn]]` (1-based, possibly negative).
@@ -42,16 +60,31 @@ impl ObjLoader {
                     for t in tokens {
                         let pieces: Vec<&str> = t.split('/').collect();
                         let pi: i32 = pieces.first().and_then(|s| s.parse().ok()).unwrap_or(0);
-                        let ti: i32 = pieces.get(1).filter(|s| !s.is_empty()).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let ti: i32 = pieces
+                            .get(1)
+                            .filter(|s| !s.is_empty())
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
                         let ni: i32 = pieces.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
                         verts.push((pi, ti, ni));
                     }
-                    // Fan-triangulate.
+                    // Fan-triangulate, welding shared vertices.
                     for i in 1..verts.len().saturating_sub(1) {
                         for v in [verts[0], verts[i], verts[i + 1]] {
-                            let base_p = (out_pos.len() / 3) as u32;
-                            push_vertex(&positions, &uvs, &normals, v, &mut out_pos, &mut out_uv, &mut out_nrm);
-                            out_idx.push(base_p);
+                            let index = *vertex_map.entry(v).or_insert_with(|| {
+                                let new_index = (out_pos.len() / 3) as u32;
+                                push_vertex(
+                                    &positions,
+                                    &uvs,
+                                    &normals,
+                                    v,
+                                    &mut out_pos,
+                                    &mut out_uv,
+                                    &mut out_nrm,
+                                );
+                                new_index
+                            });
+                            out_idx.push(index);
                         }
                     }
                 }
@@ -63,7 +96,11 @@ impl ObjLoader {
         if !out_pos.is_empty() {
             g.set_attribute("position", BufferAttribute::new(out_pos, 3));
         }
-        if !out_nrm.is_empty() {
+        // Only expose normals the file actually provided (`out_nrm` is always
+        // padded with `[0,0,1]` defaults, so guard on the source `vn` records).
+        // Downstream can then detect the absence and `compute_vertex_normals`,
+        // rather than clobbering an artist's smooth normals.
+        if !normals.is_empty() {
             g.set_attribute("normal", BufferAttribute::new(out_nrm, 3));
         }
         if !out_uv.is_empty() {
@@ -86,8 +123,12 @@ fn push_vertex(
     out_nrm: &mut Vec<f32>,
 ) {
     let resolve = |idx: i32, len: usize| -> Option<usize> {
-        if idx == 0 { return None; }
-        if idx > 0 { Some((idx as usize).saturating_sub(1).min(len.saturating_sub(1))) } else {
+        if idx == 0 {
+            return None;
+        }
+        if idx > 0 {
+            Some((idx as usize).saturating_sub(1).min(len.saturating_sub(1)))
+        } else {
             let from_end = (-idx) as usize;
             len.checked_sub(from_end)
         }

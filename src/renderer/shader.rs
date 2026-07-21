@@ -686,7 +686,9 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
     // 7: Gaussian blur horizontal. 9-tap separable kernel. params2.x = radius (px).
     if (kind == 7u) {
         let radius = u.params2.x;
-        let weights = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+        // `var` (not `let`): WGSL/naga only allows dynamic indexing (`weights[i]`
+        // with a non-const `i`) on an addressable variable, not a value array.
+        var weights = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
         var acc = base.rgb * weights[0];
         for (var i: i32 = 1; i < 5; i = i + 1) {
             let off = vec2<f32>(texel.x * radius * f32(i), 0.0);
@@ -698,7 +700,9 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
     // 8: Gaussian blur vertical. Companion to kind 7.
     if (kind == 8u) {
         let radius = u.params2.x;
-        let weights = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
+        // `var` (not `let`): WGSL/naga only allows dynamic indexing (`weights[i]`
+        // with a non-const `i`) on an addressable variable, not a value array.
+        var weights = array<f32, 5>(0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216);
         var acc = base.rgb * weights[0];
         for (var i: i32 = 1; i < 5; i = i + 1) {
             let off = vec2<f32>(0.0, texel.y * radius * f32(i));
@@ -1082,6 +1086,9 @@ struct MeshUniforms {
     params2       : vec4<f32>,
     /// Physical material: x: clearcoat, y: clearcoat_roughness, z: ior, w: transmission
     params3       : vec4<f32>,
+    /// Physical volume: x: thickness (glass refraction/march depth),
+    /// y: dispersion, z: vertex_emissive. w reserved.
+    params4       : vec4<f32>,
     /// x: material kind, y: texture-slot flags
     flags         : vec4<u32>,
 };
@@ -1107,6 +1114,12 @@ struct MeshUniforms {
 @group(3) @binding(5) var spot_shadow_sampler  : sampler_comparison;
 @group(3) @binding(6) var point_shadow_tex     : texture_depth_cube;
 @group(3) @binding(7) var point_shadow_sampler : sampler_comparison;
+// Screen-space glass: mipmapped capture of the opaque scene + its trilinear
+// sampler. Only read by fs_ss_glass; a 1×1 placeholder is bound otherwise.
+@group(3) @binding(9)  var ss_color_tex   : texture_2d<f32>;
+@group(3) @binding(10) var ss_color_samp  : sampler;
+@group(3) @binding(11) var ss_depth_tex   : texture_depth_2d;
+@group(3) @binding(12) var ss_back_depth_tex : texture_depth_2d;
 
 struct VsIn {
     @location(0) position : vec3<f32>,
@@ -1574,6 +1587,65 @@ fn pbr_brdf(n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, albedo : vec3<f32>, rou
     return (diff + spec) * n_dot_l;
 }
 
+// Anisotropic GGX specular (Filament / Burley). `an` in [-1, 1] biases the GGX
+// alpha along the tangent (`at`) vs. bitangent (`ab`), stretching the highlight
+// into a streak. T and B span the surface tangent plane (n = T × B). The Smith
+// visibility term is height-correlated and already carries the 1/(4·NoV·NoL)
+// denominator, so specular = D · V · F with no extra divide.
+fn pbr_brdf_aniso(
+    n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, t : vec3<f32>, b : vec3<f32>,
+    albedo : vec3<f32>, roughness : f32, metalness : f32, an : f32,
+) -> vec3<f32> {
+    let h = normalize(v + l);
+    let n_dot_v = max(dot(n, v), 1e-4);
+    let n_dot_l = max(dot(n, l), 0.0);
+    let n_dot_h = max(dot(n, h), 0.0);
+    let v_dot_h = max(dot(v, h), 0.0);
+
+    let a = max(roughness * roughness, 0.0016);
+    let at = max(a * (1.0 + an), 0.0016);
+    let ab = max(a * (1.0 - an), 0.0016);
+
+    let t_dot_h = dot(t, h);
+    let b_dot_h = dot(b, h);
+    let t_dot_v = dot(t, v);
+    let b_dot_v = dot(b, v);
+    let t_dot_l = dot(t, l);
+    let b_dot_l = dot(b, l);
+
+    // D — anisotropic GGX normal distribution.
+    let a2 = at * ab;
+    let dv = vec3<f32>(ab * t_dot_h, at * b_dot_h, a2 * n_dot_h);
+    let d2 = dot(dv, dv);
+    let w2 = a2 / max(d2, 1e-8);
+    let d = a2 * w2 * w2 * (1.0 / PI);
+
+    // V — height-correlated Smith visibility (anisotropic).
+    let lambda_v = n_dot_l * length(vec3<f32>(at * t_dot_v, ab * b_dot_v, n_dot_v));
+    let lambda_l = n_dot_v * length(vec3<f32>(at * t_dot_l, ab * b_dot_l, n_dot_l));
+    let vis = 0.5 / max(lambda_v + lambda_l, 1e-5);
+
+    let f0 = mix(vec3<f32>(0.04), albedo, metalness);
+    let f = f_schlick(v_dot_h, f0);
+
+    let spec = d * vis * f;
+    let kd = (vec3<f32>(1.0) - f) * (1.0 - metalness);
+    let diff = kd * albedo / PI;
+    return (diff + spec) * n_dot_l;
+}
+
+// Direct-light PBR dispatch: isotropic GGX unless the material carries an
+// anisotropy strength, in which case the anisotropic lobe is used.
+fn pbr_direct(
+    n : vec3<f32>, v : vec3<f32>, l : vec3<f32>, t : vec3<f32>, b : vec3<f32>,
+    albedo : vec3<f32>, roughness : f32, metalness : f32, an : f32,
+) -> vec3<f32> {
+    if (abs(an) > 0.001) {
+        return pbr_brdf_aniso(n, v, l, t, b, albedo, roughness, metalness, an);
+    }
+    return pbr_brdf(n, v, l, albedo, roughness, metalness);
+}
+
 @fragment
 fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     let kind = mesh.flags.x;
@@ -1891,6 +1963,22 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     let diffuse_color = albedo_lin * (1.0 - metalness);
     lit = lit + diffuse_color * frame.ambient.rgb * ao * RECIP_PI;
 
+    // Anisotropy: strength is packed in emissive.w for physical materials (0 =
+    // isotropic). The cortex mesh carries no UV tangents, so derive a tangent
+    // frame from screen-space world-position derivatives; the direct-light BRDF
+    // then stretches the specular lobe along it into a brushed streak.
+    let aniso = select(0.0, mesh.emissive.w, kind == MAT_PHYSICAL);
+    var tangent = vec3<f32>(1.0, 0.0, 0.0);
+    var bitangent = vec3<f32>(0.0, 1.0, 0.0);
+    if (abs(aniso) > 0.001) {
+        let dpx = dpdx(in.world_pos);
+        let dpy = dpdy(in.world_pos);
+        var tv = dpx - n_geom * dot(n_geom, dpx);
+        if (dot(tv, tv) < 1e-8) { tv = dpy - n_geom * dot(n_geom, dpy); }
+        tangent = normalize(tv);
+        bitangent = normalize(cross(n_geom, tangent));
+    }
+
     let receive_shadow = (mesh.flags.z & FLAG_RECEIVE_SHADOW) != 0u;
     let sf = select(1.0, shadow_factor(in.world_pos), receive_shadow);
     for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
@@ -1898,7 +1986,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         let l = frame.dir_lights[i];
         let to_light = -normalize(l.direction.xyz);
         let attenuation = select(1.0, sf, i == 0u);
-        lit = lit + l.color.rgb * pbr_brdf(n_geom, v_dir, to_light, albedo_lin, roughness, metalness) * attenuation;
+        lit = lit + l.color.rgb * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso) * attenuation;
     }
     for (var i : u32 = 0u; i < frame.light_counts.y; i = i + 1u) {
         if (i >= 4u) { break; }
@@ -1908,7 +1996,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         let to_light = to_light_vec / max(d, 0.0001);
         let att = punctual_attenuation(d, l.params.x, l.params.y);
         let sf_pt = select(1.0, select(1.0, shadow_factor_point(in.world_pos), receive_shadow), i == 0u);
-        lit = lit + l.color.rgb * att * sf_pt * pbr_brdf(n_geom, v_dir, to_light, albedo_lin, roughness, metalness);
+        lit = lit + l.color.rgb * att * sf_pt * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso);
     }
     for (var i : u32 = 0u; i < frame.light_counts.z; i = i + 1u) {
         if (i >= 4u) { break; }
@@ -1924,7 +2012,7 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         }
         let att = punctual_attenuation(d, l.params.x, l.params.y) * cone;
         let sf_spot = select(1.0, select(1.0, shadow_factor_spot(in.world_pos), receive_shadow), i == 0u);
-        lit = lit + l.color.rgb * att * sf_spot * pbr_brdf(n_geom, v_dir, to_light, albedo_lin, roughness, metalness);
+        lit = lit + l.color.rgb * att * sf_spot * pbr_direct(n_geom, v_dir, to_light, tangent, bitangent, albedo_lin, roughness, metalness, aniso);
     }
     // HemisphereLight is also indirect-diffuse and metals don't diffuse it.
     for (var i : u32 = 0u; i < frame.light_counts.w; i = i + 1u) {
@@ -1989,7 +2077,61 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
         lit = lit + diffuse_color * cosine_weighted_irr;
     }
 
+    // Transmission (glass): MeshPhysicalMaterial.transmission makes the surface
+    // see-through, Fresnel-weighted by the material IOR — opaque at the grazing
+    // rim, transparent face-on.
+    var out_opacity = opacity;
+    if (kind == MAT_PHYSICAL && mesh.params3.w > 0.0) {
+        let transmission = clamp(mesh.params3.w, 0.0, 1.0);
+        let t_ior = max(mesh.params3.z, 1.0);
+        let thickness = max(mesh.params4.x, 0.0);
+        let f0s = pow((t_ior - 1.0) / (t_ior + 1.0), 2.0);
+        let ndv = max(dot(n_geom, v_dir), 0.0);
+        let fresnel = f0s + (1.0 - f0s) * pow(1.0 - ndv, 5.0);
+
+        if (frame.tone_mapping_exposure.z > 0.5) {
+            // Volumetric refraction (three.js getIBLVolumeRefraction fallback):
+            // with an environment but no transmission framebuffer, bend the view
+            // ray through the surface by the IOR and read the environment along
+            // it, so the glass shows a refracted, thickness-attenuated image of
+            // the surroundings rather than just fading out. This is real IOR
+            // refraction of the IBL environment, composited opaquely in-shader
+            // (no back-to-front sorting → flicker-free).
+            let refr = refract(-v_dir, n_geom, 1.0 / t_ior);
+            // refract() returns 0 on total internal reflection; guard it.
+            var refr_dir = n_geom;
+            if (dot(refr, refr) > 1e-6) { refr_dir = normalize(refr); }
+            var transmitted = sample_env_cube(refr_dir, roughness_env);
+            // Beer-Lambert attenuation over the traversed thickness, tinted by
+            // the glass albedo (the heatmap color survives as a stain).
+            let absorb = (vec3<f32>(1.0) - albedo_lin) * thickness;
+            transmitted = transmitted * exp(-absorb);
+            // Mix the surface shading toward the refracted image by the
+            // transmission factor; the Fresnel rim keeps its reflective
+            // highlight (already added by the IBL block above).
+            lit = mix(lit, transmitted, transmission * (1.0 - fresnel));
+            // Glassy edge: the signature "curved shell" read comes from the
+            // grazing rim lighting up with reflected environment. Brighten the
+            // silhouette with the mirror-reflected env plus a thin white sheen,
+            // scaled by a steep Fresnel so only the very edge glows.
+            let rim = pow(1.0 - ndv, 4.0);
+            let rim_env = sample_env_cube(reflect(-v_dir, n_geom), roughness_env);
+            lit = lit + rim * (rim_env * 0.7 + vec3<f32>(0.06)) * transmission;
+            // Keep a faint body so the silhouette and heatmap stay legible even
+            // face-on; only the grazing Fresnel rim is fully opaque.
+            out_opacity = opacity * clamp(fresnel + rim * 0.6 + (1.0 - transmission) + 0.15, 0.0, 1.0);
+        } else {
+            // No environment: screen-composite approximation (Fresnel opacity),
+            // drawn over the already-rendered scene via alpha blending.
+            out_opacity = opacity * (1.0 - transmission * (1.0 - fresnel));
+        }
+    }
+
     lit = lit + emissive;
+    // General per-vertex emission (Standard/Physical): app bakes color into
+    // vertexColor.rgb + a gate into vertexColor.a, scaled by vertex_emissive
+    // (params4.z). Zero by default, so no effect unless the material opts in.
+    lit = lit + in.vertex_color.rgb * in.vertex_color.a * mesh.params4.z;
     let tm = u32(frame.tone_mapping_exposure.x);
     let exposure = frame.tone_mapping_exposure.y;
     if (tm == 1u) { lit = lit * exposure; }
@@ -2000,6 +2142,339 @@ fn fs_main(in : VsOut) -> @location(0) vec4<f32> {
     // output writes raw linear bytes and the browser misinterprets them as
     // sRGB, making low-luminance scenes (e.g. spot lights) ~13× too dark.
     let lit_srgb = framebuffer_encode(lit);
-    return vec4<f32>(lit_srgb, opacity);
+    return vec4<f32>(lit_srgb, out_opacity);
+}
+
+// Weighted-blended order-independent transparency output. Instead of a single
+// blended color, each fragment contributes to two accumulation buffers:
+//   accum   (Rgba16F, additive)      = sum(premultiplied_color * weight)
+//   reveal  (R16F, multiplicative)   = product(1 - alpha)
+// The resolve pass turns these into an order-independent composite. Uses simple
+// ambient+hemisphere+directional Lambert lighting on the vertex color (enough
+// for a translucent heatmap surface) so it stays self-contained.
+struct OitOut {
+    @location(0) accum  : vec4<f32>,
+    @location(1) reveal : f32,
+}
+@fragment
+fn fs_oit(in : VsOut) -> OitOut {
+    let base = mesh.color.rgb * in.vertex_color.rgb;
+    let alpha = clamp(mesh.params.y * in.vertex_color.a, 0.0, 1.0);
+    let n = normalize(in.world_normal);
+    var light = frame.ambient.rgb;
+    for (var i : u32 = 0u; i < frame.light_counts.x; i = i + 1u) {
+        if (i >= 4u) { break; }
+        let l = frame.dir_lights[i];
+        light = light + l.color.rgb * max(dot(n, -normalize(l.direction.xyz)), 0.0);
+    }
+    for (var i : u32 = 0u; i < frame.light_counts.w; i = i + 1u) {
+        if (i >= 4u) { break; }
+        light = light + shade_hemi(n, frame.hemi_lights[i]);
+    }
+    let col = framebuffer_encode(base * light);
+
+    // McGuire depth weight: nearer fragments weigh more. `view_z` is positive.
+    let z = max(in.view_z, 1e-3);
+    let w = alpha * clamp(10.0 / (1e-5 + pow(z / 60.0, 3.0) + pow(z / 300.0, 6.0)), 1e-2, 3e3);
+
+    var o : OitOut;
+    o.accum  = vec4<f32>(col * alpha * w, alpha * w);
+    o.reveal = alpha;
+    return o;
+}
+
+// --- Screen-space refraction glass (TransparencyMode::Refract) --------------
+// Project a world point to screen UV (framebuffer top-left origin).
+fn ss_project(p : vec3<f32>) -> vec2<f32> {
+    let clip = frame.view_proj * vec4<f32>(p, 1.0);
+    let ndc = clip.xy / max(abs(clip.w), 1e-5);
+    return ndc * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+}
+
+// March a world-space ray against the captured opaque depth (EEVEE-style
+// screen-space trace). Returns (uv.x, uv.y, hit) — hit=1 where the ray crosses
+// behind on-screen geometry; else uv is the last on-screen sample point.
+fn ss_march(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -> vec3<f32> {
+    let dims = frame.viewport_size.xy;
+    var prev_uv = ss_project(origin);
+    var i = 1;
+    loop {
+        if (i > steps) { break; }
+        let p = origin + dir * (dist * f32(i) / f32(steps));
+        let clip = frame.view_proj * vec4<f32>(p, 1.0);
+        if (clip.w <= 0.0) { break; }
+        let uv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { break; }
+        let ray_d = clip.z / clip.w;
+        let coord = vec2<i32>(uv * dims);
+        let scene_d = textureLoad(ss_depth_tex, coord, 0);
+        if (scene_d < 0.9999 && ray_d > scene_d + 2e-4) {
+            // Crossed behind captured geometry — refine once for the hit UV.
+            return vec3<f32>(mix(prev_uv, uv, 0.5), 1.0);
+        }
+        prev_uv = uv;
+        i = i + 1;
+    }
+    return vec3<f32>(prev_uv, 0.0);
+}
+
+// Accurate screen-space reflection march: linear search for the depth crossing,
+// then a binary-search refinement for a precise hit point (returns (uv, hit)).
+// This is the "accurate reflections" path — combined with the roughness mip blur
+// and (optionally) TAA it resolves reflected geometry at its true position
+// rather than a clamped approximation.
+fn ss_march_refl(origin : vec3<f32>, dir : vec3<f32>, dist : f32, steps : i32) -> vec3<f32> {
+    let dims = frame.viewport_size.xy;
+    var prev_t = 0.0;
+    var i = 1;
+    loop {
+        if (i > steps) { break; }
+        let t = f32(i) / f32(steps);
+        let p = origin + dir * (dist * t);
+        let clip = frame.view_proj * vec4<f32>(p, 1.0);
+        if (clip.w <= 0.0) { break; }
+        let uv = clip.xy / clip.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) { break; }
+        let ray_d = clip.z / clip.w;
+        let scene_d = textureLoad(ss_depth_tex, vec2<i32>(uv * dims), 0);
+        // Require a *thin* crossing (ray just behind the surface) to reject rays
+        // that plunge far behind geometry — the classic SSR thickness test.
+        if (scene_d < 0.9999 && ray_d > scene_d + 2e-5 && ray_d < scene_d + 0.02) {
+            var lo = prev_t;
+            var hi = t;
+            for (var k = 0; k < 6; k = k + 1) {
+                let mt = (lo + hi) * 0.5;
+                let mc = frame.view_proj * vec4<f32>(origin + dir * (dist * mt), 1.0);
+                let muv = mc.xy / mc.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+                let msd = textureLoad(ss_depth_tex, vec2<i32>(muv * dims), 0);
+                if (mc.z / mc.w > msd + 2e-5) { hi = mt; } else { lo = mt; }
+            }
+            let hc = frame.view_proj * vec4<f32>(origin + dir * (dist * (lo + hi) * 0.5), 1.0);
+            return vec3<f32>(hc.xy / hc.w * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5), 1.0);
+        }
+        prev_t = t;
+        i = i + 1;
+    }
+    return vec3<f32>(0.0, 0.0, 0.0);
+}
+
+// Dielectric glass, closer to a Cycles/Principled Glass BSDF: at the surface the
+// view ray either refracts or reflects, weighted by Fresnel; both terms trace
+// the captured scene in screen space (roughness → mip blur), with the
+// environment probe as the off-screen fallback. There is no diffuse/opaque body
+// — the glass "color" only tints transmission (absorption). `thickness`
+// (params4.x) is the world-space march distance.
+@fragment
+fn fs_ss_glass(in : VsOut) -> @location(0) vec4<f32> {
+    let dims = frame.viewport_size.xy;
+    let screen_uv = in.clip_pos.xy / dims;
+
+    var n = normalize(in.world_normal);
+    let v = normalize(frame.camera_position.xyz - in.world_pos);
+    if (dot(n, v) < 0.0) { n = -n; }              // orient toward the camera
+    let ndv = clamp(dot(n, v), 1e-3, 1.0);
+
+    let tint       = mesh.color.rgb * in.vertex_color.rgb;   // glass color
+    let roughness  = clamp(mesh.params.z, 0.02, 1.0);
+    let ior        = max(mesh.params3.z, 1.0);
+    let march_dist = max(mesh.params4.x, 1.0);               // thickness → march
+    let dispersion = mesh.params4.y;
+    let lod        = roughness * 6.0;                        // roughness → mip blur
+
+    // --- Two-surface thickness: eye-space distance from this front glass surface
+    // to its back face (from the captured back-face depth), i.e. the path length
+    // through the glass volume. Drives path-length absorption + a volumetric
+    // density tint so thick regions read denser than thin edges. ---
+    let near = frame.viewport_size.z;
+    let far  = frame.viewport_size.w;
+    let bcoord = vec2<i32>(screen_uv * dims);
+    let back_d = textureLoad(ss_back_depth_tex, bcoord, 0);
+    var thick = 0.0;
+    if (back_d < 0.9999) {
+        let back_dist = near * far / max(far - back_d * (far - near), 1e-4);
+        thick = max(back_dist - in.view_z, 0.0);
+    }
+
+    // --- Refraction: march the depth buffer for the real exit point --------
+    // The cortex normal is extremely high-frequency, so a sharp screen-space
+    // refraction speckles (neighbouring fragments hit scattered pixels). Blur
+    // the refracted tap (mip floor) so it averages into smooth frosted glass.
+    let refr_lod = max(lod, 2.0);
+    let refr_dir = refract(-v, n, 1.0 / ior);
+    let tir = dot(refr_dir, refr_dir) < 1e-6;   // total internal reflection
+    // Sample the captured scene along the refracted ray. On a "miss" the march
+    // endpoint projects the ray to the background, so this reads the actual
+    // background (black) through the glass — transparent, not an env-filled body.
+    // The cortex normal is very high-frequency, so clamp the screen displacement
+    // (EEVEE-style bounded trace) to keep the refraction coherent, not speckled.
+    let m = ss_march(in.world_pos, normalize(select(refr_dir, reflect(-v, n), tir)), march_dist, 48);
+    let max_off = 0.025;
+    var roff = m.xy - screen_uv;
+    let rlen = length(roff);
+    if (rlen > max_off) { roff = roff * (max_off / rlen); }
+    let ruv = screen_uv + roff;
+    let disp = roff * dispersion;                 // dispersion: fan RGB taps
+    var refracted = vec3<f32>(
+        textureSampleLevel(ss_color_tex, ss_color_samp, ruv + disp, refr_lod).r,
+        textureSampleLevel(ss_color_tex, ss_color_samp, ruv,        refr_lod).g,
+        textureSampleLevel(ss_color_tex, ss_color_samp, ruv - disp, refr_lod).b,
+    );
+    // Glass color as transmission absorption, now over the real path length
+    // (Beer–Lambert): thicker glass tints/darkens the transmitted image more.
+    refracted = refracted * exp(-(vec3<f32>(1.0) - tint) * (0.15 + thick * 0.006));
+
+    // --- Reflection: accurate SSR of the scene, black where it misses --------
+    // The visible background is black, so a transparent glass reflects black on
+    // its faces (not the studio env — that would gray the whole bumpy surface).
+    // A binary-refined march resolves the reflected geometry at its true screen
+    // position (roughness selects the mip blur); env is only a grazing-rim sheen.
+    let refl_dir = reflect(-v, n);
+    var reflection = vec3<f32>(0.0);
+    let rm = ss_march_refl(in.world_pos, refl_dir, march_dist, 40);
+    if (rm.z > 0.5) {
+        reflection = textureSampleLevel(ss_color_tex, ss_color_samp, rm.xy, max(lod, 1.0)).rgb;
+    }
+
+    // --- Pure dielectric Fresnel reflect/refract mix -----------------------
+    let f0 = pow((ior - 1.0) / (ior + 1.0), 2.0);
+    var fresnel = f0 + (1.0 - f0) * pow(1.0 - ndv, 5.0);
+    if (tir) { fresnel = 1.0; }
+    var color = mix(refracted, reflection, fresnel);
+    // Two-surface volumetric density: thicker glass reads as a denser body,
+    // picking up a faint tint of the glass color toward the middle (a real
+    // depth cue on a black background where absorption alone is invisible).
+    let density = 1.0 - exp(-thick * 0.010);
+    color = color + tint * density * 0.30;
+    // Environment sheen only at the grazing silhouette — keeps the body black
+    // (transparent) while the rim still catches a glassy studio highlight.
+    let env_refl = sample_env_cube(refl_dir, roughness);
+    let rim = pow(1.0 - ndv, 5.0);
+    color = color + rim * env_refl * 0.9;
+
+    // --- Caustics (approximation) -----------------------------------------
+    let caustic = pow(max(dot(refracted, vec3<f32>(0.333)) - 0.55, 0.0), 2.0) * (1.0 - fresnel);
+    color = color + caustic * vec3<f32>(1.0, 0.97, 0.9) * 1.2;
+
+    // --- Emission ---------------------------------------------------------
+    // Material emissive plus the general per-vertex emission term: the app bakes
+    // a color into vertexColor.rgb and a gate into vertexColor.a, scaled by the
+    // material's vertex_emissive (params4.z). Zero by default (no effect).
+    color = color + mesh.emissive.rgb + in.vertex_color.rgb * in.vertex_color.a * mesh.params4.z;
+
+    color = apply_fog(color, in.view_z);
+    let tm = u32(frame.tone_mapping_exposure.x);
+    let exposure = frame.tone_mapping_exposure.y;
+    if (tm == 1u) { color = color * exposure; }
+    else if (tm == 2u) { color = aces_tonemap(color * exposure); }
+    return vec4<f32>(framebuffer_encode(color), 1.0);
+}
+"#;
+
+/// Fullscreen "sample one texture → write" — used for the screen-space glass
+/// mip downsample chain and the blit of the opaque capture to the frame target.
+/// A single bilinear tap box-filters a 2× downsample and is an identity copy at
+/// matched resolution.
+pub const SS_BLIT_SHADER: &str = r#"
+@group(0) @binding(0) var src_tex  : texture_2d<f32>;
+@group(0) @binding(1) var src_samp : sampler;
+struct Vo { @builtin(position) pos : vec4<f32>, @location(0) uv : vec2<f32> };
+@vertex
+fn vs_main(@builtin(vertex_index) vid : u32) -> Vo {
+    var o : Vo;
+    let x = f32((vid << 1u) & 2u);
+    let y = f32(vid & 2u);
+    o.uv = vec2<f32>(x, y);
+    o.pos = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    return o;
+}
+@fragment
+fn fs_main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
+    return textureSampleLevel(src_tex, src_samp, uv, 0.0);
+}
+"#;
+
+/// Temporal anti-aliasing resolve. Reads the current (jittered) frame, the depth,
+/// and the previous accumulated history; reconstructs each pixel's world position
+/// from depth, reprojects it through the previous camera to fetch history,
+/// neighbourhood-clamps that history to the current 3×3 colour box (kills
+/// ghosting), and blends. Exact for camera motion over static geometry (no motion
+/// vectors); moving geometry falls back to the clamp.
+pub const TAA_SHADER: &str = r#"
+struct TaaU {
+    inv_view_proj  : mat4x4<f32>,  // current, un-jittered
+    prev_view_proj : mat4x4<f32>,  // previous, un-jittered
+    params         : vec4<f32>,    // x:width y:height z:history-weight w:first-frame
+};
+@group(0) @binding(0) var cur_tex   : texture_2d<f32>;
+@group(0) @binding(1) var hist_tex  : texture_2d<f32>;
+@group(0) @binding(2) var taa_depth : texture_depth_2d;
+@group(0) @binding(3) var taa_samp  : sampler;
+@group(0) @binding(4) var<uniform> taa : TaaU;
+
+struct Vo { @builtin(position) pos : vec4<f32>, @location(0) uv : vec2<f32> };
+@vertex
+fn vs_main(@builtin(vertex_index) vid : u32) -> Vo {
+    var o : Vo;
+    let x = f32((vid << 1u) & 2u);
+    let y = f32(vid & 2u);
+    o.uv = vec2<f32>(x, y);
+    o.pos = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    return o;
+}
+@fragment
+fn fs_main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
+    let dims = taa.params.xy;
+    let coord = vec2<i32>(uv * dims);
+    let cur = textureLoad(cur_tex, coord, 0);
+    if (taa.params.w > 0.5) { return cur; }          // first frame: seed history
+
+    let d = textureLoad(taa_depth, coord, 0);
+    if (d >= 0.99999) { return cur; }                // background: nothing to reproject
+
+    // Reconstruct world position from depth, reproject through the prev camera.
+    let ndc = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);
+    let wh = taa.inv_view_proj * ndc;
+    let world = wh.xyz / wh.w;
+    let pc = taa.prev_view_proj * vec4<f32>(world, 1.0);
+    if (pc.w <= 0.0) { return cur; }
+    let prev_uv = (pc.xy / pc.w) * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
+    if (prev_uv.x < 0.0 || prev_uv.x > 1.0 || prev_uv.y < 0.0 || prev_uv.y > 1.0) { return cur; }
+
+    var hist = textureSampleLevel(hist_tex, taa_samp, prev_uv, 0.0);
+    // Neighbourhood colour clamp — the standard TAA anti-ghosting step.
+    var mn = cur.rgb;
+    var mx = cur.rgb;
+    for (var y : i32 = -1; y <= 1; y = y + 1) {
+        for (var x : i32 = -1; x <= 1; x = x + 1) {
+            let s = textureLoad(cur_tex, coord + vec2<i32>(x, y), 0).rgb;
+            mn = min(mn, s);
+            mx = max(mx, s);
+        }
+    }
+    hist = vec4<f32>(clamp(hist.rgb, mn, mx), hist.a);
+    return mix(cur, hist, taa.params.z);
+}
+"#;
+
+/// Resolve pass for weighted-blended OIT: reads the accum + revealage buffers and
+/// produces the order-independent composite, alpha-blended over the opaque image.
+pub const OIT_RESOLVE_SHADER: &str = r#"
+@group(0) @binding(0) var accum_tex  : texture_2d<f32>;
+@group(0) @binding(1) var reveal_tex : texture_2d<f32>;
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi : u32) -> @builtin(position) vec4<f32> {
+    var p = array<vec2<f32>, 3>(vec2<f32>(-1.0, -1.0), vec2<f32>(3.0, -1.0), vec2<f32>(-1.0, 3.0));
+    return vec4<f32>(p[vi], 0.0, 1.0);
+}
+
+@fragment
+fn fs_main(@builtin(position) pos : vec4<f32>) -> @location(0) vec4<f32> {
+    let p = vec2<i32>(i32(pos.x), i32(pos.y));
+    let reveal = textureLoad(reveal_tex, p, 0).r;
+    if (reveal > 0.9999) { discard; }
+    let accum = textureLoad(accum_tex, p, 0);
+    let avg = accum.rgb / max(accum.a, 1e-5);
+    return vec4<f32>(avg, 1.0 - reveal);
 }
 "#;

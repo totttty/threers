@@ -4,19 +4,27 @@ use crate::math::Color;
 pub trait Pass: std::fmt::Debug + Send + Sync {
     fn name(&self) -> &'static str;
     /// True for the scene-rendering pass (always first).
-    fn is_render(&self) -> bool { false }
+    fn is_render(&self) -> bool {
+        false
+    }
     /// WGSL fragment shader source for fullscreen passes that operate on the
     /// previous color buffer (`prev_tex` + `prev_sampler` at @group(0)).
     /// Render passes (`is_render = true`) return None.
-    fn shader(&self) -> Option<&'static str> { None }
+    fn shader(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Renders the scene into the composer's read target. Always the first pass.
 #[derive(Debug, Default)]
 pub struct RenderPass;
 impl Pass for RenderPass {
-    fn name(&self) -> &'static str { "render" }
-    fn is_render(&self) -> bool { true }
+    fn name(&self) -> &'static str {
+        "render"
+    }
+    fn is_render(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]
@@ -26,18 +34,32 @@ pub struct BloomPass {
     pub threshold: f32,
 }
 impl Default for BloomPass {
-    fn default() -> Self { Self { strength: 1.0, radius: 0.4, threshold: 0.85 } }
+    fn default() -> Self {
+        Self {
+            strength: 1.0,
+            radius: 0.4,
+            threshold: 0.85,
+        }
+    }
 }
 impl Pass for BloomPass {
-    fn name(&self) -> &'static str { "bloom" }
-    fn shader(&self) -> Option<&'static str> { Some(BLOOM_FRAG) }
+    fn name(&self) -> &'static str {
+        "bloom"
+    }
+    fn shader(&self) -> Option<&'static str> {
+        Some(BLOOM_FRAG)
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct FxaaPass;
 impl Pass for FxaaPass {
-    fn name(&self) -> &'static str { "fxaa" }
-    fn shader(&self) -> Option<&'static str> { Some(FXAA_FRAG) }
+    fn name(&self) -> &'static str {
+        "fxaa"
+    }
+    fn shader(&self) -> Option<&'static str> {
+        Some(FXAA_FRAG)
+    }
 }
 
 #[derive(Debug)]
@@ -49,12 +71,21 @@ pub struct OutlinePass {
 }
 impl Default for OutlinePass {
     fn default() -> Self {
-        Self { edge_strength: 3.0, edge_glow: 0.0, edge_thickness: 1.0, edge_color: Color::WHITE }
+        Self {
+            edge_strength: 3.0,
+            edge_glow: 0.0,
+            edge_thickness: 1.0,
+            edge_color: Color::WHITE,
+        }
     }
 }
 impl Pass for OutlinePass {
-    fn name(&self) -> &'static str { "outline" }
-    fn shader(&self) -> Option<&'static str> { Some(OUTLINE_FRAG) }
+    fn name(&self) -> &'static str {
+        "outline"
+    }
+    fn shader(&self) -> Option<&'static str> {
+        Some(OUTLINE_FRAG)
+    }
 }
 
 #[derive(Debug)]
@@ -62,11 +93,17 @@ pub struct ToneMappingPass {
     pub exposure: f32,
 }
 impl Default for ToneMappingPass {
-    fn default() -> Self { Self { exposure: 1.0 } }
+    fn default() -> Self {
+        Self { exposure: 1.0 }
+    }
 }
 impl Pass for ToneMappingPass {
-    fn name(&self) -> &'static str { "tone_mapping" }
-    fn shader(&self) -> Option<&'static str> { Some(TONE_FRAG) }
+    fn name(&self) -> &'static str {
+        "tone_mapping"
+    }
+    fn shader(&self) -> Option<&'static str> {
+        Some(TONE_FRAG)
+    }
 }
 
 /// Film grain + scanlines pass. Mirrors three.js's FilmPass.
@@ -78,41 +115,68 @@ pub struct FilmPass {
     pub time: f32,
 }
 impl Default for FilmPass {
-    fn default() -> Self { Self { grain_intensity: 0.5, scanline_intensity: 0.05, scanline_count: 480.0, time: 0.0 } }
+    fn default() -> Self {
+        Self {
+            grain_intensity: 0.5,
+            scanline_intensity: 0.05,
+            scanline_count: 480.0,
+            time: 0.0,
+        }
+    }
 }
 impl Pass for FilmPass {
-    fn name(&self) -> &'static str { "film" }
-    fn shader(&self) -> Option<&'static str> { Some(FILM_FRAG) }
+    fn name(&self) -> &'static str {
+        "film"
+    }
+    fn shader(&self) -> Option<&'static str> {
+        Some(FILM_FRAG)
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct GlitchPass;
 impl Pass for GlitchPass {
-    fn name(&self) -> &'static str { "glitch" }
-    fn shader(&self) -> Option<&'static str> { Some(GLITCH_FRAG) }
+    fn name(&self) -> &'static str {
+        "glitch"
+    }
+    fn shader(&self) -> Option<&'static str> {
+        Some(GLITCH_FRAG)
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct SsaoPass;
 impl Pass for SsaoPass {
-    fn name(&self) -> &'static str { "ssao" }
+    fn name(&self) -> &'static str {
+        "ssao"
+    }
     // Implemented in POSTFX_SHADER kind 11 (JS SSAOPass drives the GPU path).
-    fn shader(&self) -> Option<&'static str> { Some(COPY_FRAG) }
+    fn shader(&self) -> Option<&'static str> {
+        Some(COPY_FRAG)
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct SsrPass;
 impl Pass for SsrPass {
-    fn name(&self) -> &'static str { "ssr" }
+    fn name(&self) -> &'static str {
+        "ssr"
+    }
     // Implemented in POSTFX_SHADER kind 12 (JS SSRPass drives the GPU path).
-    fn shader(&self) -> Option<&'static str> { Some(COPY_FRAG) }
+    fn shader(&self) -> Option<&'static str> {
+        Some(COPY_FRAG)
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct CopyPass;
 impl Pass for CopyPass {
-    fn name(&self) -> &'static str { "copy" }
-    fn shader(&self) -> Option<&'static str> { Some(COPY_FRAG) }
+    fn name(&self) -> &'static str {
+        "copy"
+    }
+    fn shader(&self) -> Option<&'static str> {
+        Some(COPY_FRAG)
+    }
 }
 
 // ---- WGSL fragment shaders ----
@@ -168,25 +232,45 @@ pub(crate) const BLOOM_FRAG: &str = r#"
 @group(0) @binding(0) var prev_tex : texture_2d<f32>;
 @group(0) @binding(1) var prev_sampler : sampler;
 fn luma(c : vec3<f32>) -> f32 { return dot(c, vec3<f32>(0.299, 0.587, 0.114)); }
+// Jimenez interleaved-gradient noise → a per-pixel angle in [0, 1).
+fn ign(frag : vec2<f32>) -> f32 {
+    return fract(52.9829189 * fract(dot(frag, vec2<f32>(0.06711056, 0.00583715))));
+}
 @fragment
 fn fs_main(@location(0) uv : vec2<f32>) -> @location(0) vec4<f32> {
     let c = textureSample(prev_tex, prev_sampler, uv);
     let dims = vec2<f32>(textureDimensions(prev_tex));
-    let inv  = vec2<f32>(1.0) / dims;
+    let px = vec2<f32>(1.0) / dims;
+    let min_dim = min(dims.x, dims.y);
+    // Halo radius as a fraction of the image → resolution-independent, wide.
+    let radius = min_dim * 0.02;
+    let threshold = 0.55;
+
+    // A regular grid of wide-spaced taps replicates a thin bright arc into a
+    // lattice of concentric ghost copies (the "ripples"). Sample a golden-angle
+    // spiral instead — no aligned grid, no rings — and rotate the whole spiral
+    // by a per-pixel angle so any residual structure dithers into fine noise
+    // that reads as a smooth glow rather than banded rings.
+    let TAPS = 128;
+    let GOLDEN = 2.3999632;                 // golden angle (radians)
+    let base = ign(uv * dims) * 6.2831853;  // per-pixel spiral rotation
     var sum = vec3<f32>(0.0);
-    var weight_sum = 0.0;
-    for (var i: i32 = -3; i <= 3; i = i + 1) {
-        for (var j: i32 = -3; j <= 3; j = j + 1) {
-            let s = textureSample(prev_tex, prev_sampler, uv + vec2<f32>(f32(i), f32(j)) * inv * 1.5).rgb;
-            let l = luma(s);
-            let bright = max(l - 0.85, 0.0);
-            let w = exp(-(f32(i*i + j*j)) / 8.0);
-            sum = sum + s * bright * w;
-            weight_sum = weight_sum + w;
-        }
+    var wsum = 1e-6;
+    for (var i: i32 = 0; i < TAPS; i = i + 1) {
+        let fi = f32(i) + 0.5;
+        let rn = sqrt(fi / f32(TAPS));       // even areal density across the disk
+        let ang = fi * GOLDEN + base;
+        let off = vec2<f32>(cos(ang), sin(ang)) * (rn * radius) * px;
+        let s = textureSampleLevel(prev_tex, prev_sampler, uv + off, 0.0).rgb;
+        // Keep the full color of bright pixels (soft threshold), not just the
+        // sliver above the threshold — otherwise the bloom is near-invisible.
+        let mask = smoothstep(threshold, threshold + 0.25, luma(s));
+        let w = exp(-rn * rn * 3.0);         // Gaussian falloff toward the rim
+        sum = sum + s * mask * w;
+        wsum = wsum + w;
     }
-    let bloom = sum / max(weight_sum, 1e-4);
-    return vec4<f32>(c.rgb + bloom * 0.6, c.a);
+    let bloom = sum / wsum;
+    return vec4<f32>(c.rgb + bloom * 0.9, c.a);
 }
 "#;
 

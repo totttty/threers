@@ -27,7 +27,9 @@ impl Default for Audio {
 }
 
 impl Audio {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn set_buffer(&mut self, buffer: Arc<Vec<f32>>) -> &mut Self {
         self.buffer = Some(buffer);

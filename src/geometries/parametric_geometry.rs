@@ -46,8 +46,8 @@ impl ParametricGeometry {
 
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        g.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        g.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        g.set_attribute("normal", BufferAttribute::new(normals, 3));
+        g.set_attribute("uv", BufferAttribute::new(uvs, 2));
         g.set_index(indices);
         g
     }

@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use crate::math::{Color, Vector2};
 use crate::textures::Texture;
+use std::sync::Arc;
 
 /// PBR roughness/metalness workflow. Matches three.js's `MeshStandardMaterial`.
 #[derive(Debug, Clone)]
@@ -52,20 +52,47 @@ impl Default for StandardMaterial {
 
 impl StandardMaterial {
     pub fn new(color: Color) -> Self {
-        Self { color, ..Default::default() }
+        Self {
+            color,
+            ..Default::default()
+        }
     }
 
-    pub fn with_roughness(mut self, r: f32) -> Self { self.roughness = r; self }
-    pub fn with_metalness(mut self, m: f32) -> Self { self.metalness = m; self }
+    pub fn with_roughness(mut self, r: f32) -> Self {
+        self.roughness = r;
+        self
+    }
+    pub fn with_metalness(mut self, m: f32) -> Self {
+        self.metalness = m;
+        self
+    }
     pub fn with_emissive(mut self, c: Color, intensity: f32) -> Self {
         self.emissive = c;
         self.emissive_intensity = intensity;
         self
     }
-    pub fn with_map(mut self, t: Arc<Texture>) -> Self { self.map = Some(t); self }
-    pub fn with_normal_map(mut self, t: Arc<Texture>) -> Self { self.normal_map = Some(t); self }
-    pub fn with_roughness_map(mut self, t: Arc<Texture>) -> Self { self.roughness_map = Some(t); self }
-    pub fn with_metalness_map(mut self, t: Arc<Texture>) -> Self { self.metalness_map = Some(t); self }
-    pub fn with_ao_map(mut self, t: Arc<Texture>) -> Self { self.ao_map = Some(t); self }
-    pub fn with_emissive_map(mut self, t: Arc<Texture>) -> Self { self.emissive_map = Some(t); self }
+    pub fn with_map(mut self, t: Arc<Texture>) -> Self {
+        self.map = Some(t);
+        self
+    }
+    pub fn with_normal_map(mut self, t: Arc<Texture>) -> Self {
+        self.normal_map = Some(t);
+        self
+    }
+    pub fn with_roughness_map(mut self, t: Arc<Texture>) -> Self {
+        self.roughness_map = Some(t);
+        self
+    }
+    pub fn with_metalness_map(mut self, t: Arc<Texture>) -> Self {
+        self.metalness_map = Some(t);
+        self
+    }
+    pub fn with_ao_map(mut self, t: Arc<Texture>) -> Self {
+        self.ao_map = Some(t);
+        self
+    }
+    pub fn with_emissive_map(mut self, t: Arc<Texture>) -> Self {
+        self.emissive_map = Some(t);
+        self
+    }
 }

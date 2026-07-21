@@ -11,7 +11,11 @@ pub struct Cylindrical {
 
 impl Default for Cylindrical {
     fn default() -> Self {
-        Self { radius: 1.0, theta: 0.0, y: 0.0 }
+        Self {
+            radius: 1.0,
+            theta: 0.0,
+            y: 0.0,
+        }
     }
 }
 
@@ -33,7 +37,11 @@ impl Cylindrical {
     }
 
     pub fn to_vector3(&self) -> Vector3 {
-        Vector3::new(self.radius * self.theta.sin(), self.y, self.radius * self.theta.cos())
+        Vector3::new(
+            self.radius * self.theta.sin(),
+            self.y,
+            self.radius * self.theta.cos(),
+        )
     }
 }
 

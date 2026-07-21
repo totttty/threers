@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use crate::math::Vector2;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextureFormat {

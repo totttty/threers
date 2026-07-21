@@ -1,6 +1,6 @@
-use crate::math::{Ray, Vector3, Vector2, Sphere, Triangle, Box3};
+use super::{Layers, Mesh, Object3D, ObjectArena, ObjectId, ObjectKind};
 use crate::cameras::Camera;
-use super::{ObjectArena, ObjectId, Object3D, ObjectKind, Layers, Mesh};
+use crate::math::{Box3, Ray, Sphere, Triangle, Vector2, Vector3};
 
 /// A ray-hit result on a single mesh face. Mirrors three.js's intersection record.
 #[derive(Debug, Clone, Copy)]
@@ -29,14 +29,23 @@ impl Default for Raycaster {
             ray: Ray::default(),
             near: 0.0,
             far: f32::INFINITY,
-            layers: { let mut l = Layers::default(); l.enable_all(); l },
+            layers: {
+                let mut l = Layers::default();
+                l.enable_all();
+                l
+            },
         }
     }
 }
 
 impl Raycaster {
     pub fn new(origin: Vector3, direction: Vector3, near: f32, far: f32) -> Self {
-        Self { ray: Ray::new(origin, direction), near, far, layers: Self::default().layers }
+        Self {
+            ray: Ray::new(origin, direction),
+            near,
+            far,
+            layers: Self::default().layers,
+        }
     }
 
     /// Build a ray from normalized device coordinates (x, y ∈ [-1, 1]) and a camera.
@@ -57,13 +66,18 @@ impl Raycaster {
         let view = camera.view_matrix();
         let proj = camera.projection_matrix();
         let near = Vector3::new(ndc.x, ndc.y, -1.0).unproject(&view, &proj);
-        let far = Vector3::new(ndc.x, ndc.y,  1.0).unproject(&view, &proj);
+        let far = Vector3::new(ndc.x, ndc.y, 1.0).unproject(&view, &proj);
         self.ray = Ray::new(near, (far - near).normalize());
         self.layers = camera.layers();
     }
 
     /// Test all visible meshes in `root`'s subtree. Sorted by distance ascending.
-    pub fn intersect_objects(&self, arena: &ObjectArena, root: ObjectId, recursive: bool) -> Vec<Intersection> {
+    pub fn intersect_objects(
+        &self,
+        arena: &ObjectArena,
+        root: ObjectId,
+        recursive: bool,
+    ) -> Vec<Intersection> {
         let mut out = Vec::new();
         if recursive {
             arena.traverse_visible(root, &mut |id, obj| {
@@ -81,23 +95,39 @@ impl Raycaster {
                 }
             }
         }
-        out.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         out
     }
 
-    fn intersect_mesh(&self, id: ObjectId, obj: &Object3D, mesh: &Mesh, out: &mut Vec<Intersection>) {
+    fn intersect_mesh(
+        &self,
+        id: ObjectId,
+        obj: &Object3D,
+        mesh: &Mesh,
+        out: &mut Vec<Intersection>,
+    ) {
         // Bounding-sphere reject (in world space — coarse but cheap).
         let world_sphere = match mesh.geometry.bounding_sphere {
             Some(s) => s.apply_matrix4(&obj.matrix_world),
             None => {
                 // Fallback: compute a bounding sphere on the fly from positions.
-                let Some(iter) = mesh.geometry.positions() else { return; };
+                let Some(iter) = mesh.geometry.positions() else {
+                    return;
+                };
                 let pts: Vec<Vector3> = iter.collect();
-                if pts.is_empty() { return; }
+                if pts.is_empty() {
+                    return;
+                }
                 Sphere::from_points(&pts).apply_matrix4(&obj.matrix_world)
             }
         };
-        if !self.ray.intersects_sphere(&world_sphere) { return; }
+        if !self.ray.intersects_sphere(&world_sphere) {
+            return;
+        }
 
         // Transform ray into local space for triangle intersection.
         let inv_world = obj.matrix_world.invert();
@@ -134,13 +164,22 @@ impl Raycaster {
         };
 
         let push_hit = |face_index: usize, t: f32, tri: &Triangle, out: &mut Vec<Intersection>| {
-            if t < 0.0 { return; }
+            if t < 0.0 {
+                return;
+            }
             let local_point = local_ray.at(t);
             let world_point = local_point.apply_matrix4(&obj.matrix_world);
             let world_distance = (world_point - self.ray.origin).length();
-            if world_distance < self.near || world_distance > self.far { return; }
+            if world_distance < self.near || world_distance > self.far {
+                return;
+            }
             let _ = tri;
-            out.push(Intersection { distance: world_distance, point: world_point, face_index, object: id });
+            out.push(Intersection {
+                distance: world_distance,
+                point: world_point,
+                face_index,
+                object: id,
+            });
         };
 
         if let Some(idx) = &mesh.geometry.index {
@@ -149,18 +188,25 @@ impl Raycaster {
                 let a = idx[i * 3] as usize;
                 let b = idx[i * 3 + 1] as usize;
                 let c = idx[i * 3 + 2] as usize;
-                if a >= positions.len() || b >= positions.len() || c >= positions.len() { continue; }
+                if a >= positions.len() || b >= positions.len() || c >= positions.len() {
+                    continue;
+                }
                 let tri = Triangle::new(positions[a], positions[b], positions[c]);
                 if let Some(t) = local_ray.intersect_triangle(&tri, false) {
-                    if t <= max_local_t { push_hit(i, t, &tri, out); }
+                    if t <= max_local_t {
+                        push_hit(i, t, &tri, out);
+                    }
                 }
             }
         } else {
             let n_tris = positions.len() / 3;
             for i in 0..n_tris {
-                let tri = Triangle::new(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
+                let tri =
+                    Triangle::new(positions[i * 3], positions[i * 3 + 1], positions[i * 3 + 2]);
                 if let Some(t) = local_ray.intersect_triangle(&tri, false) {
-                    if t <= max_local_t { push_hit(i, t, &tri, out); }
+                    if t <= max_local_t {
+                        push_hit(i, t, &tri, out);
+                    }
                 }
             }
         }
@@ -168,7 +214,9 @@ impl Raycaster {
 
     /// Convenience: intersect a single AABB in world space (no scene walk).
     pub fn intersect_box(&self, b: &Box3) -> Option<f32> {
-        self.ray.intersect_box(b).filter(|t| *t >= self.near && *t <= self.far)
+        self.ray
+            .intersect_box(b)
+            .filter(|t| *t >= self.near && *t <= self.far)
     }
 }
 
@@ -181,24 +229,26 @@ fn inv_world_scale(m: &crate::math::Matrix4) -> f32 {
     let sy = Vector3::new(e[4], e[5], e[6]).length();
     let sz = Vector3::new(e[8], e[9], e[10]).length();
     let s = (sx + sy + sz) / 3.0;
-    if s == 0.0 { 1.0 } else { 1.0 / s }
+    if s == 0.0 {
+        1.0
+    } else {
+        1.0 / s
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{BufferGeometry, BufferAttribute};
-    use crate::materials::{Material, BasicMaterial};
+    use crate::core::{BufferAttribute, BufferGeometry};
+    use crate::materials::{BasicMaterial, Material};
     use crate::math::Color;
 
     fn unit_triangle_mesh() -> Mesh {
         let mut g = BufferGeometry::new();
-        g.set_attribute("position", BufferAttribute::new(
-            vec![
-                0.0, 0.0, 0.0,
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-            ], 3));
+        g.set_attribute(
+            "position",
+            BufferAttribute::new(vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0], 3),
+        );
         g.compute_bounding_sphere();
         let mat = Material::Basic(BasicMaterial::new(Color::from_hex(0xffffff)));
         Mesh::new(g, mat)

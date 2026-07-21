@@ -11,7 +11,9 @@ pub struct Clock {
 }
 
 impl Default for Clock {
-    fn default() -> Self { Self::new(true) }
+    fn default() -> Self {
+        Self::new(true)
+    }
 }
 
 impl Clock {

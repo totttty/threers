@@ -5,19 +5,19 @@
 
 mod ambient;
 mod directional;
-mod point;
-mod spot;
 mod hemisphere;
+mod point;
 mod rect_area;
 mod shadow;
+mod spot;
 
 pub use ambient::AmbientLight;
 pub use directional::DirectionalLight;
-pub use point::PointLight;
-pub use spot::SpotLight;
 pub use hemisphere::HemisphereLight;
+pub use point::PointLight;
 pub use rect_area::RectAreaLight;
 pub use shadow::ShadowSettings;
+pub use spot::SpotLight;
 
 use crate::math::Color;
 
@@ -57,9 +57,33 @@ impl Light {
     }
 }
 
-impl From<AmbientLight> for Light { fn from(l: AmbientLight) -> Self { Light::Ambient(l) } }
-impl From<DirectionalLight> for Light { fn from(l: DirectionalLight) -> Self { Light::Directional(l) } }
-impl From<PointLight> for Light { fn from(l: PointLight) -> Self { Light::Point(l) } }
-impl From<SpotLight> for Light { fn from(l: SpotLight) -> Self { Light::Spot(l) } }
-impl From<HemisphereLight> for Light { fn from(l: HemisphereLight) -> Self { Light::Hemisphere(l) } }
-impl From<RectAreaLight> for Light { fn from(l: RectAreaLight) -> Self { Light::RectArea(l) } }
+impl From<AmbientLight> for Light {
+    fn from(l: AmbientLight) -> Self {
+        Light::Ambient(l)
+    }
+}
+impl From<DirectionalLight> for Light {
+    fn from(l: DirectionalLight) -> Self {
+        Light::Directional(l)
+    }
+}
+impl From<PointLight> for Light {
+    fn from(l: PointLight) -> Self {
+        Light::Point(l)
+    }
+}
+impl From<SpotLight> for Light {
+    fn from(l: SpotLight) -> Self {
+        Light::Spot(l)
+    }
+}
+impl From<HemisphereLight> for Light {
+    fn from(l: HemisphereLight) -> Self {
+        Light::Hemisphere(l)
+    }
+}
+impl From<RectAreaLight> for Light {
+    fn from(l: RectAreaLight) -> Self {
+        Light::RectArea(l)
+    }
+}

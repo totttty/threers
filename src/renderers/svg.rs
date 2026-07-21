@@ -13,7 +13,9 @@ pub struct SvgRenderer {
 }
 
 impl SvgRenderer {
-    pub fn new(width: u32, height: u32) -> Self { Self { width, height } }
+    pub fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
 
     pub fn render_to_string(&self, scene: &mut Scene, camera: &dyn Camera) -> String {
         scene.update_world();
@@ -65,8 +67,8 @@ impl SvgRenderer {
 fn transform_point(m: &crate::math::Matrix4, p: Vector3) -> Vector3 {
     let e = &m.elements;
     Vector3::new(
-        e[0] * p.x + e[4] * p.y + e[8]  * p.z + e[12],
-        e[1] * p.x + e[5] * p.y + e[9]  * p.z + e[13],
+        e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12],
+        e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13],
         e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14],
     )
 }
@@ -74,9 +76,9 @@ fn transform_point(m: &crate::math::Matrix4, p: Vector3) -> Vector3 {
 fn vp_apply(m: &crate::math::Matrix4, p: Vector3) -> [f32; 4] {
     let e = &m.elements;
     [
-        e[0]*p.x + e[4]*p.y + e[8]*p.z  + e[12],
-        e[1]*p.x + e[5]*p.y + e[9]*p.z  + e[13],
-        e[2]*p.x + e[6]*p.y + e[10]*p.z + e[14],
-        e[3]*p.x + e[7]*p.y + e[11]*p.z + e[15],
+        e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12],
+        e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13],
+        e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14],
+        e[3] * p.x + e[7] * p.y + e[11] * p.z + e[15],
     ]
 }

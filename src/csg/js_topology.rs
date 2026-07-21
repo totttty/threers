@@ -329,9 +329,7 @@ pub fn read_position_js(attr: &BufferAttribute, index: usize) -> JsVec3 {
 
 /// `b.matrixWorld.invert().multiply(a.matrixWorld)` with JS f64 brush transforms.
 pub fn matrix_a_to_b_brushes(a: &super::brush::CsgBrush, b: &super::brush::CsgBrush) -> JsMatrix4 {
-    b.js_matrix_world()
-        .invert()
-        .multiply(a.js_matrix_world())
+    b.js_matrix_world().invert().multiply(a.js_matrix_world())
 }
 
 /// `b.matrixWorld.invert().multiply(a.matrixWorld)` in f64 (legacy matrix path).
@@ -589,9 +587,7 @@ mod tests {
             if start_dist.abs() < TOPO_EPSILON {
                 continue;
             }
-            let did = plane
-                .intersect_line(start, end, &mut hit_vec)
-                .is_some();
+            let did = plane.intersect_line(start, end, &mut hit_vec).is_some();
             if did && hit_vec.distance_to(start) >= TOPO_EPSILON {
                 intersects += 1;
             }

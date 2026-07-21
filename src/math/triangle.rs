@@ -1,4 +1,4 @@
-use super::{Vector3, Plane};
+use super::{Plane, Vector3};
 
 /// Mirrors three.js's `Triangle`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -10,7 +10,11 @@ pub struct Triangle {
 
 impl Default for Triangle {
     fn default() -> Self {
-        Self { a: Vector3::ZERO, b: Vector3::ZERO, c: Vector3::ZERO }
+        Self {
+            a: Vector3::ZERO,
+            b: Vector3::ZERO,
+            c: Vector3::ZERO,
+        }
     }
 }
 
@@ -30,7 +34,11 @@ impl Triangle {
     pub fn normal(&self) -> Vector3 {
         let n = (self.c - self.b).cross(self.a - self.b);
         let len_sq = n.length_sq();
-        if len_sq > 0.0 { n * (1.0 / len_sq.sqrt()) } else { Vector3::ZERO }
+        if len_sq > 0.0 {
+            n * (1.0 / len_sq.sqrt())
+        } else {
+            Vector3::ZERO
+        }
     }
 
     pub fn plane(&self) -> Plane {
@@ -49,7 +57,9 @@ impl Triangle {
         let dot11 = v1.dot(v1);
         let dot12 = v1.dot(v2);
         let denom = dot00 * dot11 - dot01 * dot01;
-        if denom == 0.0 { return Vector3::new(-2.0, -1.0, -1.0); }
+        if denom == 0.0 {
+            return Vector3::new(-2.0, -1.0, -1.0);
+        }
         let inv = 1.0 / denom;
         let u = (dot11 * dot02 - dot01 * dot12) * inv;
         let v = (dot00 * dot12 - dot01 * dot02) * inv;

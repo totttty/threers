@@ -1,5 +1,5 @@
-use crate::math::{Color, Vector3};
 use super::ShadowSettings;
+use crate::math::{Color, Vector3};
 
 /// Conical light from `position` along `direction`, with an outer half-angle
 /// and a `penumbra` (0..=1) fading region at the cone's edge.
@@ -19,7 +19,9 @@ pub struct SpotLight {
 }
 
 impl Default for SpotLight {
-    fn default() -> Self { Self::new(Color::WHITE, 1.0) }
+    fn default() -> Self {
+        Self::new(Color::WHITE, 1.0)
+    }
 }
 
 impl SpotLight {

@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use super::BufferGeometry;
 use crate::materials::Material;
+use std::sync::Arc;
 
 /// Line-list primitive. Each two consecutive vertices form a segment.
 /// Mirrors three.js's `LineSegments`.

@@ -1,6 +1,6 @@
+use super::PointerEvent;
 use crate::cameras::PerspectiveCamera;
 use crate::math::{Quaternion, Vector2, Vector3};
-use super::PointerEvent;
 
 /// Sphere-projection rotation: the pointer is projected onto a virtual unit
 /// sphere; movement on the sphere rotates the camera around the target.

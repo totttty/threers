@@ -7,7 +7,9 @@ use crate::math::Vector2;
 /// the polygon counts used by `ExtrudeGeometry`. Production code should reach
 /// for `earcutr` once `Shape` outlines get complex.
 pub fn earcut(points: &[Vector2], hole_indices: &[usize]) -> Vec<u32> {
-    if points.len() < 3 { return Vec::new(); }
+    if points.len() < 3 {
+        return Vec::new();
+    }
 
     // Build the working polygon: outer ring, then each hole inserted by bridge.
     // For now, we ignore holes — the resulting triangulation is the outer ring only.
@@ -33,17 +35,23 @@ pub fn earcut(points: &[Vector2], hole_indices: &[usize]) -> Vec<u32> {
             let a = points[indices[i_prev] as usize];
             let b = points[indices[i] as usize];
             let c = points[indices[i_next] as usize];
-            if !is_convex(a, b, c) { continue; }
+            if !is_convex(a, b, c) {
+                continue;
+            }
             // Check no other vertex is inside triangle (a,b,c).
             let mut contains = false;
             for j in 0..n {
-                if j == i_prev || j == i || j == i_next { continue; }
+                if j == i_prev || j == i || j == i_next {
+                    continue;
+                }
                 if point_in_triangle(points[indices[j] as usize], a, b, c) {
                     contains = true;
                     break;
                 }
             }
-            if contains { continue; }
+            if contains {
+                continue;
+            }
             tris.push(indices[i_prev]);
             tris.push(indices[i]);
             tris.push(indices[i_next]);

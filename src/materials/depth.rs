@@ -10,10 +10,17 @@ pub struct DepthMaterial {
 
 impl Default for DepthMaterial {
     fn default() -> Self {
-        Self { opacity: 1.0, near: 0.1, far: 100.0, wireframe: false }
+        Self {
+            opacity: 1.0,
+            near: 0.1,
+            far: 100.0,
+            wireframe: false,
+        }
     }
 }
 
 impl DepthMaterial {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 }

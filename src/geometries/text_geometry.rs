@@ -1,7 +1,7 @@
+use super::ExtrudeGeometry;
 use crate::core::{BufferAttribute, BufferGeometry};
 use crate::curves::Shape;
 use crate::math::Vector3;
-use super::ExtrudeGeometry;
 
 pub struct TextGeometry;
 
@@ -40,16 +40,24 @@ impl TextGeometry {
                 uvs.extend_from_slice(&u.array);
             }
             if let Some(idx) = &glyph_geom.index {
-                for i in idx { indices.push(i + base_vert); }
+                for i in idx {
+                    indices.push(i + base_vert);
+                }
             }
             x_offset += g.advance;
         }
 
         let mut out = BufferGeometry::new();
         out.set_attribute("position", BufferAttribute::new(positions, 3));
-        if !normals.is_empty() { out.set_attribute("normal", BufferAttribute::new(normals, 3)); }
-        if !uvs.is_empty() { out.set_attribute("uv", BufferAttribute::new(uvs, 2)); }
-        if !indices.is_empty() { out.set_index(indices); }
+        if !normals.is_empty() {
+            out.set_attribute("normal", BufferAttribute::new(normals, 3));
+        }
+        if !uvs.is_empty() {
+            out.set_attribute("uv", BufferAttribute::new(uvs, 2));
+        }
+        if !indices.is_empty() {
+            out.set_index(indices);
+        }
         let _ = Vector3::ZERO; // silence unused-import lint
         out
     }

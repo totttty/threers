@@ -1,6 +1,6 @@
+use super::PointerEvent;
 use crate::cameras::PerspectiveCamera;
 use crate::math::{Quaternion, Vector3};
-use super::PointerEvent;
 
 /// Free-rotation orbit (no up-vector lock). Mirrors three.js's `TrackballControls`.
 #[derive(Debug, Clone, Copy)]
@@ -25,7 +25,12 @@ impl TrackballControls {
         }
     }
 
-    pub fn update(&mut self, ev: PointerEvent, camera: &mut PerspectiveCamera, viewport: (f32, f32)) {
+    pub fn update(
+        &mut self,
+        ev: PointerEvent,
+        camera: &mut PerspectiveCamera,
+        viewport: (f32, f32),
+    ) {
         let (_, h) = viewport;
         if ev.rotating {
             // Trackball: convert mouse delta to a rotation around the axis

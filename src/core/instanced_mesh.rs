@@ -1,7 +1,7 @@
-use std::sync::Arc;
 use crate::core::BufferGeometry;
 use crate::materials::Material;
 use crate::math::Matrix4;
+use std::sync::Arc;
 
 /// Mesh drawn many times with per-instance transforms. Mirrors three.js's
 /// `InstancedMesh`. The renderer uploads `transforms` into a per-instance
@@ -28,5 +28,7 @@ impl InstancedMesh {
         }
     }
 
-    pub fn count(&self) -> usize { self.transforms.len() }
+    pub fn count(&self) -> usize {
+        self.transforms.len()
+    }
 }

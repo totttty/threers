@@ -1,8 +1,8 @@
-use std::sync::Arc;
 use crate::core::{Object3D, ObjectArena, ObjectId};
 use crate::lights::Light;
 use crate::math::{Color, Matrix4};
 use crate::textures::CubeTexture;
+use std::sync::Arc;
 
 /// Fog parameters mirroring three.js [`Fog`](https://threejs.org/docs/#api/en/scene/Fog)
 /// (linear) and `FogExp2`.
@@ -18,7 +18,13 @@ pub struct FogParams {
 }
 impl Default for FogParams {
     fn default() -> Self {
-        Self { color: Color::WHITE, near: 1.0, far: 1000.0, density: 0.0, mode: 0 }
+        Self {
+            color: Color::WHITE,
+            near: 1.0,
+            far: 1000.0,
+            density: 0.0,
+            mode: 0,
+        }
     }
 }
 
@@ -30,6 +36,9 @@ pub struct Scene {
     pub arena: ObjectArena,
     pub root: ObjectId,
     pub background: Color,
+    /// Clear alpha for the background (0.0 = fully transparent framebuffer,
+    /// 1.0 = opaque). Lets offscreen renders produce transparent PNGs.
+    pub background_alpha: f32,
     /// Optional environment map used for image-based lighting (PBR ambient).
     /// The current renderer uploads it as a cube texture but does not yet
     /// prefilter for roughness — sampling falls back to the default white
@@ -53,6 +62,7 @@ impl Scene {
             arena,
             root,
             background: Color::from_hex(0x111111),
+            background_alpha: 1.0,
             environment: None,
             environment_cube_rt: None,
             fog: FogParams::default(),
@@ -88,10 +98,13 @@ impl Scene {
 
     /// Refresh all `matrix_world`s. The renderer calls this each frame.
     pub fn update_world(&mut self) {
-        self.arena.update_world_matrices(self.root, Matrix4::identity());
+        self.arena
+            .update_world_matrices(self.root, Matrix4::identity());
     }
 }
 
 impl Default for Scene {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }

@@ -12,7 +12,10 @@ impl DirectionalLightHelper {
         let positions = vec![0.0, 0.0, 0.0, d.x, d.y, d.z];
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        Object3D::line_segments(LineSegments::new(g, LineBasicMaterial::new(light.color).into()))
+        Object3D::line_segments(LineSegments::new(
+            g,
+            LineBasicMaterial::new(light.color).into(),
+        ))
     }
 }
 
@@ -24,7 +27,10 @@ impl PointLightHelper {
         let positions = octahedron_lines(size);
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        Object3D::line_segments(LineSegments::new(g, LineBasicMaterial::new(light.color).into()))
+        Object3D::line_segments(LineSegments::new(
+            g,
+            LineBasicMaterial::new(light.color).into(),
+        ))
     }
 }
 
@@ -37,7 +43,11 @@ impl SpotLightHelper {
         let tip = dir * length;
         let radius = length * light.angle.tan();
         // Find two perpendicular vectors to the direction.
-        let up = if dir.y.abs() < 0.99 { Vector3::new(0.0, 1.0, 0.0) } else { Vector3::new(1.0, 0.0, 0.0) };
+        let up = if dir.y.abs() < 0.99 {
+            Vector3::new(0.0, 1.0, 0.0)
+        } else {
+            Vector3::new(1.0, 0.0, 0.0)
+        };
         let side1 = dir.cross(up).normalize();
         let side2 = dir.cross(side1).normalize();
         // Cone rim circle approximated by 16 segments.
@@ -62,7 +72,10 @@ impl SpotLightHelper {
         }
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        Object3D::line_segments(LineSegments::new(g, LineBasicMaterial::new(light.color).into()))
+        Object3D::line_segments(LineSegments::new(
+            g,
+            LineBasicMaterial::new(light.color).into(),
+        ))
     }
 }
 
@@ -77,27 +90,40 @@ impl HemisphereLightHelper {
         let positions = octahedron_lines(size);
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        Object3D::line_segments(LineSegments::new(g, LineBasicMaterial::new(light.sky_color).into()))
+        Object3D::line_segments(LineSegments::new(
+            g,
+            LineBasicMaterial::new(light.sky_color).into(),
+        ))
     }
 }
 
 fn octahedron_lines(size: f32) -> Vec<f32> {
     let v = [
-        Vector3::new( size, 0.0, 0.0),
+        Vector3::new(size, 0.0, 0.0),
         Vector3::new(-size, 0.0, 0.0),
-        Vector3::new(0.0,  size, 0.0),
+        Vector3::new(0.0, size, 0.0),
         Vector3::new(0.0, -size, 0.0),
-        Vector3::new(0.0, 0.0,  size),
+        Vector3::new(0.0, 0.0, size),
         Vector3::new(0.0, 0.0, -size),
     ];
     let edges = [
-        (0, 2), (0, 3), (0, 4), (0, 5),
-        (1, 2), (1, 3), (1, 4), (1, 5),
-        (2, 4), (4, 3), (3, 5), (5, 2),
+        (0, 2),
+        (0, 3),
+        (0, 4),
+        (0, 5),
+        (1, 2),
+        (1, 3),
+        (1, 4),
+        (1, 5),
+        (2, 4),
+        (4, 3),
+        (3, 5),
+        (5, 2),
     ];
     let mut out = Vec::with_capacity(edges.len() * 6);
     for (a, b) in edges {
-        let pa = v[a]; let pb = v[b];
+        let pa = v[a];
+        let pb = v[b];
         out.extend_from_slice(&[pa.x, pa.y, pa.z, pb.x, pb.y, pb.z]);
     }
     out
@@ -118,6 +144,9 @@ impl SkeletonHelper {
         }
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        Object3D::line_segments(LineSegments::new(g, LineBasicMaterial::new(Color::from_hex(0xff00ff)).into()))
+        Object3D::line_segments(LineSegments::new(
+            g,
+            LineBasicMaterial::new(Color::from_hex(0xff00ff)).into(),
+        ))
     }
 }

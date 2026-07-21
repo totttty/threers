@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use crate::materials::Material;
+use std::sync::Arc;
 
 /// Camera-facing billboard. Mirrors three.js's `Sprite`. The renderer builds
 /// the geometry on the fly — Sprite carries no `BufferGeometry`, only a material.

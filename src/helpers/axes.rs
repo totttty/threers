@@ -9,14 +9,12 @@ pub struct AxesHelper;
 impl AxesHelper {
     pub fn new(size: f32) -> Object3D {
         let positions = vec![
-            0.0, 0.0, 0.0, size, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, size, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, size,
+            0.0, 0.0, 0.0, size, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, size, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            size,
         ];
         let colors = vec![
-            1.0, 0.0, 0.0,  1.0, 0.0, 0.0,
-            0.0, 1.0, 0.0,  0.0, 1.0, 0.0,
-            0.0, 0.0, 1.0,  0.0, 0.0, 1.0,
+            1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0,
+            1.0,
         ];
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));

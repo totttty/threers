@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use crate::math::Matrix4;
 use super::{BufferAttribute, BufferGeometry, ObjectId};
 use crate::materials::Material;
+use crate::math::Matrix4;
+use std::sync::Arc;
 
 /// A bone identified by its node id + the inverse-bind matrix that maps mesh
 /// vertices into bone-local space. Mirrors three.js's `Bone` plus
@@ -26,7 +26,10 @@ pub struct Skeleton {
 impl Skeleton {
     pub fn new(bones: Vec<Bone>) -> Self {
         let count = bones.len();
-        Self { bones, bone_matrices: vec![Matrix4::identity(); count] }
+        Self {
+            bones,
+            bone_matrices: vec![Matrix4::identity(); count],
+        }
     }
 
     /// Recompute every `bone_matrices[i]` from the corresponding node's
@@ -34,10 +37,12 @@ impl Skeleton {
     /// three.js's `Skeleton.update()`.
     pub fn update(&mut self, arena: &super::ObjectArena) {
         if self.bone_matrices.len() != self.bones.len() {
-            self.bone_matrices.resize(self.bones.len(), Matrix4::identity());
+            self.bone_matrices
+                .resize(self.bones.len(), Matrix4::identity());
         }
         for (i, bone) in self.bones.iter().enumerate() {
-            let world = arena.get(bone.node)
+            let world = arena
+                .get(bone.node)
                 .map(|o| o.matrix_world)
                 .unwrap_or_else(Matrix4::identity);
             self.bone_matrices[i] = world.multiply(&bone.inverse_bind);
@@ -66,14 +71,23 @@ impl SkinnedMesh {
     /// Convenience: build a skinned mesh from a non-skinned `BufferGeometry`
     /// by adding zeroed joint/weight attributes (every vertex bound to bone 0
     /// with weight 1).
-    pub fn from_unweighted(mut geometry: BufferGeometry, material: Material, skeleton: Skeleton) -> Self {
-        let count = geometry.get_attribute("position").map(|a| a.count()).unwrap_or(0);
+    pub fn from_unweighted(
+        mut geometry: BufferGeometry,
+        material: Material,
+        skeleton: Skeleton,
+    ) -> Self {
+        let count = geometry
+            .get_attribute("position")
+            .map(|a| a.count())
+            .unwrap_or(0);
         if geometry.get_attribute("joint").is_none() {
             geometry.set_attribute("joint", BufferAttribute::new(vec![0.0; count * 4], 4));
         }
         if geometry.get_attribute("weight").is_none() {
             let mut weights = vec![0.0; count * 4];
-            for chunk in weights.chunks_exact_mut(4) { chunk[0] = 1.0; }
+            for chunk in weights.chunks_exact_mut(4) {
+                chunk[0] = 1.0;
+            }
             geometry.set_attribute("weight", BufferAttribute::new(weights, 4));
         }
         Self::new(geometry, material, skeleton)

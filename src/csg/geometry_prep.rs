@@ -25,7 +25,10 @@ pub fn index_at(geometry: &BufferGeometry, tri: usize, corner: usize) -> usize {
 /// Load triangle-soup positions from a `TCG1` export
 /// (`tests/parity/export-*-geometry.mjs` / `export-csg-hierarchy-steps.mjs`).
 pub fn load_positions_geometry_bin(raw: &[u8]) -> BufferGeometry {
-    assert!(raw.len() >= 8 && &raw[0..4] == b"TCG1", "expected TCG1 geometry bin");
+    assert!(
+        raw.len() >= 8 && &raw[0..4] == b"TCG1",
+        "expected TCG1 geometry bin"
+    );
     let vert_count = u32::from_le_bytes(raw[4..8].try_into().expect("header")) as usize;
     let pos_bytes = &raw[8..8 + vert_count * 12];
     let mut positions = Vec::with_capacity(vert_count * 3);

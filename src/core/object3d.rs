@@ -1,7 +1,7 @@
-use slotmap::{new_key_type, SlotMap};
-use crate::math::{Vector3, Quaternion, Matrix4};
+use super::{InstancedMesh, Layers, LineSegments, Mesh, Points, SkinnedMesh, Sprite};
 use crate::lights::Light;
-use super::{Mesh, Layers, LineSegments, Points, Sprite, InstancedMesh, SkinnedMesh};
+use crate::math::{Matrix4, Quaternion, Vector3};
+use slotmap::{new_key_type, SlotMap};
 
 new_key_type! {
     /// Stable handle to an Object3D in a Scene. Cloneable, `Copy`.
@@ -40,6 +40,11 @@ pub struct Object3D {
     pub receive_shadow: bool,
     /// three.js `Object3D.renderOrder` — lower values draw first within the same transparency class.
     pub render_order: i32,
+    /// Whether this object is captured into the screen-space glass buffer and so
+    /// refracted/reflected by `TransparencyMode::Refract` surfaces. `false` draws
+    /// it *over* the glass instead (an overlay) — e.g. annotations or connectivity
+    /// that should stay crisp and not be bent by the glass. Default `true`.
+    pub refract_capture: bool,
     pub kind: ObjectKind,
 
     pub matrix: Matrix4,
@@ -94,6 +99,7 @@ impl Object3D {
             cast_shadow: false,
             receive_shadow: false,
             render_order: 0,
+            refract_capture: true,
             kind,
             matrix: Matrix4::identity(),
             matrix_world: Matrix4::identity(),
@@ -200,7 +206,9 @@ pub struct ObjectArena {
 }
 
 impl ObjectArena {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn insert(&mut self, obj: Object3D) -> ObjectId {
         self.nodes.insert(obj)
@@ -246,7 +254,9 @@ impl ObjectArena {
     /// Walk the subtree rooted at `id`, updating each node's `matrix_world`.
     pub fn update_world_matrices(&mut self, id: ObjectId, parent_world: Matrix4) {
         let world = {
-            let Some(node) = self.nodes.get_mut(id) else { return; };
+            let Some(node) = self.nodes.get_mut(id) else {
+                return;
+            };
             node.update_matrix();
             node.matrix_world = parent_world.multiply(&node.matrix);
             node.matrix_world
@@ -270,7 +280,9 @@ impl ObjectArena {
     /// Pre-order traverse, skipping subtrees whose root is not visible.
     pub fn traverse_visible(&self, id: ObjectId, f: &mut impl FnMut(ObjectId, &Object3D)) {
         if let Some(node) = self.nodes.get(id) {
-            if !node.visible { return; }
+            if !node.visible {
+                return;
+            }
             f(id, node);
             for c in node.children.clone() {
                 self.traverse_visible(c, f);
@@ -295,7 +307,9 @@ impl ObjectArena {
     pub fn get_object_by_name(&self, root: ObjectId, name: &str) -> Option<ObjectId> {
         let mut found = None;
         self.traverse(root, &mut |id, obj| {
-            if found.is_none() && obj.name == name { found = Some(id); }
+            if found.is_none() && obj.name == name {
+                found = Some(id);
+            }
         });
         found
     }
@@ -304,7 +318,9 @@ impl ObjectArena {
     pub fn get_objects_by_name(&self, root: ObjectId, name: &str) -> Vec<ObjectId> {
         let mut out = Vec::new();
         self.traverse(root, &mut |id, obj| {
-            if obj.name == name { out.push(id); }
+            if obj.name == name {
+                out.push(id);
+            }
         });
         out
     }

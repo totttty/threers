@@ -13,11 +13,19 @@ pub struct Octree {
 
 impl Octree {
     pub fn new(bounds: Box3, max_depth: u32, max_points: usize) -> Self {
-        Self { bounds, points: Vec::new(), children: None, max_depth, max_points }
+        Self {
+            bounds,
+            points: Vec::new(),
+            children: None,
+            max_depth,
+            max_points,
+        }
     }
 
     pub fn insert(&mut self, p: Vector3) {
-        if !self.bounds.contains_point(p) { return; }
+        if !self.bounds.contains_point(p) {
+            return;
+        }
         if self.children.is_some() {
             for child in self.children.as_mut().unwrap().iter_mut() {
                 child.insert(p);
@@ -34,22 +42,22 @@ impl Octree {
         let center = self.bounds.center();
         let mins = [
             Vector3::new(self.bounds.min.x, self.bounds.min.y, self.bounds.min.z),
-            Vector3::new(center.x,         self.bounds.min.y, self.bounds.min.z),
-            Vector3::new(self.bounds.min.x, center.y,         self.bounds.min.z),
-            Vector3::new(center.x,         center.y,         self.bounds.min.z),
+            Vector3::new(center.x, self.bounds.min.y, self.bounds.min.z),
+            Vector3::new(self.bounds.min.x, center.y, self.bounds.min.z),
+            Vector3::new(center.x, center.y, self.bounds.min.z),
             Vector3::new(self.bounds.min.x, self.bounds.min.y, center.z),
-            Vector3::new(center.x,         self.bounds.min.y, center.z),
-            Vector3::new(self.bounds.min.x, center.y,         center.z),
-            Vector3::new(center.x,         center.y,         center.z),
+            Vector3::new(center.x, self.bounds.min.y, center.z),
+            Vector3::new(self.bounds.min.x, center.y, center.z),
+            Vector3::new(center.x, center.y, center.z),
         ];
         let maxs = [
-            Vector3::new(center.x,         center.y,         center.z),
-            Vector3::new(self.bounds.max.x, center.y,         center.z),
-            Vector3::new(center.x,         self.bounds.max.y, center.z),
+            Vector3::new(center.x, center.y, center.z),
+            Vector3::new(self.bounds.max.x, center.y, center.z),
+            Vector3::new(center.x, self.bounds.max.y, center.z),
             Vector3::new(self.bounds.max.x, self.bounds.max.y, center.z),
-            Vector3::new(center.x,         center.y,         self.bounds.max.z),
-            Vector3::new(self.bounds.max.x, center.y,         self.bounds.max.z),
-            Vector3::new(center.x,         self.bounds.max.y, self.bounds.max.z),
+            Vector3::new(center.x, center.y, self.bounds.max.z),
+            Vector3::new(self.bounds.max.x, center.y, self.bounds.max.z),
+            Vector3::new(center.x, self.bounds.max.y, self.bounds.max.z),
             Vector3::new(self.bounds.max.x, self.bounds.max.y, self.bounds.max.z),
         ];
         let mut children: Vec<Octree> = Vec::with_capacity(8);
@@ -63,7 +71,9 @@ impl Octree {
         let pts = std::mem::take(&mut self.points);
         let mut arr: [Octree; 8] = children.try_into().unwrap_or_else(|_| unreachable!());
         for p in pts {
-            for c in arr.iter_mut() { c.insert(p); }
+            for c in arr.iter_mut() {
+                c.insert(p);
+            }
         }
         self.children = Some(Box::new(arr));
     }
@@ -71,14 +81,18 @@ impl Octree {
     /// Collect all points within `radius` of `target`.
     pub fn nearest(&self, target: Vector3, radius: f32) -> Vec<Vector3> {
         let mut out = Vec::new();
-        if self.bounds.distance_to_point(target) > radius { return out; }
+        if self.bounds.distance_to_point(target) > radius {
+            return out;
+        }
         if let Some(children) = &self.children {
             for c in children.iter() {
                 out.extend(c.nearest(target, radius));
             }
         } else {
             for p in &self.points {
-                if (target - *p).length() <= radius { out.push(*p); }
+                if (target - *p).length() <= radius {
+                    out.push(*p);
+                }
             }
         }
         out

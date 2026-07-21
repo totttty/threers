@@ -82,13 +82,8 @@ pub fn build_bvh(geometry: &BufferGeometry, options: BuildOptions) -> Option<Bui
     }
 
     let mut triangle_order: Vec<usize> = (start_tri..start_tri + tri_count).collect();
-    let root_bounds = bounds_from_triangles(
-        &positions,
-        &triangle_indices,
-        &triangle_order,
-        0,
-        tri_count,
-    );
+    let root_bounds =
+        bounds_from_triangles(&positions, &triangle_indices, &triangle_order, 0, tri_count);
 
     let mut nodes = Vec::new();
     build_recursive(
@@ -132,7 +127,16 @@ fn build_recursive(
     nodes.push(BvhNode::internal(bounds, 0, 0));
 
     let axis = longest_axis(&bounds);
-    let split = compute_split(positions, triangle_indices, triangle_order, start, count, axis, &bounds, options.strategy);
+    let split = compute_split(
+        positions,
+        triangle_indices,
+        triangle_order,
+        start,
+        count,
+        axis,
+        &bounds,
+        options.strategy,
+    );
 
     let mut i = start;
     let mut j = start + count;
@@ -200,7 +204,15 @@ fn compute_split(
             }
             sum / count as f32
         }
-        SAH => compute_sah_split(positions, triangle_indices, triangle_order, start, count, axis, bounds),
+        SAH => compute_sah_split(
+            positions,
+            triangle_indices,
+            triangle_order,
+            start,
+            count,
+            axis,
+            bounds,
+        ),
         _ => (bounds.min.axis(axis) + bounds.max.axis(axis)) * 0.5,
     }
 }
@@ -225,8 +237,15 @@ fn compute_sah_split(
     for bin in 1..SAH_BINS {
         let t = bin as f32 / SAH_BINS as f32;
         let split = min_a * (1.0 - t) + max_a * t;
-        let (left_bounds, right_bounds, left_count, right_count) =
-            partition_bounds(positions, triangle_indices, triangle_order, start, count, axis, split);
+        let (left_bounds, right_bounds, left_count, right_count) = partition_bounds(
+            positions,
+            triangle_indices,
+            triangle_order,
+            start,
+            count,
+            axis,
+            split,
+        );
         if left_count == 0 || right_count == 0 {
             continue;
         }
@@ -341,7 +360,10 @@ mod tests {
     fn builds_with_all_strategies() {
         let geom = unit_triangle_geometry();
         for strategy in [CENTER, AVERAGE, SAH] {
-            let opts = BuildOptions { strategy, ..Default::default() };
+            let opts = BuildOptions {
+                strategy,
+                ..Default::default()
+            };
             assert!(build_bvh(&geom, opts).is_some(), "strategy {strategy}");
         }
     }

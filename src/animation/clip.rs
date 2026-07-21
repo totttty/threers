@@ -10,10 +10,18 @@ pub struct AnimationClip {
 
 impl AnimationClip {
     pub fn new(name: impl Into<String>, duration: f32, tracks: Vec<KeyframeTrack>) -> Self {
-        Self { name: name.into(), duration, tracks }
+        Self {
+            name: name.into(),
+            duration,
+            tracks,
+        }
     }
 
     pub fn empty(name: impl Into<String>) -> Self {
-        Self { name: name.into(), duration: 0.0, tracks: Vec::new() }
+        Self {
+            name: name.into(),
+            duration: 0.0,
+            tracks: Vec::new(),
+        }
     }
 }

@@ -22,11 +22,18 @@ pub struct CcdIkSolver {
 
 impl CcdIkSolver {
     pub fn new(chain: Vec<IkBone>, goal: Vector3) -> Self {
-        Self { chain, goal, iterations: 16, tolerance: 1e-3 }
+        Self {
+            chain,
+            goal,
+            iterations: 16,
+            tolerance: 1e-3,
+        }
     }
 
     pub fn solve(&self, arena: &mut ObjectArena) {
-        if self.chain.len() < 2 { return; }
+        if self.chain.len() < 2 {
+            return;
+        }
         let tip = self.chain[self.chain.len() - 1].node;
         for _ in 0..self.iterations {
             for i in (0..self.chain.len() - 1).rev() {
@@ -38,9 +45,13 @@ impl CcdIkSolver {
                 let axis = to_tip.cross(to_goal);
                 let dot = to_tip.dot(to_goal).clamp(-1.0, 1.0);
                 let angle = dot.acos();
-                if angle < 1e-5 { continue; }
+                if angle < 1e-5 {
+                    continue;
+                }
                 let axis_len = axis.length();
-                if axis_len < 1e-6 { continue; }
+                if axis_len < 1e-6 {
+                    continue;
+                }
                 let q = Quaternion::from_axis_angle(axis * (1.0 / axis_len), angle * 0.5);
                 if let Some(obj) = arena.get_mut(bone.node) {
                     obj.quaternion = q.multiply(obj.quaternion);
@@ -59,8 +70,11 @@ impl CcdIkSolver {
 }
 
 fn world_pos(arena: &ObjectArena, id: ObjectId) -> Vector3 {
-    arena.get(id).map(|o| {
-        let e = &o.matrix_world.elements;
-        Vector3::new(e[12], e[13], e[14])
-    }).unwrap_or(Vector3::ZERO)
+    arena
+        .get(id)
+        .map(|o| {
+            let e = &o.matrix_world.elements;
+            Vector3::new(e[12], e[13], e[14])
+        })
+        .unwrap_or(Vector3::ZERO)
 }

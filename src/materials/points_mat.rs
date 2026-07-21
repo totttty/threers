@@ -12,12 +12,21 @@ pub struct PointsMaterial {
 
 impl Default for PointsMaterial {
     fn default() -> Self {
-        Self { color: Color::WHITE, opacity: 1.0, size: 1.0, size_attenuation: true }
+        Self {
+            color: Color::WHITE,
+            opacity: 1.0,
+            size: 1.0,
+            size_attenuation: true,
+        }
     }
 }
 
 impl PointsMaterial {
     pub fn new(color: Color, size: f32) -> Self {
-        Self { color, size, ..Default::default() }
+        Self {
+            color,
+            size,
+            ..Default::default()
+        }
     }
 }

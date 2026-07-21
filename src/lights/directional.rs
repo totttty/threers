@@ -1,5 +1,5 @@
-use crate::math::{Color, Vector3};
 use super::ShadowSettings;
+use crate::math::{Color, Vector3};
 
 /// Light shining from `direction` toward the origin (in three.js, the
 /// `DirectionalLight.position` is the source, looking at `target`; we use

@@ -1,5 +1,5 @@
+use crate::core::{BufferAttribute, BufferGeometry};
 use std::f32::consts::PI;
-use crate::core::{BufferGeometry, BufferAttribute};
 
 pub struct CylinderGeometry;
 
@@ -62,16 +62,42 @@ impl CylinderGeometry {
 
         // -- caps --
         if !open_ended {
-            if radius_top > 0.0 { Self::cap(true, radius_top, half_h, rs, theta_start, theta_length,
-                &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx); }
-            if radius_bottom > 0.0 { Self::cap(false, radius_bottom, -half_h, rs, theta_start, theta_length,
-                &mut positions, &mut normals, &mut uvs, &mut indices, &mut idx); }
+            if radius_top > 0.0 {
+                Self::cap(
+                    true,
+                    radius_top,
+                    half_h,
+                    rs,
+                    theta_start,
+                    theta_length,
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut indices,
+                    &mut idx,
+                );
+            }
+            if radius_bottom > 0.0 {
+                Self::cap(
+                    false,
+                    radius_bottom,
+                    -half_h,
+                    rs,
+                    theta_start,
+                    theta_length,
+                    &mut positions,
+                    &mut normals,
+                    &mut uvs,
+                    &mut indices,
+                    &mut idx,
+                );
+            }
         }
 
         let mut geom = BufferGeometry::new();
         geom.set_attribute("position", BufferAttribute::new(positions, 3));
-        geom.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        geom.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        geom.set_attribute("normal", BufferAttribute::new(normals, 3));
+        geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
         geom
     }

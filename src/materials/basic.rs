@@ -20,13 +20,31 @@ pub struct BasicMaterial {
 
 impl Default for BasicMaterial {
     fn default() -> Self {
-        Self { color: Color::WHITE, wireframe: false, map: None, transparent: false, opacity: 1.0, side: 0, shadow_only: false, alpha_test: 0.0 }
+        Self {
+            color: Color::WHITE,
+            wireframe: false,
+            map: None,
+            transparent: false,
+            opacity: 1.0,
+            side: 0,
+            shadow_only: false,
+            alpha_test: 0.0,
+        }
     }
 }
 
 impl BasicMaterial {
     pub fn new(color: Color) -> Self {
-        Self { color, wireframe: false, map: None, transparent: false, opacity: 1.0, side: 0, shadow_only: false, alpha_test: 0.0 }
+        Self {
+            color,
+            wireframe: false,
+            map: None,
+            transparent: false,
+            opacity: 1.0,
+            side: 0,
+            shadow_only: false,
+            alpha_test: 0.0,
+        }
     }
 
     pub fn wireframe(mut self, w: bool) -> Self {

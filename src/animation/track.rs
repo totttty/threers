@@ -1,6 +1,6 @@
+use super::interpolant::{find_segment, Interpolation};
 use crate::core::ObjectId;
 use crate::math::{Color, Quaternion, Vector3};
-use super::interpolant::{find_segment, Interpolation};
 
 /// Which property of an Object3D this track drives. Mirrors three.js's
 /// property bindings (`position`, `quaternion`, `scale`, plus material color).
@@ -34,21 +34,67 @@ pub struct KeyframeTrack {
 }
 
 impl KeyframeTrack {
-    pub fn vector(object: ObjectId, target: TrackTarget, times: Vec<f32>, values: Vec<Vector3>) -> Self {
-        Self { object, target, times, values: TrackValues::Vector(values), interpolation: Interpolation::Linear }
+    pub fn vector(
+        object: ObjectId,
+        target: TrackTarget,
+        times: Vec<f32>,
+        values: Vec<Vector3>,
+    ) -> Self {
+        Self {
+            object,
+            target,
+            times,
+            values: TrackValues::Vector(values),
+            interpolation: Interpolation::Linear,
+        }
     }
-    pub fn quaternion(object: ObjectId, target: TrackTarget, times: Vec<f32>, values: Vec<Quaternion>) -> Self {
-        Self { object, target, times, values: TrackValues::Quaternion(values), interpolation: Interpolation::Linear }
+    pub fn quaternion(
+        object: ObjectId,
+        target: TrackTarget,
+        times: Vec<f32>,
+        values: Vec<Quaternion>,
+    ) -> Self {
+        Self {
+            object,
+            target,
+            times,
+            values: TrackValues::Quaternion(values),
+            interpolation: Interpolation::Linear,
+        }
     }
-    pub fn color(object: ObjectId, target: TrackTarget, times: Vec<f32>, values: Vec<Color>) -> Self {
-        Self { object, target, times, values: TrackValues::Color(values), interpolation: Interpolation::Linear }
+    pub fn color(
+        object: ObjectId,
+        target: TrackTarget,
+        times: Vec<f32>,
+        values: Vec<Color>,
+    ) -> Self {
+        Self {
+            object,
+            target,
+            times,
+            values: TrackValues::Color(values),
+            interpolation: Interpolation::Linear,
+        }
     }
-    pub fn scalar(object: ObjectId, target: TrackTarget, times: Vec<f32>, values: Vec<f32>) -> Self {
-        Self { object, target, times, values: TrackValues::Scalar(values), interpolation: Interpolation::Linear }
+    pub fn scalar(
+        object: ObjectId,
+        target: TrackTarget,
+        times: Vec<f32>,
+        values: Vec<f32>,
+    ) -> Self {
+        Self {
+            object,
+            target,
+            times,
+            values: TrackValues::Scalar(values),
+            interpolation: Interpolation::Linear,
+        }
     }
 
     pub fn sample_vector(&self, t: f32) -> Option<Vector3> {
-        let TrackValues::Vector(vals) = &self.values else { return None; };
+        let TrackValues::Vector(vals) = &self.values else {
+            return None;
+        };
         let (i, a) = find_segment(&self.times, t);
         if a == 0.0 || matches!(self.interpolation, Interpolation::Step) {
             return Some(vals[i.min(vals.len() - 1)]);
@@ -57,7 +103,9 @@ impl KeyframeTrack {
     }
 
     pub fn sample_quaternion(&self, t: f32) -> Option<Quaternion> {
-        let TrackValues::Quaternion(vals) = &self.values else { return None; };
+        let TrackValues::Quaternion(vals) = &self.values else {
+            return None;
+        };
         let (i, a) = find_segment(&self.times, t);
         if a == 0.0 || matches!(self.interpolation, Interpolation::Step) {
             return Some(vals[i.min(vals.len() - 1)]);
@@ -66,7 +114,9 @@ impl KeyframeTrack {
     }
 
     pub fn sample_color(&self, t: f32) -> Option<Color> {
-        let TrackValues::Color(vals) = &self.values else { return None; };
+        let TrackValues::Color(vals) = &self.values else {
+            return None;
+        };
         let (i, a) = find_segment(&self.times, t);
         if a == 0.0 || matches!(self.interpolation, Interpolation::Step) {
             return Some(vals[i.min(vals.len() - 1)]);
@@ -81,7 +131,9 @@ impl KeyframeTrack {
     }
 
     pub fn sample_scalar(&self, t: f32) -> Option<f32> {
-        let TrackValues::Scalar(vals) = &self.values else { return None; };
+        let TrackValues::Scalar(vals) = &self.values else {
+            return None;
+        };
         let (i, a) = find_segment(&self.times, t);
         if a == 0.0 || matches!(self.interpolation, Interpolation::Step) {
             return Some(vals[i.min(vals.len() - 1)]);

@@ -1,4 +1,4 @@
-use crate::core::{BufferGeometry, BufferAttribute};
+use crate::core::{BufferAttribute, BufferGeometry};
 
 pub struct PlaneGeometry;
 

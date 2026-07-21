@@ -1,5 +1,5 @@
+use crate::core::{BufferAttribute, BufferGeometry};
 use std::f32::consts::PI;
-use crate::core::{BufferGeometry, BufferAttribute};
 
 pub struct RingGeometry;
 
@@ -19,9 +19,9 @@ impl RingGeometry {
         let p_seg = phi_segments.max(1);
 
         let mut positions = Vec::new();
-        let mut normals   = Vec::new();
-        let mut uvs       = Vec::new();
-        let mut indices   = Vec::new();
+        let mut normals = Vec::new();
+        let mut uvs = Vec::new();
+        let mut indices = Vec::new();
 
         for j in 0..=p_seg {
             let radius = inner_radius + (j as f32 / p_seg as f32) * (outer_radius - inner_radius);
@@ -32,7 +32,10 @@ impl RingGeometry {
                 let y = radius * s;
                 positions.extend_from_slice(&[x, y, 0.0]);
                 normals.extend_from_slice(&[0.0, 0.0, 1.0]);
-                uvs.extend_from_slice(&[(x / outer_radius + 1.0) * 0.5, (y / outer_radius + 1.0) * 0.5]);
+                uvs.extend_from_slice(&[
+                    (x / outer_radius + 1.0) * 0.5,
+                    (y / outer_radius + 1.0) * 0.5,
+                ]);
             }
         }
 
@@ -50,8 +53,8 @@ impl RingGeometry {
 
         let mut geom = BufferGeometry::new();
         geom.set_attribute("position", BufferAttribute::new(positions, 3));
-        geom.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        geom.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        geom.set_attribute("normal", BufferAttribute::new(normals, 3));
+        geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
         geom
     }

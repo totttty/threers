@@ -1,6 +1,6 @@
-use std::f32::consts::PI;
-use crate::core::{BufferGeometry, BufferAttribute};
+use crate::core::{BufferAttribute, BufferGeometry};
 use crate::math::Vector3;
+use std::f32::consts::PI;
 
 pub struct TorusGeometry;
 
@@ -19,9 +19,9 @@ impl TorusGeometry {
         let ts = tubular_segments.max(3);
 
         let mut positions = Vec::new();
-        let mut normals   = Vec::new();
-        let mut uvs       = Vec::new();
-        let mut indices   = Vec::new();
+        let mut normals = Vec::new();
+        let mut uvs = Vec::new();
+        let mut indices = Vec::new();
 
         for j in 0..=rs {
             let v = j as f32 / rs as f32 * PI * 2.0;
@@ -56,8 +56,8 @@ impl TorusGeometry {
 
         let mut geom = BufferGeometry::new();
         geom.set_attribute("position", BufferAttribute::new(positions, 3));
-        geom.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        geom.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        geom.set_attribute("normal", BufferAttribute::new(normals, 3));
+        geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
         geom
     }

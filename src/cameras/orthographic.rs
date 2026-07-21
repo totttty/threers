@@ -1,5 +1,5 @@
-use crate::math::{Vector3, Matrix4};
 use super::Camera;
+use crate::math::{Matrix4, Vector3};
 
 #[derive(Debug, Clone)]
 pub struct OrthographicCamera {
@@ -20,7 +20,12 @@ impl OrthographicCamera {
             position: Vector3::new(0.0, 0.0, 5.0),
             target: Vector3::ZERO,
             up: Vector3::UP,
-            left, right, top, bottom, near, far,
+            left,
+            right,
+            top,
+            bottom,
+            near,
+            far,
         }
     }
 }
@@ -30,16 +35,27 @@ impl Camera for OrthographicCamera {
         Matrix4::look_at(self.position, self.target, self.up)
     }
     fn projection_matrix(&self) -> Matrix4 {
-        Matrix4::orthographic(self.left, self.right, self.top, self.bottom, self.near, self.far)
+        Matrix4::orthographic(
+            self.left,
+            self.right,
+            self.top,
+            self.bottom,
+            self.near,
+            self.far,
+        )
     }
-    fn position(&self) -> Vector3 { self.position }
+    fn position(&self) -> Vector3 {
+        self.position
+    }
     fn set_aspect(&mut self, aspect: f32) {
         // Preserve vertical span; rescale horizontal symmetrically.
         let v_half = (self.top - self.bottom).abs() * 0.5;
         let h_half = v_half * aspect;
         let cx = (self.left + self.right) * 0.5;
-        self.left  = cx - h_half;
+        self.left = cx - h_half;
         self.right = cx + h_half;
     }
-    fn near_far(&self) -> (f32, f32) { (self.near, self.far) }
+    fn near_far(&self) -> (f32, f32) {
+        (self.near, self.far)
+    }
 }

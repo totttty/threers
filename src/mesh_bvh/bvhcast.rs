@@ -13,15 +13,7 @@ pub fn bvhcast(a: &MeshBvh, b: &MeshBvh, matrix_to_local: &Matrix4) -> Vec<(usiz
     let curr_box = a.node_bounds(0).apply_matrix4(&mat_a_to_b);
     let mut pairs = Vec::new();
     traverse(
-        a,
-        b,
-        0,
-        0,
-        mat_b_to_a,
-        mat_a_to_b,
-        &mut pairs,
-        curr_box,
-        false,
+        a, b, 0, 0, mat_b_to_a, mat_a_to_b, &mut pairs, curr_box, false,
     );
     pairs
 }
@@ -103,39 +95,15 @@ fn traverse(
 
     if left_hit && right_hit {
         traverse(
-            a,
-            b,
-            node_a,
-            cl2,
-            mat_2_to_1,
-            mat_1_to_2,
-            pairs,
-            curr_box,
-            reversed,
+            a, b, node_a, cl2, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
         );
         traverse(
-            a,
-            b,
-            node_a,
-            cr2,
-            mat_2_to_1,
-            mat_1_to_2,
-            pairs,
-            curr_box,
-            reversed,
+            a, b, node_a, cr2, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
         );
     } else if left_hit {
         if leaf1 {
             traverse(
-                a,
-                b,
-                node_a,
-                cl2,
-                mat_2_to_1,
-                mat_1_to_2,
-                pairs,
-                curr_box,
-                reversed,
+                a, b, node_a, cl2, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
             );
         } else {
             let new_box = left_box2.apply_matrix4(&mat_2_to_1);
@@ -171,15 +139,7 @@ fn traverse(
     } else if right_hit {
         if leaf1 {
             traverse(
-                a,
-                b,
-                node_a,
-                cr2,
-                mat_2_to_1,
-                mat_1_to_2,
-                pairs,
-                curr_box,
-                reversed,
+                a, b, node_a, cr2, mat_2_to_1, mat_1_to_2, pairs, curr_box, reversed,
             );
         } else {
             let new_box = right_box2.apply_matrix4(&mat_2_to_1);

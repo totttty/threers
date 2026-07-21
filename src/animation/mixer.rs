@@ -1,8 +1,8 @@
+use super::track::TrackTarget;
+use super::{AnimationAction, AnimationClip};
 use crate::core::ObjectArena;
 use crate::materials::Material;
 use crate::scene::Scene;
-use super::{AnimationClip, AnimationAction};
-use super::track::TrackTarget;
 
 /// Plays animation clips against a scene. Holds zero or more `AnimationAction`s.
 pub struct AnimationMixer {
@@ -11,12 +11,17 @@ pub struct AnimationMixer {
 }
 
 impl Default for AnimationMixer {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AnimationMixer {
     pub fn new() -> Self {
-        Self { actions: Vec::new(), time: 0.0 }
+        Self {
+            actions: Vec::new(),
+            time: 0.0,
+        }
     }
 
     pub fn clip_action(&mut self, clip: AnimationClip) -> usize {
@@ -29,7 +34,9 @@ impl AnimationMixer {
     pub fn update(&mut self, scene: &mut Scene, delta: f32) {
         self.time += delta;
         for action in &mut self.actions {
-            if !action.enabled { continue; }
+            if !action.enabled {
+                continue;
+            }
             action.advance(delta);
             apply_action(&mut scene.arena, action);
         }
@@ -39,16 +46,24 @@ impl AnimationMixer {
 fn apply_action(arena: &mut ObjectArena, action: &AnimationAction) {
     let t = action.current_time();
     for tr in &action.clip.tracks {
-        let Some(obj) = arena.nodes.get_mut(tr.object) else { continue; };
+        let Some(obj) = arena.nodes.get_mut(tr.object) else {
+            continue;
+        };
         match tr.target {
             TrackTarget::Position => {
-                if let Some(v) = tr.sample_vector(t) { obj.position = v; }
+                if let Some(v) = tr.sample_vector(t) {
+                    obj.position = v;
+                }
             }
             TrackTarget::Quaternion => {
-                if let Some(q) = tr.sample_quaternion(t) { obj.quaternion = q; }
+                if let Some(q) = tr.sample_quaternion(t) {
+                    obj.quaternion = q;
+                }
             }
             TrackTarget::Scale => {
-                if let Some(v) = tr.sample_vector(t) { obj.scale = v; }
+                if let Some(v) = tr.sample_vector(t) {
+                    obj.scale = v;
+                }
             }
             TrackTarget::Color => {
                 if let Some(c) = tr.sample_color(t) {
@@ -66,17 +81,18 @@ fn apply_action(arena: &mut ObjectArena, action: &AnimationAction) {
 
 fn apply_color(mat: &mut Material, c: crate::math::Color) {
     match mat {
-        Material::Basic(m)    => m.color = c,
-        Material::Lambert(m)  => m.color = c,
-        Material::Phong(m)    => m.color = c,
+        Material::Basic(m) => m.color = c,
+        Material::Lambert(m) => m.color = c,
+        Material::Phong(m) => m.color = c,
         Material::Standard(m) => m.color = c,
         Material::Physical(m) => m.color = c,
-        Material::Toon(m)     => m.color = c,
-        Material::Matcap(m)   => m.color = c,
-        Material::Line(m)     => m.color = c,
-        Material::Points(m)   => m.color = c,
-        Material::Sprite(m)   => m.color = c,
-        Material::Mirror(m)   => m.color = c,
+        Material::Toon(m) => m.color = c,
+        Material::Matcap(m) => m.color = c,
+        Material::Line(m) => m.color = c,
+        Material::Points(m) => m.color = c,
+        Material::Sprite(m) => m.color = c,
+        Material::Mirror(m) => m.color = c,
         Material::Normal(_) | Material::Depth(_) | Material::Distance(_) | Material::Sky(_) => {}
+        Material::Shader(_) => {}
     }
 }

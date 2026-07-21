@@ -16,6 +16,9 @@ impl IntersectionMap {
             self.intersection_set.insert(id, Vec::new());
             self.ids.push(id);
         }
-        self.intersection_set.get_mut(&id).unwrap().push(intersection_id);
+        self.intersection_set
+            .get_mut(&id)
+            .unwrap()
+            .push(intersection_id);
     }
 }

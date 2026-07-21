@@ -8,6 +8,9 @@ pub struct NormalMaterial {
 
 impl NormalMaterial {
     pub const fn new() -> Self {
-        Self { opacity: 1.0, wireframe: false }
+        Self {
+            opacity: 1.0,
+            wireframe: false,
+        }
     }
 }

@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use super::BufferGeometry;
 use crate::materials::Material;
+use std::sync::Arc;
 
 /// Point-list primitive. Each vertex is rendered as a single point.
 /// Mirrors three.js's `Points`.

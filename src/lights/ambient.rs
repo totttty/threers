@@ -7,7 +7,9 @@ pub struct AmbientLight {
 }
 
 impl Default for AmbientLight {
-    fn default() -> Self { Self::new(Color::WHITE, 1.0) }
+    fn default() -> Self {
+        Self::new(Color::WHITE, 1.0)
+    }
 }
 
 impl AmbientLight {

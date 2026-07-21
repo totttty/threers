@@ -1,13 +1,13 @@
 //! Cameras: position/orientation in world space plus a projection matrix.
 
-mod perspective;
 mod orthographic;
+mod perspective;
 
-pub use perspective::PerspectiveCamera;
 pub use orthographic::OrthographicCamera;
+pub use perspective::PerspectiveCamera;
 
-use crate::math::{Vector3, Matrix4};
 use crate::core::Layers;
+use crate::math::{Matrix4, Vector3};
 
 /// Unified camera trait used by the Renderer.
 pub trait Camera {
@@ -17,8 +17,12 @@ pub trait Camera {
     fn set_aspect(&mut self, aspect: f32);
 
     /// Clip-space near/far planes (for SSAO depth encoding in normal prepass).
-    fn near_far(&self) -> (f32, f32) { (0.1, 1000.0) }
+    fn near_far(&self) -> (f32, f32) {
+        (0.1, 1000.0)
+    }
 
     /// Layer mask. Meshes are visible to this camera iff `camera.layers().test(&mesh.layers)`.
-    fn layers(&self) -> Layers { Layers::default() }
+    fn layers(&self) -> Layers {
+        Layers::default()
+    }
 }

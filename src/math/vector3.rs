@@ -1,4 +1,4 @@
-use std::ops::{Add, Sub, Mul, Neg};
+use std::ops::{Add, Mul, Neg, Sub};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vector3 {
@@ -8,16 +8,30 @@ pub struct Vector3 {
 }
 
 impl Vector3 {
-    pub const ZERO: Self = Self { x: 0.0, y: 0.0, z: 0.0 };
-    pub const ONE: Self = Self { x: 1.0, y: 1.0, z: 1.0 };
-    pub const UP: Self = Self { x: 0.0, y: 1.0, z: 0.0 };
+    pub const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
+    pub const ONE: Self = Self {
+        x: 1.0,
+        y: 1.0,
+        z: 1.0,
+    };
+    pub const UP: Self = Self {
+        x: 0.0,
+        y: 1.0,
+        z: 0.0,
+    };
 
     pub const fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
     }
 
     pub fn set(&mut self, x: f32, y: f32, z: f32) -> &mut Self {
-        self.x = x; self.y = y; self.z = z;
+        self.x = x;
+        self.y = y;
+        self.z = z;
         self
     }
 
@@ -31,7 +45,11 @@ impl Vector3 {
 
     pub fn normalize(&self) -> Self {
         let len = self.length();
-        if len == 0.0 { Self::ZERO } else { *self * (1.0 / len) }
+        if len == 0.0 {
+            Self::ZERO
+        } else {
+            *self * (1.0 / len)
+        }
     }
 
     pub fn dot(&self, other: Self) -> f32 {
@@ -59,11 +77,19 @@ impl Vector3 {
     }
 
     pub fn min(&self, other: Self) -> Self {
-        Self::new(self.x.min(other.x), self.y.min(other.y), self.z.min(other.z))
+        Self::new(
+            self.x.min(other.x),
+            self.y.min(other.y),
+            self.z.min(other.z),
+        )
     }
 
     pub fn max(&self, other: Self) -> Self {
-        Self::new(self.x.max(other.x), self.y.max(other.y), self.z.max(other.z))
+        Self::new(
+            self.x.max(other.x),
+            self.y.max(other.y),
+            self.z.max(other.z),
+        )
     }
 
     pub fn clamp(&self, min: Self, max: Self) -> Self {
@@ -76,9 +102,9 @@ impl Vector3 {
 
     /// Rotate this vector by a unit quaternion. Matches three.js's `applyQuaternion`.
     pub fn apply_quaternion(&self, q: crate::math::Quaternion) -> Self {
-        let ix =  q.w * self.x + q.y * self.z - q.z * self.y;
-        let iy =  q.w * self.y + q.z * self.x - q.x * self.z;
-        let iz =  q.w * self.z + q.x * self.y - q.y * self.x;
+        let ix = q.w * self.x + q.y * self.z - q.z * self.y;
+        let iy = q.w * self.y + q.z * self.x - q.x * self.z;
+        let iz = q.w * self.z + q.x * self.y - q.y * self.x;
         let iw = -q.x * self.x - q.y * self.y - q.z * self.z;
         Self::new(
             ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y,
@@ -93,14 +119,18 @@ impl Vector3 {
         let w = e[3] * self.x + e[7] * self.y + e[11] * self.z + e[15];
         let inv_w = if w == 0.0 { 1.0 } else { 1.0 / w };
         Self::new(
-            (e[0] * self.x + e[4] * self.y + e[8]  * self.z + e[12]) * inv_w,
-            (e[1] * self.x + e[5] * self.y + e[9]  * self.z + e[13]) * inv_w,
+            (e[0] * self.x + e[4] * self.y + e[8] * self.z + e[12]) * inv_w,
+            (e[1] * self.x + e[5] * self.y + e[9] * self.z + e[13]) * inv_w,
             (e[2] * self.x + e[6] * self.y + e[10] * self.z + e[14]) * inv_w,
         )
     }
 
     /// Project from NDC (or any inverse-projection matrix) back to world space.
-    pub fn unproject(&self, view: &crate::math::Matrix4, projection: &crate::math::Matrix4) -> Self {
+    pub fn unproject(
+        &self,
+        view: &crate::math::Matrix4,
+        projection: &crate::math::Matrix4,
+    ) -> Self {
         let inv_proj = projection.invert();
         let inv_view = view.invert();
         self.apply_matrix4(&inv_proj).apply_matrix4(&inv_view)

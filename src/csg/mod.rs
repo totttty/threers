@@ -37,12 +37,12 @@ mod hierarchy;
 mod hierarchy_steps;
 mod hit_side;
 mod intersection_map;
-mod operations;
 /// f64 three.js math helpers used to match JS CSG float paths bit-for-bit where needed.
 pub mod js_topology;
+mod operations;
+mod topology;
 mod triangle_splitter;
 mod triangle_utils;
-mod topology;
 
 #[cfg(test)]
 mod step_tests;

@@ -7,7 +7,14 @@ use crate::math::Color;
 pub struct PolarGridHelper;
 
 impl PolarGridHelper {
-    pub fn new(radius: f32, radial_segments: usize, circles: usize, divisions: usize, color1: Color, color2: Color) -> Object3D {
+    pub fn new(
+        radius: f32,
+        radial_segments: usize,
+        circles: usize,
+        divisions: usize,
+        color1: Color,
+        color2: Color,
+    ) -> Object3D {
         let _ = color2;
         let mut positions = Vec::new();
 
@@ -38,6 +45,13 @@ impl PolarGridHelper {
     }
 
     pub fn default_(radius: f32, radial_segments: usize, circles: usize) -> Object3D {
-        Self::new(radius, radial_segments, circles, 32, Color::from_hex(0x888888), Color::from_hex(0x444444))
+        Self::new(
+            radius,
+            radial_segments,
+            circles,
+            32,
+            Color::from_hex(0x888888),
+            Color::from_hex(0x444444),
+        )
     }
 }

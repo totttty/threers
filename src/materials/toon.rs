@@ -14,10 +14,22 @@ pub struct ToonMaterial {
 
 impl Default for ToonMaterial {
     fn default() -> Self {
-        Self { color: Color::WHITE, emissive: Color::BLACK, opacity: 1.0, steps: 3, wireframe: false, side: 0 }
+        Self {
+            color: Color::WHITE,
+            emissive: Color::BLACK,
+            opacity: 1.0,
+            steps: 3,
+            wireframe: false,
+            side: 0,
+        }
     }
 }
 
 impl ToonMaterial {
-    pub fn new(color: Color) -> Self { Self { color, ..Default::default() } }
+    pub fn new(color: Color) -> Self {
+        Self {
+            color,
+            ..Default::default()
+        }
+    }
 }

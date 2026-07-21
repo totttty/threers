@@ -1,5 +1,5 @@
-use crate::math::Vector3;
 use super::Curve3;
+use crate::math::Vector3;
 
 /// Non-Uniform Rational B-Spline curve. Mirrors three.js's `NURBSCurve`.
 /// `control_points` are 4D (x, y, z, weight); `knots` are a non-decreasing
@@ -17,7 +17,13 @@ impl NURBSCurve {
     pub fn new(degree: usize, knots: Vec<f32>, control_points: Vec<[f32; 4]>) -> Self {
         let t_start = knots[degree];
         let t_end = knots[knots.len() - 1 - degree];
-        Self { degree, knots, control_points, t_start, t_end }
+        Self {
+            degree,
+            knots,
+            control_points,
+            t_start,
+            t_end,
+        }
     }
 }
 
@@ -69,26 +75,43 @@ impl NURBSSurface {
 
 /// De Boor's recursive algorithm in homogeneous space.
 fn de_boor(degree: usize, knots: &[f32], cps: &[[f32; 4]], u: f32) -> [f32; 4] {
-    if cps.is_empty() { return [0.0; 4]; }
+    if cps.is_empty() {
+        return [0.0; 4];
+    }
     // Find span index k such that knots[k] <= u < knots[k+1].
     let n = cps.len();
     let mut k = degree;
     for i in degree..n {
-        if u >= knots[i] && u < knots[i + 1] { k = i; break; }
+        if u >= knots[i] && u < knots[i + 1] {
+            k = i;
+            break;
+        }
     }
-    if u >= *knots.last().unwrap() { k = n - 1; }
+    if u >= *knots.last().unwrap() {
+        k = n - 1;
+    }
 
     // Working set: copy degree+1 control points around span.
-    let mut d: Vec<[f32; 4]> = (0..=degree).map(|i| {
-        let idx = if k >= degree { (k - degree + i).min(n - 1) } else { i.min(n - 1) };
-        cps[idx]
-    }).collect();
+    let mut d: Vec<[f32; 4]> = (0..=degree)
+        .map(|i| {
+            let idx = if k >= degree {
+                (k - degree + i).min(n - 1)
+            } else {
+                i.min(n - 1)
+            };
+            cps[idx]
+        })
+        .collect();
 
     for r in 1..=degree {
         for j in (r..=degree).rev() {
             let i = k.saturating_sub(degree) + j;
             let denom = knots[i + degree + 1 - r] - knots[i];
-            let alpha = if denom > 0.0 { (u - knots[i]) / denom } else { 0.0 };
+            let alpha = if denom > 0.0 {
+                (u - knots[i]) / denom
+            } else {
+                0.0
+            };
             let a = d[j - 1];
             let b = d[j];
             d[j] = [

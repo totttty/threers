@@ -98,13 +98,13 @@ async fn run() {
     let mut scene = Scene::new();
     scene.background = Color::from_hex(0x101418);
     scene.add_light(AmbientLight::new(Color::from_hex(0xffffff), 0.5));
-    let mut dl = Object3D::light(DirectionalLight::new(Color::from_hex(0xffffff), 1));
-    dl.position = Vector3::new(2, 3, 4);
+    let mut dl = Object3D::light(DirectionalLight::new(Color::from_hex(0xffffff), 1.0));
+    dl.position = Vector3::new(2.0, 3.0, 4.0);
     scene.add(dl);
-    scene.add(Object3D::mesh(Mesh::new(CapsuleGeometry::new(0.35, 0.9, 8.0, 16.0), StandardMaterial::new(Color::from_hex(0x88cc66)).with_roughness(0.4))));
-    let mut camera = PerspectiveCamera::new(45, 800.0 / 600.0, 0.1, 100);
-    camera.position = Vector3::new(0, 0, 3.5);
-    camera.look_at(Vector3::new(0, 0, 0));
+    scene.add(Object3D::mesh(Mesh::new(CapsuleGeometry::new(0.35, 0.9, 8, 16), StandardMaterial::new(Color::from_hex(0x88cc66)).with_roughness(0.4).into())));
+    let mut camera = PerspectiveCamera::new(45.0, 800.0 / 600.0, 0.1, 100.0);
+    camera.position = Vector3::new(0.0, 0.0, 3.5);
+    camera.look_at(Vector3::new(0.0, 0.0, 0.0));
 
     scene.update_world();
     let window_for_loop = window.clone();

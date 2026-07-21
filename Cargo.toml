@@ -1,9 +1,9 @@
 [package]
 name = "threers"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 authors = ["Eugene Hauptmann"]
-description = "Drop-in three.js replacement for Rust and WebAssembly (wgpu) — THREE.* API, scene graph, PBR, post-fx, mesh BVH, and CSG"
+description = "Drop-in three.js replacement for Rust and WebAssembly (wgpu) — THREE.* API, scene graph, PBR, post-fx, mesh BVH, CSG, headless render, and native media codecs"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/eugenehp/threers"
@@ -15,10 +15,20 @@ categories = ["graphics", "rendering", "wasm", "game-development"]
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[[example]]
+name = "headless_video"
+required-features = ["video"]
+
 [features]
 default = []
 mesh-bvh = []
 bvh-csg = ["mesh-bvh"]
+# Native video export: renders a frame sequence and encodes it with the system
+# `ffmpeg` (no extra crate deps — the feature just gates the module).
+video = []
+# From-scratch, pure-Rust media codecs (HEVC, VP9/WebM, APNG, GIF encode/decode,
+# bitstream). No external deps and no OS/process/thread use — native and wasm32.
+native-codec = []
 
 [dependencies]
 wgpu = "0.20"
@@ -55,6 +65,10 @@ features = [
 [[example]]
 name = "cube"
 path = "examples/cube.rs"
+
+[[example]]
+name = "shader_material"
+path = "examples/shader_material.rs"
 
 [[example]]
 name = "scene_graph"

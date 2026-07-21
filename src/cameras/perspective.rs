@@ -1,12 +1,12 @@
-use crate::math::{Vector3, Matrix4};
 use super::Camera;
+use crate::math::{Matrix4, Vector3};
 
 #[derive(Debug, Clone)]
 pub struct PerspectiveCamera {
     pub position: Vector3,
     pub target: Vector3,
     pub up: Vector3,
-    pub fov: f32,    // radians
+    pub fov: f32, // radians
     pub aspect: f32,
     pub near: f32,
     pub far: f32,
@@ -22,7 +22,9 @@ impl PerspectiveCamera {
             target: Vector3::ZERO,
             up: Vector3::UP,
             fov: fov_deg.to_radians(),
-            aspect, near, far,
+            aspect,
+            near,
+            far,
             projection_override: None,
         }
     }
@@ -43,7 +45,13 @@ impl Camera for PerspectiveCamera {
         }
         Matrix4::perspective(self.fov, self.aspect, self.near, self.far)
     }
-    fn position(&self) -> Vector3 { self.position }
-    fn set_aspect(&mut self, aspect: f32) { self.aspect = aspect; }
-    fn near_far(&self) -> (f32, f32) { (self.near, self.far) }
+    fn position(&self) -> Vector3 {
+        self.position
+    }
+    fn set_aspect(&mut self, aspect: f32) {
+        self.aspect = aspect;
+    }
+    fn near_far(&self) -> (f32, f32) {
+        (self.near, self.far)
+    }
 }

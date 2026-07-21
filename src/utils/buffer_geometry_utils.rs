@@ -12,14 +12,12 @@ pub fn compute_vertex_normals(geom: &mut BufferGeometry) {
     let mut normals = vec![0.0f32; vert_count * 3];
 
     let add = |normals: &mut Vec<f32>, i: usize, n: Vector3| {
-        normals[i * 3]     += n.x;
+        normals[i * 3] += n.x;
         normals[i * 3 + 1] += n.y;
         normals[i * 3 + 2] += n.z;
     };
 
-    let read = |i: usize| -> Vector3 {
-        Vector3::new(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2])
-    };
+    let read = |i: usize| -> Vector3 { Vector3::new(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]) };
 
     if let Some(idx) = geom.index.clone() {
         for tri in idx.chunks_exact(3) {
@@ -56,9 +54,18 @@ pub fn compute_vertex_normals(geom: &mut BufferGeometry) {
 /// is `vec4` with w = bitangent sign. Caller must ensure `uv` and `normal`
 /// attributes are populated first.
 pub fn compute_tangents(geom: &mut BufferGeometry) {
-    let pos = match geom.get_attribute("position") { Some(a) => a.array.clone(), None => return };
-    let uvs = match geom.get_attribute("uv")       { Some(a) => a.array.clone(), None => return };
-    let nor = match geom.get_attribute("normal")   { Some(a) => a.array.clone(), None => return };
+    let pos = match geom.get_attribute("position") {
+        Some(a) => a.array.clone(),
+        None => return,
+    };
+    let uvs = match geom.get_attribute("uv") {
+        Some(a) => a.array.clone(),
+        None => return,
+    };
+    let nor = match geom.get_attribute("normal") {
+        Some(a) => a.array.clone(),
+        None => return,
+    };
     let count = pos.len() / 3;
 
     let mut tan1 = vec![Vector3::ZERO; count];
@@ -78,7 +85,9 @@ pub fn compute_tangents(geom: &mut BufferGeometry) {
         let du2 = u2 - u0;
         let dw2 = w2 - w0;
         let denom = du1 * dw2 - du2 * dw1;
-        if denom == 0.0 { return; }
+        if denom == 0.0 {
+            return;
+        }
         let r = 1.0 / denom;
         let sdir = Vector3::new(
             (dw2 * e1.x - dw1 * e2.x) * r,
@@ -113,7 +122,11 @@ pub fn compute_tangents(geom: &mut BufferGeometry) {
         let n = Vector3::new(nor[i * 3], nor[i * 3 + 1], nor[i * 3 + 2]);
         let t = tan1[i];
         let proj = (t - n * n.dot(t)).normalize();
-        let w = if n.cross(t).dot(tan2[i]) < 0.0 { -1.0 } else { 1.0 };
+        let w = if n.cross(t).dot(tan2[i]) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
         tangents.extend_from_slice(&[proj.x, proj.y, proj.z, w]);
     }
     geom.set_attribute("tangent", BufferAttribute::new(tangents, 4));
@@ -124,10 +137,13 @@ pub fn compute_tangents(geom: &mut BufferGeometry) {
 /// Geometries with no index get a synthetic one. Mirrors three.js's
 /// `BufferGeometryUtils.mergeGeometries`.
 pub fn merge_geometries(geoms: &[BufferGeometry]) -> Option<BufferGeometry> {
-    if geoms.is_empty() { return None; }
+    if geoms.is_empty() {
+        return None;
+    }
     let mut out = BufferGeometry::new();
     let attr_names: Vec<String> = geoms[0].attributes.keys().cloned().collect();
-    let mut merged: std::collections::HashMap<String, (usize, Vec<f32>)> = std::collections::HashMap::new();
+    let mut merged: std::collections::HashMap<String, (usize, Vec<f32>)> =
+        std::collections::HashMap::new();
     for name in &attr_names {
         let item_size = geoms[0].get_attribute(name)?.item_size;
         merged.insert(name.clone(), (item_size, Vec::new()));
@@ -140,7 +156,10 @@ pub fn merge_geometries(geoms: &[BufferGeometry]) -> Option<BufferGeometry> {
             let (_, vec) = merged.get_mut(name)?;
             vec.extend_from_slice(&attr.array);
         }
-        let vc = g.get_attribute("position").map(|a| a.count() as u32).unwrap_or(0);
+        let vc = g
+            .get_attribute("position")
+            .map(|a| a.count() as u32)
+            .unwrap_or(0);
         if let Some(idx) = &g.index {
             indices.extend(idx.iter().map(|i| i + vert_offset));
         } else {
@@ -161,7 +180,9 @@ pub fn center(geom: &mut BufferGeometry) {
     let c = bb.center();
     if let Some(attr) = geom.attributes.get_mut("position") {
         for v in attr.array.chunks_exact_mut(3) {
-            v[0] -= c.x; v[1] -= c.y; v[2] -= c.z;
+            v[0] -= c.x;
+            v[1] -= c.y;
+            v[2] -= c.z;
         }
     }
     geom.bounding_box = None;
@@ -172,7 +193,9 @@ pub fn center(geom: &mut BufferGeometry) {
 pub fn scale(geom: &mut BufferGeometry, sx: f32, sy: f32, sz: f32) {
     if let Some(attr) = geom.attributes.get_mut("position") {
         for v in attr.array.chunks_exact_mut(3) {
-            v[0] *= sx; v[1] *= sy; v[2] *= sz;
+            v[0] *= sx;
+            v[1] *= sy;
+            v[2] *= sz;
         }
     }
     geom.bounding_box = None;

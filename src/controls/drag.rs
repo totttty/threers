@@ -1,7 +1,7 @@
+use super::PointerEvent;
 use crate::cameras::Camera;
 use crate::core::{ObjectArena, ObjectId, Raycaster};
 use crate::math::{Vector2, Vector3};
-use super::PointerEvent;
 
 /// Pointer-driven drag. On pointer down with `rotating` true (left mouse), a
 /// ray is cast through the scene; if it hits one of the `draggable` objects,
@@ -16,7 +16,12 @@ pub struct DragControls {
 
 impl DragControls {
     pub fn new(draggable: Vec<ObjectId>) -> Self {
-        Self { draggable, active: None, drag_plane_depth: 0.0, last_ndc: Vector2::ZERO }
+        Self {
+            draggable,
+            active: None,
+            drag_plane_depth: 0.0,
+            last_ndc: Vector2::ZERO,
+        }
     }
 
     /// Call when a pointer button transitions to "down" at NDC coordinate `ndc`.
@@ -41,7 +46,12 @@ impl DragControls {
 
     /// Convert NDC drag delta into a world translation applied to the active object.
     /// Returns the delta the caller should add to `obj.position`.
-    pub fn pointer_move(&mut self, ndc: Vector2, camera: &dyn Camera, ev: PointerEvent) -> Option<(ObjectId, Vector3)> {
+    pub fn pointer_move(
+        &mut self,
+        ndc: Vector2,
+        camera: &dyn Camera,
+        ev: PointerEvent,
+    ) -> Option<(ObjectId, Vector3)> {
         let _ = ev;
         let id = self.active?;
         let view = camera.view_matrix();

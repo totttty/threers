@@ -1,4 +1,4 @@
-use super::{Vector3, Matrix4};
+use super::{Matrix4, Vector3};
 
 /// Line segment in 3D. Mirrors three.js's `Line3`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -9,7 +9,10 @@ pub struct Line3 {
 
 impl Default for Line3 {
     fn default() -> Self {
-        Self { start: Vector3::ZERO, end: Vector3::ZERO }
+        Self {
+            start: Vector3::ZERO,
+            end: Vector3::ZERO,
+        }
     }
 }
 
@@ -44,9 +47,15 @@ impl Line3 {
     pub fn closest_point_to_point_parameter(&self, p: Vector3, clamp_to_line: bool) -> f32 {
         let d = self.delta();
         let denom = d.dot(d);
-        if denom == 0.0 { return 0.0; }
+        if denom == 0.0 {
+            return 0.0;
+        }
         let t = (p - self.start).dot(d) / denom;
-        if clamp_to_line { t.clamp(0.0, 1.0) } else { t }
+        if clamp_to_line {
+            t.clamp(0.0, 1.0)
+        } else {
+            t
+        }
     }
 
     pub fn closest_point_to_point(&self, p: Vector3, clamp_to_line: bool) -> Vector3 {
@@ -66,8 +75,8 @@ fn transform_point(m: &Matrix4, p: Vector3) -> Vector3 {
     let w = e[3] * p.x + e[7] * p.y + e[11] * p.z + e[15];
     let inv_w = if w == 0.0 { 1.0 } else { 1.0 / w };
     Vector3::new(
-        (e[0] * p.x + e[4] * p.y + e[8]  * p.z + e[12]) * inv_w,
-        (e[1] * p.x + e[5] * p.y + e[9]  * p.z + e[13]) * inv_w,
+        (e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12]) * inv_w,
+        (e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13]) * inv_w,
         (e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14]) * inv_w,
     )
 }

@@ -33,10 +33,9 @@
 #[cfg(test)]
 mod tests {
     use super::super::cube_uv::{
-        atlas_lod_origin, extract_cube_faces_from_atlas_lod, pack_cube_uv_atlas,
+        atlas_bilinear_uv, atlas_lod_origin, extract_cube_faces_from_atlas_lod, pack_cube_uv_atlas,
         pmrem_face_uv, pmrem_get_direction, read_atlas_texel, roughness_to_mip_cube_uv,
-        sample_atlas_bilinear, sample_cube_uv_env, atlas_bilinear_uv, PMREM_SLOT_TO_FACE,
-        PMREM_SLOT_TO_FACE_MIP0,
+        sample_atlas_bilinear, sample_cube_uv_env, PMREM_SLOT_TO_FACE, PMREM_SLOT_TO_FACE_MIP0,
     };
     use super::super::pmrem::PmremGenerator;
     use crate::textures::{CubeTexture, TextureFormat};
@@ -136,8 +135,14 @@ mod tests {
     fn pmrem_layer_01_gutter_uv_extends_outside_unit_square() {
         let (u0, v0) = pmrem_face_uv(16, 0, 0);
         let (u1, v1) = pmrem_face_uv(16, 15, 15);
-        assert!(u0 < 0.0 && v0 < 0.0, "corner gutter UV should extend below 0: ({u0}, {v0})");
-        assert!(u1 > 1.0 && v1 > 1.0, "corner gutter UV should extend above 1: ({u1}, {v1})");
+        assert!(
+            u0 < 0.0 && v0 < 0.0,
+            "corner gutter UV should extend below 0: ({u0}, {v0})"
+        );
+        assert!(
+            u1 > 1.0 && v1 > 1.0,
+            "corner gutter UV should extend above 1: ({u1}, {v1})"
+        );
     }
 
     // ── L02 Textures ───────────────────────────────────────────────────────
@@ -187,7 +192,11 @@ mod tests {
         let diag = sample_atlas_bilinear(atlas, [-0.7, 0.0, 0.7], 5.0);
         eprintln!("L04 mip0 +Z {plus_z:?} -X {minus_x:?} diag {diag:?}");
         assert!(plus_z[1] < 0.1, "+Z green {}", plus_z[1]);
-        assert!(minus_x[1] < 0.1, "-X slot (flipEnvMap) green {}", minus_x[1]);
+        assert!(
+            minus_x[1] < 0.1,
+            "-X slot (flipEnvMap) green {}",
+            minus_x[1]
+        );
         assert!(
             (diag[0] - plus_z[0]).abs() > 0.05 || (diag[2] - plus_z[2]).abs() > 0.05,
             "diagonal should differ from +Z center: {diag:?} vs {plus_z:?}"
@@ -238,7 +247,10 @@ mod tests {
             for &f in &table {
                 seen[f] = true;
             }
-            assert!(seen.iter().all(|&v| v), "slot table must be a permutation: {table:?}");
+            assert!(
+                seen.iter().all(|&v| v),
+                "slot table must be a permutation: {table:?}"
+            );
         }
     }
 
@@ -297,7 +309,10 @@ mod tests {
         let atlas = pm.cube_uv_atlas.as_ref().unwrap();
         let c = sample_atlas_bilinear(atlas, [0.0, 0.0, 1.0], 4.0);
         eprintln!("L05 isolated +Z mip_int=4 atlas sample {c:?}");
-        assert!(c[0] > c[1] * 2.0 && c[2] > c[1] * 2.0, "mip1 +Z should stay magenta-dominant, got {c:?}");
+        assert!(
+            c[0] > c[1] * 2.0 && c[2] > c[1] * 2.0,
+            "mip1 +Z should stay magenta-dominant, got {c:?}"
+        );
     }
 
     #[test]
@@ -313,7 +328,10 @@ mod tests {
         let pm = PmremGenerator::generate_pmrem(&parity_cube(32), 32);
         let atlas = pm.cube_uv_atlas.as_ref().unwrap();
         let c = sample_atlas_bilinear(atlas, [0.0, 0.0, 1.0], 4.0);
-        eprintln!("L05 +Z mip_int=4 lin {c:?} three.js column40 {:?}", threejs_ref::PROBE_40_56);
+        eprintln!(
+            "L05 +Z mip_int=4 lin {c:?} three.js column40 {:?}",
+            threejs_ref::PROBE_40_56
+        );
         assert_close3("+Z mip_int=4", c, threejs_ref::PLUS_Z_MIP4_BYTE, EPS);
     }
 
@@ -323,7 +341,11 @@ mod tests {
         let atlas = pm.cube_uv_atlas.as_ref().unwrap();
         let c = sample_atlas_bilinear(atlas, [0.0, 0.0, 1.0], 1.0);
         eprintln!("L05 parity +Z mip_int=1 {c:?} (linear, three.js display G≈0.26)");
-        assert!(c[1] < 0.35, "+Z mip_int=1 green should not overshoot: {}", c[1]);
+        assert!(
+            c[1] < 0.35,
+            "+Z mip_int=1 green should not overshoot: {}",
+            c[1]
+        );
     }
 
     // ── L06 CPU sampling math ──────────────────────────────────────────────
@@ -386,15 +408,28 @@ mod tests {
         let atlas = pm.cube_uv_atlas.as_ref().unwrap();
 
         let env = sample_cube_uv_env(atlas, [0.0, 0.0, 1.0], 0.45);
-        assert_close3("+Z env @ rough 0.45", env, threejs_ref::ENV_PLUS_Z_ROUGH_045, EPS);
+        assert_close3(
+            "+Z env @ rough 0.45",
+            env,
+            threejs_ref::ENV_PLUS_Z_ROUGH_045,
+            EPS,
+        );
 
         let p183 = read_atlas_texel(
-            &atlas.pixels, atlas.width, atlas.height, 183.0 / 335.0, 56.0 / 127.0,
+            &atlas.pixels,
+            atlas.width,
+            atlas.height,
+            183.0 / 335.0,
+            56.0 / 127.0,
         );
         assert_close3("atlas texel (183,56)", p183, threejs_ref::PROBE_183_56, EPS);
 
         let p136 = read_atlas_texel(
-            &atlas.pixels, atlas.width, atlas.height, 136.0 / 335.0, 56.0 / 127.0,
+            &atlas.pixels,
+            atlas.width,
+            atlas.height,
+            136.0 / 335.0,
+            56.0 / 127.0,
         );
         assert_close3("atlas texel (136,56)", p136, threejs_ref::PROBE_136_56, EPS);
     }
@@ -435,15 +470,37 @@ mod tests {
         let atlas = pm.cube_uv_atlas.as_ref().unwrap();
         let env_lin = sample_cube_uv_env(atlas, [0.0, 0.0, 1.0], 0.45);
         let p183 = read_atlas_texel(
-            &atlas.pixels, atlas.width, atlas.height, 183.0 / 335.0, 56.0 / 127.0,
+            &atlas.pixels,
+            atlas.width,
+            atlas.height,
+            183.0 / 335.0,
+            56.0 / 127.0,
         );
         let p136 = read_atlas_texel(
-            &atlas.pixels, atlas.width, atlas.height, 136.0 / 335.0, 56.0 / 127.0,
+            &atlas.pixels,
+            atlas.width,
+            atlas.height,
+            136.0 / 335.0,
+            56.0 / 127.0,
         );
-        eprintln!("L09 gap +Z env ours={env_lin:?} three.js={:?}", threejs_ref::ENV_PLUS_Z_ROUGH_045);
-        eprintln!("L09 gap (183,56) ours={p183:?} three.js={:?}", threejs_ref::PROBE_183_56);
-        eprintln!("L09 gap (136,56) ours={p136:?} three.js={:?}", threejs_ref::PROBE_136_56);
-        assert_close3("+Z env @ rough 0.45", env_lin, threejs_ref::ENV_PLUS_Z_ROUGH_045, EPS);
+        eprintln!(
+            "L09 gap +Z env ours={env_lin:?} three.js={:?}",
+            threejs_ref::ENV_PLUS_Z_ROUGH_045
+        );
+        eprintln!(
+            "L09 gap (183,56) ours={p183:?} three.js={:?}",
+            threejs_ref::PROBE_183_56
+        );
+        eprintln!(
+            "L09 gap (136,56) ours={p136:?} three.js={:?}",
+            threejs_ref::PROBE_136_56
+        );
+        assert_close3(
+            "+Z env @ rough 0.45",
+            env_lin,
+            threejs_ref::ENV_PLUS_Z_ROUGH_045,
+            EPS,
+        );
         assert_close3("atlas texel (183,56)", p183, threejs_ref::PROBE_183_56, EPS);
         assert_close3("atlas texel (136,56)", p136, threejs_ref::PROBE_136_56, EPS);
     }
@@ -542,11 +599,7 @@ mod tests {
             0.6924259382358577,
             0.6957711403799082,
         ];
-        let normal = [
-            -0.09560317121482893,
-            0.3467398597791558,
-            0.9330763651995477,
-        ];
+        let normal = [-0.09560317121482893, 0.3467398597791558, 0.9330763651995477];
         let reflect_env = sample_cube_uv_env(atlas, reflect, roughness.max(0.0525));
         let normal_env = sample_cube_uv_env(atlas, normal, 1.0);
         eprintln!(
@@ -559,7 +612,13 @@ mod tests {
         );
         for mip in [-2i32, -1, 0, 1, 2, 3, 4, 5] {
             let c = sample_atlas_bilinear(atlas, reflect, mip as f32);
-            let (u, v) = atlas_bilinear_uv(atlas.width, atlas.height, atlas.lod_max, reflect, mip as f32);
+            let (u, v) = atlas_bilinear_uv(
+                atlas.width,
+                atlas.height,
+                atlas.lod_max,
+                reflect,
+                mip as f32,
+            );
             let tex = read_atlas_texel(&atlas.pixels, atlas.width, atlas.height, u, v);
             eprintln!("L12 reflect mip{mip} lin {c:?} uv=({u:.4},{v:.4}) tex={tex:?}");
         }
@@ -577,11 +636,7 @@ mod tests {
         );
 
         // Full IBL at grazing pixel (camera at 0,0,3 looking at origin).
-        let hit = [
-            -0.2856030468244868,
-            1.0352198173357866,
-            1.0406567105698623,
-        ];
+        let hit = [-0.2856030468244868, 1.0352198173357866, 1.0406567105698623];
         let cam = [0.0f32, 0.0, 3.0];
         let v = {
             let dx = cam[0] - hit[0];

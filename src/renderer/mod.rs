@@ -4,17 +4,26 @@
 //! each topology (triangles, lines, points, sprites, skinned meshes), uploads
 //! geometry and textures through internal caches, and exposes [`Renderer::apply_postfx`]
 //! for fullscreen effects used by both native [`crate::postprocessing`] and the
-//! wasm [`crate::wasm::WebRenderer`] path.
+//! wasm `WebRenderer` path.
 //!
 //! [`RenderTarget`] / [`CubeRenderTarget`] are offscreen color (+ depth) buffers
 //! compatible with three.js `WebGLRenderTarget` usage in the JS shim.
+//!
+//! On native targets, [`crate::renderer::headless`] provides [`HeadlessRenderer`] for
+//! offscreen RGBA readback without managing a window surface.
 
-mod shader;
 mod gpu_mesh;
 pub mod gpu_texture;
 mod render_target;
 mod renderer;
+mod shader;
 
-pub use renderer::{Renderer, PostFxCamera};
-pub use render_target::{RenderTarget, CubeRenderTarget};
+// Batteries-included headless offscreen renderer (native-only: pollster).
+#[cfg(not(target_arch = "wasm32"))]
+pub mod headless;
+
 pub use gpu_texture::GpuCubeTexture;
+#[cfg(not(target_arch = "wasm32"))]
+pub use headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
+pub use render_target::{CubeRenderTarget, RenderTarget};
+pub use renderer::{PostFxCamera, Renderer};

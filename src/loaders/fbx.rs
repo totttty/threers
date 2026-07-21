@@ -30,15 +30,25 @@ impl FbxLoader {
 fn build_geometry(vertices: &[f32], indices: &[i32]) -> BufferGeometry {
     let mut positions: Vec<f32> = Vec::new();
     if indices.is_empty() {
-        for v in vertices.chunks_exact(3) { positions.extend_from_slice(v); }
+        for v in vertices.chunks_exact(3) {
+            positions.extend_from_slice(v);
+        }
     } else {
         let mut current_polygon: Vec<i32> = Vec::with_capacity(4);
         for &idx in indices {
-            let positive = if idx < 0 { (!idx) as usize } else { idx as usize };
+            let positive = if idx < 0 {
+                (!idx) as usize
+            } else {
+                idx as usize
+            };
             current_polygon.push(positive as i32);
             if idx < 0 {
                 for i in 1..current_polygon.len().saturating_sub(1) {
-                    for &k in &[current_polygon[0], current_polygon[i], current_polygon[i + 1]] {
+                    for &k in &[
+                        current_polygon[0],
+                        current_polygon[i],
+                        current_polygon[i + 1],
+                    ] {
                         let k = k as usize;
                         if k * 3 + 2 < vertices.len() {
                             positions.extend_from_slice(&vertices[k * 3..k * 3 + 3]);
@@ -68,7 +78,11 @@ fn pull_array(src: &str, key: &str) -> Option<Vec<f32>> {
         .split([',', '\n', '\t', ' '].as_ref())
         .filter_map(|t| {
             let t = t.trim();
-            if t.is_empty() { None } else { t.parse().ok() }
+            if t.is_empty() {
+                None
+            } else {
+                t.parse().ok()
+            }
         })
         .collect();
     Some(nums)
@@ -86,7 +100,11 @@ fn pull_int_array(src: &str, key: &str) -> Option<Vec<i32>> {
         .split([',', '\n', '\t', ' '].as_ref())
         .filter_map(|t| {
             let t = t.trim();
-            if t.is_empty() { None } else { t.parse().ok() }
+            if t.is_empty() {
+                None
+            } else {
+                t.parse().ok()
+            }
         })
         .collect();
     Some(nums)
@@ -95,14 +113,22 @@ fn pull_int_array(src: &str, key: &str) -> Option<Vec<i32>> {
 // ---- Binary ----
 
 fn parse_binary(bytes: &[u8]) -> Result<BufferGeometry, FbxError> {
-    if bytes.len() < 27 { return Err(FbxError::BadHeader); }
+    if bytes.len() < 27 {
+        return Err(FbxError::BadHeader);
+    }
     // Header: 21 bytes "Kaydara FBX Binary  " + magic [0x1A, 0x00] + version u32 LE.
     let version = u32::from_le_bytes([bytes[23], bytes[24], bytes[25], bytes[26]]);
     let use_64bit_offsets = version >= 7500;
     let mut p = 27usize;
     let mut found_vertices: Option<Vec<f32>> = None;
     let mut found_indices: Option<Vec<i32>> = None;
-    walk_nodes(bytes, &mut p, use_64bit_offsets, &mut found_vertices, &mut found_indices);
+    walk_nodes(
+        bytes,
+        &mut p,
+        use_64bit_offsets,
+        &mut found_vertices,
+        &mut found_indices,
+    );
     let v = found_vertices.ok_or(FbxError::NoGeometry)?;
     let i = found_indices.unwrap_or_default();
     Ok(build_geometry(&v, &i))
@@ -117,27 +143,52 @@ fn walk_nodes(
 ) {
     loop {
         let header_size = if use_64 { 25 } else { 13 };
-        if *p + header_size > bytes.len() { return; }
+        if *p + header_size > bytes.len() {
+            return;
+        }
         let (end_offset, num_props, _prop_list_len, name_len) = if use_64 {
             let eo = u64::from_le_bytes([
-                bytes[*p], bytes[*p+1], bytes[*p+2], bytes[*p+3],
-                bytes[*p+4], bytes[*p+5], bytes[*p+6], bytes[*p+7],
+                bytes[*p],
+                bytes[*p + 1],
+                bytes[*p + 2],
+                bytes[*p + 3],
+                bytes[*p + 4],
+                bytes[*p + 5],
+                bytes[*p + 6],
+                bytes[*p + 7],
             ]) as usize;
             let np = u64::from_le_bytes([
-                bytes[*p+8], bytes[*p+9], bytes[*p+10], bytes[*p+11],
-                bytes[*p+12], bytes[*p+13], bytes[*p+14], bytes[*p+15],
+                bytes[*p + 8],
+                bytes[*p + 9],
+                bytes[*p + 10],
+                bytes[*p + 11],
+                bytes[*p + 12],
+                bytes[*p + 13],
+                bytes[*p + 14],
+                bytes[*p + 15],
             ]) as usize;
             let pll = u64::from_le_bytes([
-                bytes[*p+16], bytes[*p+17], bytes[*p+18], bytes[*p+19],
-                bytes[*p+20], bytes[*p+21], bytes[*p+22], bytes[*p+23],
+                bytes[*p + 16],
+                bytes[*p + 17],
+                bytes[*p + 18],
+                bytes[*p + 19],
+                bytes[*p + 20],
+                bytes[*p + 21],
+                bytes[*p + 22],
+                bytes[*p + 23],
             ]) as usize;
-            let nl = bytes[*p+24] as usize;
+            let nl = bytes[*p + 24] as usize;
             (eo, np, pll, nl)
         } else {
-            let eo = u32::from_le_bytes([bytes[*p], bytes[*p+1], bytes[*p+2], bytes[*p+3]]) as usize;
-            let np = u32::from_le_bytes([bytes[*p+4], bytes[*p+5], bytes[*p+6], bytes[*p+7]]) as usize;
-            let pll = u32::from_le_bytes([bytes[*p+8], bytes[*p+9], bytes[*p+10], bytes[*p+11]]) as usize;
-            let nl = bytes[*p+12] as usize;
+            let eo = u32::from_le_bytes([bytes[*p], bytes[*p + 1], bytes[*p + 2], bytes[*p + 3]])
+                as usize;
+            let np =
+                u32::from_le_bytes([bytes[*p + 4], bytes[*p + 5], bytes[*p + 6], bytes[*p + 7]])
+                    as usize;
+            let pll =
+                u32::from_le_bytes([bytes[*p + 8], bytes[*p + 9], bytes[*p + 10], bytes[*p + 11]])
+                    as usize;
+            let nl = bytes[*p + 12] as usize;
             (eo, np, pll, nl)
         };
         if end_offset == 0 {
@@ -145,12 +196,16 @@ fn walk_nodes(
             return;
         }
         *p += header_size;
-        if *p + name_len > bytes.len() { return; }
+        if *p + name_len > bytes.len() {
+            return;
+        }
         let name = String::from_utf8_lossy(&bytes[*p..*p + name_len]).to_string();
         *p += name_len;
         let mut props: Vec<FbxProperty> = Vec::with_capacity(num_props);
         for _ in 0..num_props {
-            if *p >= bytes.len() { return; }
+            if *p >= bytes.len() {
+                return;
+            }
             let ty = bytes[*p];
             *p += 1;
             let prop = read_property(bytes, p, ty);
@@ -198,35 +253,58 @@ enum FbxProperty {
 
 fn read_property(bytes: &[u8], p: &mut usize, ty: u8) -> FbxProperty {
     let read_u32 = |bytes: &[u8], p: &mut usize| -> u32 {
-        let v = u32::from_le_bytes([bytes[*p], bytes[*p+1], bytes[*p+2], bytes[*p+3]]);
-        *p += 4; v
+        let v = u32::from_le_bytes([bytes[*p], bytes[*p + 1], bytes[*p + 2], bytes[*p + 3]]);
+        *p += 4;
+        v
     };
     match ty {
         b'C' => {
-            let v = bytes[*p] != 0; *p += 1; FbxProperty::Bool(v)
+            let v = bytes[*p] != 0;
+            *p += 1;
+            FbxProperty::Bool(v)
         }
         b'Y' => {
-            let v = i16::from_le_bytes([bytes[*p], bytes[*p+1]]); *p += 2; FbxProperty::Short(v)
+            let v = i16::from_le_bytes([bytes[*p], bytes[*p + 1]]);
+            *p += 2;
+            FbxProperty::Short(v)
         }
         b'I' => {
-            let v = i32::from_le_bytes([bytes[*p], bytes[*p+1], bytes[*p+2], bytes[*p+3]]);
-            *p += 4; FbxProperty::Int(v)
+            let v = i32::from_le_bytes([bytes[*p], bytes[*p + 1], bytes[*p + 2], bytes[*p + 3]]);
+            *p += 4;
+            FbxProperty::Int(v)
         }
         b'L' => {
             let v = i64::from_le_bytes([
-                bytes[*p], bytes[*p+1], bytes[*p+2], bytes[*p+3],
-                bytes[*p+4], bytes[*p+5], bytes[*p+6], bytes[*p+7],
-            ]); *p += 8; FbxProperty::Long(v)
+                bytes[*p],
+                bytes[*p + 1],
+                bytes[*p + 2],
+                bytes[*p + 3],
+                bytes[*p + 4],
+                bytes[*p + 5],
+                bytes[*p + 6],
+                bytes[*p + 7],
+            ]);
+            *p += 8;
+            FbxProperty::Long(v)
         }
         b'F' => {
-            let v = f32::from_le_bytes([bytes[*p], bytes[*p+1], bytes[*p+2], bytes[*p+3]]);
-            *p += 4; FbxProperty::Float(v)
+            let v = f32::from_le_bytes([bytes[*p], bytes[*p + 1], bytes[*p + 2], bytes[*p + 3]]);
+            *p += 4;
+            FbxProperty::Float(v)
         }
         b'D' => {
             let v = f64::from_le_bytes([
-                bytes[*p], bytes[*p+1], bytes[*p+2], bytes[*p+3],
-                bytes[*p+4], bytes[*p+5], bytes[*p+6], bytes[*p+7],
-            ]); *p += 8; FbxProperty::Double(v)
+                bytes[*p],
+                bytes[*p + 1],
+                bytes[*p + 2],
+                bytes[*p + 3],
+                bytes[*p + 4],
+                bytes[*p + 5],
+                bytes[*p + 6],
+                bytes[*p + 7],
+            ]);
+            *p += 8;
+            FbxProperty::Double(v)
         }
         b'S' | b'R' => {
             let len = read_u32(bytes, p) as usize;
@@ -234,14 +312,23 @@ fn read_property(bytes: &[u8], p: &mut usize, ty: u8) -> FbxProperty {
             *p += len;
             if ty == b'S' {
                 FbxProperty::String(String::from_utf8_lossy(&data).to_string())
-            } else { FbxProperty::Raw(data) }
+            } else {
+                FbxProperty::Raw(data)
+            }
         }
         b'd' | b'f' | b'l' | b'i' | b'b' => {
             let count = read_u32(bytes, p) as usize;
             let encoding = read_u32(bytes, p);
             let comp_len = read_u32(bytes, p) as usize;
             let data: Vec<u8> = if encoding == 0 {
-                let n = match ty { b'd' => 8, b'f' => 4, b'l' => 8, b'i' => 4, b'b' => 1, _ => 4 } * count;
+                let n = match ty {
+                    b'd' => 8,
+                    b'f' => 4,
+                    b'l' => 8,
+                    b'i' => 4,
+                    b'b' => 1,
+                    _ => 4,
+                } * count;
                 let d = bytes[*p..*p + n].to_vec();
                 *p += n;
                 d
@@ -252,25 +339,33 @@ fn read_property(bytes: &[u8], p: &mut usize, ty: u8) -> FbxProperty {
             };
             match ty {
                 b'd' => {
-                    let vs: Vec<f64> = data.chunks_exact(8)
-                        .map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+                    let vs: Vec<f64> = data
+                        .chunks_exact(8)
+                        .map(|c| {
+                            f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
+                        })
                         .collect();
                     FbxProperty::DoubleArray(vs)
                 }
                 b'f' => {
-                    let vs: Vec<f32> = data.chunks_exact(4)
+                    let vs: Vec<f32> = data
+                        .chunks_exact(4)
                         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect();
                     FbxProperty::FloatArray(vs)
                 }
                 b'l' => {
-                    let vs: Vec<i64> = data.chunks_exact(8)
-                        .map(|c| i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]))
+                    let vs: Vec<i64> = data
+                        .chunks_exact(8)
+                        .map(|c| {
+                            i64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]])
+                        })
                         .collect();
                     FbxProperty::LongArray(vs)
                 }
                 b'i' => {
-                    let vs: Vec<i32> = data.chunks_exact(4)
+                    let vs: Vec<i32> = data
+                        .chunks_exact(4)
                         .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                         .collect();
                     FbxProperty::IntArray(vs)

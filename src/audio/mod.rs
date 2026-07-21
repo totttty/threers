@@ -3,14 +3,14 @@
 //! the user (cpal natively, Web Audio in wasm) — this crate only owns the
 //! data shape so other subsystems (scene graph, animation) can reference it.
 
-mod listener;
-mod source;
-mod positional;
 mod analyser;
 mod backend;
+mod listener;
+mod positional;
+mod source;
 
-pub use listener::AudioListener;
-pub use source::Audio;
-pub use positional::PositionalAudio;
 pub use analyser::AudioAnalyser;
 pub use backend::{AudioBackend, NoopBackend};
+pub use listener::AudioListener;
+pub use positional::PositionalAudio;
+pub use source::Audio;

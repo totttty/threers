@@ -28,6 +28,9 @@ impl Default for LineBasicMaterial {
 
 impl LineBasicMaterial {
     pub fn new(color: Color) -> Self {
-        Self { color, ..Default::default() }
+        Self {
+            color,
+            ..Default::default()
+        }
     }
 }

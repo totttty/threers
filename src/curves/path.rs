@@ -1,5 +1,5 @@
+use super::{CubicBezierCurve, Curve2, CurvePath, EllipseCurve, LineCurve, QuadraticBezierCurve};
 use crate::math::Vector2;
-use super::{Curve2, CurvePath, LineCurve, QuadraticBezierCurve, CubicBezierCurve, EllipseCurve};
 
 /// 2D path with a "pen" cursor. Mirrors three.js's `Path` build-up API:
 /// `move_to`, `line_to`, `bezier_curve_to`, `quadratic_curve_to`, `arc`, etc.
@@ -9,12 +9,17 @@ pub struct Path {
 }
 
 impl Default for Path {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Path {
     pub fn new() -> Self {
-        Self { current: Vector2::ZERO, curve_path: CurvePath::new() }
+        Self {
+            current: Vector2::ZERO,
+            curve_path: CurvePath::new(),
+        }
     }
 
     pub fn move_to(&mut self, p: Vector2) -> &mut Self {
@@ -43,7 +48,14 @@ impl Path {
         self
     }
 
-    pub fn arc(&mut self, center: Vector2, radius: f32, a_start: f32, a_end: f32, clockwise: bool) -> &mut Self {
+    pub fn arc(
+        &mut self,
+        center: Vector2,
+        radius: f32,
+        a_start: f32,
+        a_end: f32,
+        clockwise: bool,
+    ) -> &mut Self {
         let c = EllipseCurve::new(center, radius, radius, a_start, a_end, clockwise, 0.0);
         self.curve_path.add(Box::new(c));
         self.current = c.get_point(1.0);
@@ -51,6 +63,7 @@ impl Path {
     }
 
     pub fn get_points(&self, divisions: usize) -> Vec<Vector2> {
-        self.curve_path.get_points(divisions * self.curve_path.curves.len().max(1))
+        self.curve_path
+            .get_points(divisions * self.curve_path.curves.len().max(1))
     }
 }

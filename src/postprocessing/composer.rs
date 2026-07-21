@@ -49,7 +49,13 @@ pub struct EffectComposer {
 }
 
 impl EffectComposer {
-    pub fn new(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, width: u32, height: u32, format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: Arc<wgpu::Device>,
+        queue: Arc<wgpu::Queue>,
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> Self {
         let rt_a = RenderTarget::new(&device, width, height, format);
         let rt_b = RenderTarget::new(&device, width, height, format);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -82,9 +88,13 @@ impl EffectComposer {
         Self {
             passes: Vec::new(),
             render_to_screen: true,
-            width, height, format,
-            device, queue,
-            rt_a, rt_b,
+            width,
+            height,
+            format,
+            device,
+            queue,
+            rt_a,
+            rt_b,
             sampler,
             pass_bgl,
             compiled: Vec::new(),
@@ -104,13 +114,22 @@ impl EffectComposer {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        if (width, height) == (self.width, self.height) { return; }
-        self.width = width; self.height = height;
+        if (width, height) == (self.width, self.height) {
+            return;
+        }
+        self.width = width;
+        self.height = height;
         self.rt_a = RenderTarget::new(&self.device, width, height, self.format);
         self.rt_b = RenderTarget::new(&self.device, width, height, self.format);
     }
 
-    fn build_pipeline(device: &wgpu::Device, pass_bgl: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, frag_src: &str, label: &str) -> wgpu::RenderPipeline {
+    fn build_pipeline(
+        device: &wgpu::Device,
+        pass_bgl: &wgpu::BindGroupLayout,
+        format: wgpu::TextureFormat,
+        frag_src: &str,
+        label: &str,
+    ) -> wgpu::RenderPipeline {
         let full_src = format!("{}\n{}", FULLSCREEN_VS, frag_src);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(label),
@@ -124,11 +143,20 @@ impl EffectComposer {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&layout),
-            vertex: wgpu::VertexState { module: &shader, entry_point: "vs_main", buffers: &[], compilation_options: Default::default() },
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::REPLACE), write_mask: wgpu::ColorWrites::ALL })],
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
@@ -148,15 +176,31 @@ impl EffectComposer {
 
     fn ensure_compiled(&mut self) {
         if self.copy_pipeline.is_none() {
-            self.copy_pipeline = Some(Self::build_pipeline(&self.device, &self.pass_bgl, self.format, super::passes::COPY_FRAG, "threers composer copy"));
+            self.copy_pipeline = Some(Self::build_pipeline(
+                &self.device,
+                &self.pass_bgl,
+                self.format,
+                super::passes::COPY_FRAG,
+                "threers composer copy",
+            ));
         }
-        if !self.compiled_dirty { return; }
+        if !self.compiled_dirty {
+            return;
+        }
         self.compiled.clear();
         for p in &self.passes {
-            if p.is_render() { continue; }
-            let Some(frag) = p.shader() else { continue; };
-            let pipeline = Self::build_pipeline(&self.device, &self.pass_bgl, self.format, frag, p.name());
-            self.compiled.push(CompiledPass { name: p.name(), pipeline });
+            if p.is_render() {
+                continue;
+            }
+            let Some(frag) = p.shader() else {
+                continue;
+            };
+            let pipeline =
+                Self::build_pipeline(&self.device, &self.pass_bgl, self.format, frag, p.name());
+            self.compiled.push(CompiledPass {
+                name: p.name(),
+                pipeline,
+            });
         }
         self.compiled_dirty = false;
     }
@@ -166,8 +210,14 @@ impl EffectComposer {
             label: Some(label),
             layout: &self.pass_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src.color_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&src.color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
             ],
         })
     }
@@ -189,9 +239,17 @@ impl EffectComposer {
         // 2) Ping-pong fullscreen passes between A and B.
         let mut src_is_a = true;
         for cp in &self.compiled {
-            let (src, dst) = if src_is_a { (&self.rt_a, &self.rt_b) } else { (&self.rt_b, &self.rt_a) };
+            let (src, dst) = if src_is_a {
+                (&self.rt_a, &self.rt_b)
+            } else {
+                (&self.rt_b, &self.rt_a)
+            };
             let bg = self.make_bind_group(src, cp.name);
-            let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(cp.name) });
+            let mut enc = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some(cp.name),
+                });
             {
                 let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some(cp.name),
@@ -219,14 +277,21 @@ impl EffectComposer {
         let final_src = if src_is_a { &self.rt_a } else { &self.rt_b };
         let bg = self.make_bind_group(final_src, "composer final copy");
         let copy_pipeline = self.copy_pipeline.as_ref().expect("copy pipeline");
-        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("composer final") });
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("composer final"),
+            });
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("composer final"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: final_target_view,
                     resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,

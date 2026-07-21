@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use crate::math::Color;
 use crate::textures::Texture;
+use std::sync::Arc;
 
 /// Sprite billboard material. Mirrors three.js's `SpriteMaterial`.
 #[derive(Debug, Clone)]
@@ -13,13 +13,21 @@ pub struct SpriteMaterial {
 
 impl Default for SpriteMaterial {
     fn default() -> Self {
-        Self { color: Color::WHITE, opacity: 1.0, rotation: 0.0, map: None }
+        Self {
+            color: Color::WHITE,
+            opacity: 1.0,
+            rotation: 0.0,
+            map: None,
+        }
     }
 }
 
 impl SpriteMaterial {
     pub fn new(color: Color) -> Self {
-        Self { color, ..Default::default() }
+        Self {
+            color,
+            ..Default::default()
+        }
     }
 
     pub fn with_map(mut self, map: Arc<Texture>) -> Self {

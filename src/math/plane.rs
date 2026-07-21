@@ -1,4 +1,4 @@
-use super::{Vector3, Matrix4, Matrix3, Sphere, Box3};
+use super::{Box3, Matrix3, Matrix4, Sphere, Vector3};
 
 /// Plane in Hessian-normal form: dot(normal, p) + constant == 0.
 /// Mirrors three.js's `Plane`.
@@ -10,7 +10,10 @@ pub struct Plane {
 
 impl Default for Plane {
     fn default() -> Self {
-        Self { normal: Vector3::new(1.0, 0.0, 0.0), constant: 0.0 }
+        Self {
+            normal: Vector3::new(1.0, 0.0, 0.0),
+            constant: 0.0,
+        }
     }
 }
 
@@ -20,7 +23,10 @@ impl Plane {
     }
 
     pub fn from_normal_and_coplanar_point(normal: Vector3, point: Vector3) -> Self {
-        Self { normal, constant: -point.dot(normal) }
+        Self {
+            normal,
+            constant: -point.dot(normal),
+        }
     }
 
     pub fn from_coplanar_points(a: Vector3, b: Vector3, c: Vector3) -> Self {
@@ -30,11 +36,17 @@ impl Plane {
 
     pub fn normalize(&self) -> Self {
         let inv = 1.0 / self.normal.length();
-        Self { normal: self.normal * inv, constant: self.constant * inv }
+        Self {
+            normal: self.normal * inv,
+            constant: self.constant * inv,
+        }
     }
 
     pub fn negate(&self) -> Self {
-        Self { normal: -self.normal, constant: -self.constant }
+        Self {
+            normal: -self.normal,
+            constant: -self.constant,
+        }
     }
 
     pub fn distance_to_point(&self, p: Vector3) -> f32 {
@@ -73,16 +85,31 @@ impl Plane {
     }
 
     pub fn intersects_box(&self, b: &Box3) -> bool {
-        let (min_p, max_p) = if self.normal.x > 0.0 { (b.min.x, b.max.x) } else { (b.max.x, b.min.x) };
-        let (min_y, max_y) = if self.normal.y > 0.0 { (b.min.y, b.max.y) } else { (b.max.y, b.min.y) };
-        let (min_z, max_z) = if self.normal.z > 0.0 { (b.min.z, b.max.z) } else { (b.max.z, b.min.z) };
+        let (min_p, max_p) = if self.normal.x > 0.0 {
+            (b.min.x, b.max.x)
+        } else {
+            (b.max.x, b.min.x)
+        };
+        let (min_y, max_y) = if self.normal.y > 0.0 {
+            (b.min.y, b.max.y)
+        } else {
+            (b.max.y, b.min.y)
+        };
+        let (min_z, max_z) = if self.normal.z > 0.0 {
+            (b.min.z, b.max.z)
+        } else {
+            (b.max.z, b.min.z)
+        };
         let min_p = Vector3::new(min_p, min_y, min_z);
         let max_p = Vector3::new(max_p, max_y, max_z);
         self.distance_to_point(min_p) <= 0.0 && self.distance_to_point(max_p) >= 0.0
     }
 
     pub fn translate(&self, offset: Vector3) -> Self {
-        Self { normal: self.normal, constant: self.constant - offset.dot(self.normal) }
+        Self {
+            normal: self.normal,
+            constant: self.constant - offset.dot(self.normal),
+        }
     }
 
     /// `normal_matrix` is `Matrix3::normal_matrix(m)` — caller is expected to precompute it
@@ -91,11 +118,17 @@ impl Plane {
         let owned;
         let nm = match normal_matrix {
             Some(n) => n,
-            None => { owned = Matrix3::normal_matrix(m); &owned }
+            None => {
+                owned = Matrix3::normal_matrix(m);
+                &owned
+            }
         };
         let ref_point = transform_point(m, self.coplanar_point());
         let normal = transform_normal(nm, self.normal).normalize();
-        Self { normal, constant: -ref_point.dot(normal) }
+        Self {
+            normal,
+            constant: -ref_point.dot(normal),
+        }
     }
 }
 
@@ -104,8 +137,8 @@ fn transform_point(m: &Matrix4, p: Vector3) -> Vector3 {
     let w = e[3] * p.x + e[7] * p.y + e[11] * p.z + e[15];
     let inv_w = if w == 0.0 { 1.0 } else { 1.0 / w };
     Vector3::new(
-        (e[0] * p.x + e[4] * p.y + e[8]  * p.z + e[12]) * inv_w,
-        (e[1] * p.x + e[5] * p.y + e[9]  * p.z + e[13]) * inv_w,
+        (e[0] * p.x + e[4] * p.y + e[8] * p.z + e[12]) * inv_w,
+        (e[1] * p.x + e[5] * p.y + e[9] * p.z + e[13]) * inv_w,
         (e[2] * p.x + e[6] * p.y + e[10] * p.z + e[14]) * inv_w,
     )
 }

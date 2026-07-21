@@ -1,5 +1,5 @@
-use std::ops::{Add, Sub, Mul, Neg};
 use super::Vector3;
+use std::ops::{Add, Mul, Neg, Sub};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vector4 {
@@ -10,19 +10,37 @@ pub struct Vector4 {
 }
 
 impl Vector4 {
-    pub const ZERO: Self = Self { x: 0.0, y: 0.0, z: 0.0, w: 0.0 };
-    pub const ONE: Self = Self { x: 1.0, y: 1.0, z: 1.0, w: 1.0 };
+    pub const ZERO: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 0.0,
+    };
+    pub const ONE: Self = Self {
+        x: 1.0,
+        y: 1.0,
+        z: 1.0,
+        w: 1.0,
+    };
 
     pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
         Self { x, y, z, w }
     }
 
     pub fn from_vec3(v: Vector3, w: f32) -> Self {
-        Self { x: v.x, y: v.y, z: v.z, w }
+        Self {
+            x: v.x,
+            y: v.y,
+            z: v.z,
+            w,
+        }
     }
 
     pub fn set(&mut self, x: f32, y: f32, z: f32, w: f32) -> &mut Self {
-        self.x = x; self.y = y; self.z = z; self.w = w;
+        self.x = x;
+        self.y = y;
+        self.z = z;
+        self.w = w;
         self
     }
 
@@ -36,7 +54,11 @@ impl Vector4 {
 
     pub fn normalize(&self) -> Self {
         let len = self.length();
-        if len == 0.0 { Self::ZERO } else { *self * (1.0 / len) }
+        if len == 0.0 {
+            Self::ZERO
+        } else {
+            *self * (1.0 / len)
+        }
     }
 
     pub fn dot(&self, other: Self) -> f32 {
@@ -59,14 +81,24 @@ impl Vector4 {
 impl Add for Vector4 {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
-        Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z, self.w + rhs.w)
+        Self::new(
+            self.x + rhs.x,
+            self.y + rhs.y,
+            self.z + rhs.z,
+            self.w + rhs.w,
+        )
     }
 }
 
 impl Sub for Vector4 {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
-        Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z, self.w - rhs.w)
+        Self::new(
+            self.x - rhs.x,
+            self.y - rhs.y,
+            self.z - rhs.z,
+            self.w - rhs.w,
+        )
     }
 }
 

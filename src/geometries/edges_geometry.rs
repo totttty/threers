@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use crate::core::{BufferGeometry, BufferAttribute};
+use crate::core::{BufferAttribute, BufferGeometry};
 use crate::math::Vector3;
+use std::collections::HashMap;
 
 pub struct EdgesGeometry;
 
@@ -33,20 +33,26 @@ impl EdgesGeometry {
         };
 
         let mut normals: Vec<Vector3> = Vec::with_capacity(triangles.len());
-        for t in &triangles { normals.push(face_normal(t)); }
+        for t in &triangles {
+            normals.push(face_normal(t));
+        }
 
-        let edges_of = |t: &[u32; 3]| [
-            ordered_pair(t[0], t[1]),
-            ordered_pair(t[1], t[2]),
-            ordered_pair(t[2], t[0]),
-        ];
+        let edges_of = |t: &[u32; 3]| {
+            [
+                ordered_pair(t[0], t[1]),
+                ordered_pair(t[1], t[2]),
+                ordered_pair(t[2], t[0]),
+            ]
+        };
 
         // Track shared edges and their two triangles.
         let mut shared: HashMap<(u32, u32), (usize, Option<usize>)> = HashMap::new();
         for (ti, t) in triangles.iter().enumerate() {
             for e in edges_of(t) {
                 let entry = shared.entry(e).or_insert((ti, None));
-                if entry.0 != ti && entry.1.is_none() { entry.1 = Some(ti); }
+                if entry.0 != ti && entry.1.is_none() {
+                    entry.1 = Some(ti);
+                }
             }
         }
 
@@ -55,7 +61,9 @@ impl EdgesGeometry {
                 None => keep.push(*e), // border edge
                 Some(t1_idx) => {
                     let d = normals[*t0].dot(normals[*t1_idx]);
-                    if d < cos_thresh { keep.push(*e); }
+                    if d < cos_thresh {
+                        keep.push(*e);
+                    }
                 }
             }
         }
@@ -92,7 +100,11 @@ impl WireframeGeometry {
 
         let mut seen: HashMap<(u32, u32), ()> = HashMap::new();
         for t in &triangles {
-            for e in [ordered_pair(t[0], t[1]), ordered_pair(t[1], t[2]), ordered_pair(t[2], t[0])] {
+            for e in [
+                ordered_pair(t[0], t[1]),
+                ordered_pair(t[1], t[2]),
+                ordered_pair(t[2], t[0]),
+            ] {
                 seen.entry(e).or_insert(());
             }
         }
@@ -111,7 +123,11 @@ impl WireframeGeometry {
 }
 
 fn ordered_pair(a: u32, b: u32) -> (u32, u32) {
-    if a < b { (a, b) } else { (b, a) }
+    if a < b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }
 
 fn empty_lines() -> BufferGeometry {

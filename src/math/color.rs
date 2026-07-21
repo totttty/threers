@@ -6,11 +6,31 @@ pub struct Color {
 }
 
 impl Color {
-    pub const WHITE: Self = Self { r: 1.0, g: 1.0, b: 1.0 };
-    pub const BLACK: Self = Self { r: 0.0, g: 0.0, b: 0.0 };
-    pub const RED:   Self = Self { r: 1.0, g: 0.0, b: 0.0 };
-    pub const GREEN: Self = Self { r: 0.0, g: 1.0, b: 0.0 };
-    pub const BLUE:  Self = Self { r: 0.0, g: 0.0, b: 1.0 };
+    pub const WHITE: Self = Self {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+    };
+    pub const BLACK: Self = Self {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+    };
+    pub const RED: Self = Self {
+        r: 1.0,
+        g: 0.0,
+        b: 0.0,
+    };
+    pub const GREEN: Self = Self {
+        r: 0.0,
+        g: 1.0,
+        b: 0.0,
+    };
+    pub const BLUE: Self = Self {
+        r: 0.0,
+        g: 0.0,
+        b: 1.0,
+    };
 
     pub const fn new(r: f32, g: f32, b: f32) -> Self {
         Self { r, g, b }
@@ -22,7 +42,11 @@ impl Color {
     /// linear→sRGB curve on every color literal.
     pub fn from_hex(hex: u32) -> Self {
         fn srgb_to_linear(s: f32) -> f32 {
-            if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
         }
         Self {
             r: srgb_to_linear(((hex >> 16) & 0xff) as f32 / 255.0),
@@ -37,5 +61,7 @@ impl Color {
 }
 
 impl Default for Color {
-    fn default() -> Self { Self::WHITE }
+    fn default() -> Self {
+        Self::WHITE
+    }
 }

@@ -1,5 +1,5 @@
 use crate::core::{BufferAttribute, BufferGeometry};
-use crate::curves::{Curve2, Shape, earcut};
+use crate::curves::{earcut, Curve2, Shape};
 
 pub struct ExtrudeGeometry;
 
@@ -9,7 +9,10 @@ impl ExtrudeGeometry {
     /// triangulated with a fan from the first vertex (assumes a convex
     /// outline — three.js's earcut-based triangulation lands later).
     pub fn new(shape: &Shape, depth: f32, samples_per_segment: usize) -> BufferGeometry {
-        let pts2 = shape.outline.curve_path.get_points(samples_per_segment.max(2));
+        let pts2 = shape
+            .outline
+            .curve_path
+            .get_points(samples_per_segment.max(2));
         let n = pts2.len();
         if n < 3 {
             return BufferGeometry::new();
@@ -58,15 +61,17 @@ impl ExtrudeGeometry {
             positions.extend_from_slice(&[b.x, b.y, 0.0]);
             positions.extend_from_slice(&[b.x, b.y, depth]);
             positions.extend_from_slice(&[a.x, a.y, depth]);
-            for _ in 0..4 { normals.extend_from_slice(&[nx, ny, 0.0]); }
+            for _ in 0..4 {
+                normals.extend_from_slice(&[nx, ny, 0.0]);
+            }
             uvs.extend_from_slice(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
             indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
 
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        g.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        g.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        g.set_attribute("normal", BufferAttribute::new(normals, 3));
+        g.set_attribute("uv", BufferAttribute::new(uvs, 2));
         g.set_index(indices);
         g
     }

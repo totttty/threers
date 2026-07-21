@@ -11,10 +11,14 @@ pub struct MarchingCubes {
 }
 
 impl MarchingCubes {
-    pub fn new(resolution: usize, size: Vector3) -> Self { Self { resolution, size } }
+    pub fn new(resolution: usize, size: Vector3) -> Self {
+        Self { resolution, size }
+    }
 
     pub fn extract<F>(&self, iso: f32, field: F) -> BufferGeometry
-    where F: Fn(f32, f32, f32) -> f32 {
+    where
+        F: Fn(f32, f32, f32) -> f32,
+    {
         let res = self.resolution.max(2);
         let step_x = self.size.x / res as f32;
         let step_y = self.size.y / res as f32;
@@ -43,13 +47,13 @@ impl MarchingCubes {
             for j in 0..res {
                 for i in 0..res {
                     let corners = [
-                        grid[idx(i,     j,     k    )],
-                        grid[idx(i + 1, j,     k    )],
-                        grid[idx(i,     j + 1, k    )],
-                        grid[idx(i + 1, j + 1, k    )],
-                        grid[idx(i,     j,     k + 1)],
-                        grid[idx(i + 1, j,     k + 1)],
-                        grid[idx(i,     j + 1, k + 1)],
+                        grid[idx(i, j, k)],
+                        grid[idx(i + 1, j, k)],
+                        grid[idx(i, j + 1, k)],
+                        grid[idx(i + 1, j + 1, k)],
+                        grid[idx(i, j, k + 1)],
+                        grid[idx(i + 1, j, k + 1)],
+                        grid[idx(i, j + 1, k + 1)],
                         grid[idx(i + 1, j + 1, k + 1)],
                     ];
                     let mut crossings = Vec::new();
@@ -80,7 +84,9 @@ impl MarchingCubes {
                             ]);
                         }
                     }
-                    if crossings.len() < 3 { continue; }
+                    if crossings.len() < 3 {
+                        continue;
+                    }
                     // Fan-triangulate the crossings (rough surface-net).
                     let center = [
                         crossings.iter().map(|p| p[0]).sum::<f32>() / crossings.len() as f32,
@@ -107,7 +113,16 @@ impl MarchingCubes {
     }
 }
 
-fn corner_pos(c: usize, i: usize, j: usize, k: usize, sx: f32, sy: f32, sz: f32, res: usize) -> [f32; 3] {
+fn corner_pos(
+    c: usize,
+    i: usize,
+    j: usize,
+    k: usize,
+    sx: f32,
+    sy: f32,
+    sz: f32,
+    res: usize,
+) -> [f32; 3] {
     let dx = if c & 1 != 0 { 1 } else { 0 };
     let dy = if c & 2 != 0 { 1 } else { 0 };
     let dz = if c & 4 != 0 { 1 } else { 0 };

@@ -1,18 +1,23 @@
+use crate::core::{BufferAttribute, BufferGeometry};
 use std::f32::consts::PI;
-use crate::core::{BufferGeometry, BufferAttribute};
 
 pub struct CircleGeometry;
 
 impl CircleGeometry {
     /// Filled disk in the XY plane (normal +Z). `segments` controls the rim
     /// vertex count. `theta_start` and `theta_length` are radians.
-    pub fn new(radius: f32, segments: usize, theta_start: f32, theta_length: f32) -> BufferGeometry {
+    pub fn new(
+        radius: f32,
+        segments: usize,
+        theta_start: f32,
+        theta_length: f32,
+    ) -> BufferGeometry {
         let n = segments.max(3);
 
         let mut positions = Vec::with_capacity((n + 2) * 3);
-        let mut normals   = Vec::with_capacity((n + 2) * 3);
-        let mut uvs       = Vec::with_capacity((n + 2) * 2);
-        let mut indices   = Vec::with_capacity(n * 3);
+        let mut normals = Vec::with_capacity((n + 2) * 3);
+        let mut uvs = Vec::with_capacity((n + 2) * 2);
+        let mut indices = Vec::with_capacity(n * 3);
 
         // Center vertex.
         positions.extend_from_slice(&[0.0, 0.0, 0.0]);
@@ -35,8 +40,8 @@ impl CircleGeometry {
 
         let mut geom = BufferGeometry::new();
         geom.set_attribute("position", BufferAttribute::new(positions, 3));
-        geom.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        geom.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        geom.set_attribute("normal", BufferAttribute::new(normals, 3));
+        geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
         geom
     }

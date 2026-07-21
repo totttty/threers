@@ -72,8 +72,16 @@ impl MeshBvh {
         let mut nodes = Vec::with_capacity(node_count);
         for i in 0..node_count {
             let base = i * 8;
-            let min = Vector3::new(node_buffer[base], node_buffer[base + 1], node_buffer[base + 2]);
-            let max = Vector3::new(node_buffer[base + 3], node_buffer[base + 4], node_buffer[base + 5]);
+            let min = Vector3::new(
+                node_buffer[base],
+                node_buffer[base + 1],
+                node_buffer[base + 2],
+            );
+            let max = Vector3::new(
+                node_buffer[base + 3],
+                node_buffer[base + 4],
+                node_buffer[base + 5],
+            );
             let meta0 = node_buffer[base + 6];
             let meta1 = node_buffer[base + 7];
             let is_leaf = meta0 < 0.0;
@@ -202,14 +210,26 @@ impl MeshBvh {
         hits
     }
 
-    pub fn raycast_first(&self, ray: &Ray, near: f32, far: f32, backface_culling: bool) -> Option<BvhHit> {
+    pub fn raycast_first(
+        &self,
+        ray: &Ray,
+        near: f32,
+        far: f32,
+        backface_culling: bool,
+    ) -> Option<BvhHit> {
         let mut best: Option<BvhHit> = None;
         self.raycast_node_first(0, ray, near, far, backface_culling, &mut best);
         best
     }
 
     /// Raycast side constants (mirror three.js Material.side).
-    pub fn raycast_first_with_side(&self, ray: &Ray, near: f32, far: f32, side: u32) -> Option<BvhHit> {
+    pub fn raycast_first_with_side(
+        &self,
+        ray: &Ray,
+        near: f32,
+        far: f32,
+        side: u32,
+    ) -> Option<BvhHit> {
         let cull = match side {
             super::FRONT_SIDE => true,
             super::BACK_SIDE => false,
@@ -228,11 +248,19 @@ impl MeshBvh {
                 !tri.is_front_facing(ray.direction)
             });
         }
-        hits.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            a.distance
+                .partial_cmp(&b.distance)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.into_iter().next()
     }
 
-    pub fn bvhcast(&self, other: &MeshBvh, matrix_to_local: &crate::math::Matrix4) -> Vec<(usize, usize)> {
+    pub fn bvhcast(
+        &self,
+        other: &MeshBvh,
+        matrix_to_local: &crate::math::Matrix4,
+    ) -> Vec<(usize, usize)> {
         super::bvhcast::bvhcast(self, other, matrix_to_local)
     }
 
@@ -416,11 +444,23 @@ impl MeshBvh {
         } else {
             self.raycast_node_first(node.left_or_offset, ray, near, far, backface_culling, best);
             let far_limit = best.map(|h| h.distance).unwrap_or(far);
-            self.raycast_node_first(node.right_or_count, ray, near, far_limit, backface_culling, best);
+            self.raycast_node_first(
+                node.right_or_count,
+                ray,
+                near,
+                far_limit,
+                backface_culling,
+                best,
+            );
         }
     }
 
-    fn intersect_triangle(&self, tri_idx: usize, ray: &Ray, backface_culling: bool) -> Option<BvhHit> {
+    fn intersect_triangle(
+        &self,
+        tri_idx: usize,
+        ray: &Ray,
+        backface_culling: bool,
+    ) -> Option<BvhHit> {
         let (ia, ib, ic) = self.triangle_indices[tri_idx];
         let tri = Triangle::new(
             read_vec(&self.positions, ia),
@@ -448,7 +488,11 @@ fn read_vec(positions: &[f32], vi: u32) -> Vector3 {
 }
 
 fn read_tri(positions: &[f32], tri: (u32, u32, u32)) -> (Vector3, Vector3, Vector3) {
-    (read_vec(positions, tri.0), read_vec(positions, tri.1), read_vec(positions, tri.2))
+    (
+        read_vec(positions, tri.0),
+        read_vec(positions, tri.1),
+        read_vec(positions, tri.2),
+    )
 }
 
 fn triangle_bounds(positions: &[f32], tri: (u32, u32, u32)) -> Box3 {
@@ -460,8 +504,11 @@ fn triangle_bounds(positions: &[f32], tri: (u32, u32, u32)) -> Box3 {
 }
 
 fn sphere_contains_triangle(sphere: &Sphere, a: Vector3, b: Vector3, c: Vector3) -> bool {
-    sphere.contains_point(a) || sphere.contains_point(b) || sphere.contains_point(c)
-        || closest_point_on_triangle(sphere.center, a, b, c).distance_to(sphere.center) <= sphere.radius
+    sphere.contains_point(a)
+        || sphere.contains_point(b)
+        || sphere.contains_point(c)
+        || closest_point_on_triangle(sphere.center, a, b, c).distance_to(sphere.center)
+            <= sphere.radius
 }
 
 /// Closest point on triangle ABC to point P (Ericson, Real-Time Collision Detection).
@@ -513,7 +560,7 @@ mod tests {
     use crate::core::{BufferAttribute, BufferGeometry, Mesh, Object3D, ObjectArena, Raycaster};
     use crate::materials::{BasicMaterial, Material};
     use crate::math::Color;
-    use crate::mesh_bvh::{BuildOptions, FRONT_SIDE, BACK_SIDE, DOUBLE_SIDE};
+    use crate::mesh_bvh::{BuildOptions, BACK_SIDE, DOUBLE_SIDE, FRONT_SIDE};
 
     fn unit_triangle_geometry() -> BufferGeometry {
         let mut g = BufferGeometry::new();
@@ -530,15 +577,15 @@ mod tests {
             "position",
             BufferAttribute::new(
                 vec![
-                    -1.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0,
-                    -1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0,
+                    -1.0, -1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, -1.0, -1.0, -1.0,
+                    1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0,
                 ],
                 3,
             ),
         );
         g.set_index(vec![
-            0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 0, 4, 7, 0, 7, 3, 1, 5, 6, 1, 6, 2, 3, 2, 6, 3,
-            6, 7, 0, 1, 5, 0, 5, 4,
+            0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 0, 4, 7, 0, 7, 3, 1, 5, 6, 1, 6, 2, 3, 2, 6, 3, 6,
+            7, 0, 1, 5, 0, 5, 4,
         ]);
         g
     }
@@ -589,13 +636,23 @@ mod tests {
         let data = bvh.serialize();
         let restored = MeshBvh::deserialize(data).expect("deserialize");
         let ray = Ray::new(Vector3::new(0.0, 0.0, -5.0), Vector3::new(0.0, 0.0, 1.0));
-        assert_eq!(bvh.raycast(&ray, 0.0, f32::INFINITY, false).len(), restored.raycast(&ray, 0.0, f32::INFINITY, false).len());
+        assert_eq!(
+            bvh.raycast(&ray, 0.0, f32::INFINITY, false).len(),
+            restored.raycast(&ray, 0.0, f32::INFINITY, false).len()
+        );
     }
 
     #[test]
     fn resolve_triangle_index_roundtrip() {
         let geom = indexed_cube_geometry();
-        let bvh = MeshBvh::build(&geom, BuildOptions { indirect: true, ..Default::default() }).expect("bvh");
+        let bvh = MeshBvh::build(
+            &geom,
+            BuildOptions {
+                indirect: true,
+                ..Default::default()
+            },
+        )
+        .expect("bvh");
         for i in 0..bvh.triangle_count() {
             let resolved = bvh.resolve_triangle_index(i).expect("resolve");
             assert_eq!(resolved, bvh.triangle_order()[i]);

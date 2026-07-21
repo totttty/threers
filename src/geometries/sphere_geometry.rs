@@ -1,5 +1,5 @@
+use crate::core::{BufferAttribute, BufferGeometry};
 use std::f32::consts::PI;
-use crate::core::{BufferGeometry, BufferAttribute};
 
 pub struct SphereGeometry;
 
@@ -7,7 +7,15 @@ impl SphereGeometry {
     /// UV sphere matching three.js `SphereGeometry` defaults (`phiStart=0`,
     /// `phiLength=2π`, `thetaStart=0`, `thetaLength=π`).
     pub fn new(radius: f32, width_segments: usize, height_segments: usize) -> BufferGeometry {
-        Self::with_range(radius, width_segments, height_segments, 0.0, PI * 2.0, 0.0, PI)
+        Self::with_range(
+            radius,
+            width_segments,
+            height_segments,
+            0.0,
+            PI * 2.0,
+            0.0,
+            PI,
+        )
     }
 
     pub fn with_range(

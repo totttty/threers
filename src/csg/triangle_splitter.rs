@@ -174,10 +174,7 @@ impl TriangleSplitter {
                 }
             }
 
-            if !coplanar_edge
-                && intersects == 2
-                && found_edge.distance() > COPLANAR_EPSILON
-            {
+            if !coplanar_edge && intersects == 2 && found_edge.distance() > COPLANAR_EPSILON {
                 if vertex_split_end != -1 {
                     let vertex_split_end = ((vertex_split_end + 1) % 3) as usize;
 

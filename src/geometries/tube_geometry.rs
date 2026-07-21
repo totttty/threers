@@ -1,7 +1,7 @@
-use std::f32::consts::PI;
 use crate::core::{BufferAttribute, BufferGeometry};
 use crate::curves::Curve3;
 use crate::math::Vector3;
+use std::f32::consts::PI;
 
 pub struct TubeGeometry;
 
@@ -22,9 +22,9 @@ impl TubeGeometry {
         let frames = compute_frames(path, ts);
 
         let mut positions = Vec::with_capacity((ts + 1) * (rs + 1) * 3);
-        let mut normals   = Vec::with_capacity((ts + 1) * (rs + 1) * 3);
-        let mut uvs       = Vec::with_capacity((ts + 1) * (rs + 1) * 2);
-        let mut indices   = Vec::new();
+        let mut normals = Vec::with_capacity((ts + 1) * (rs + 1) * 3);
+        let mut uvs = Vec::with_capacity((ts + 1) * (rs + 1) * 2);
+        let mut indices = Vec::new();
 
         for i in 0..=ts {
             let p = centers[i];
@@ -57,8 +57,8 @@ impl TubeGeometry {
 
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        g.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        g.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        g.set_attribute("normal", BufferAttribute::new(normals, 3));
+        g.set_attribute("uv", BufferAttribute::new(uvs, 2));
         g.set_index(indices);
         g
     }
@@ -73,7 +73,11 @@ fn compute_frames(path: &dyn Curve3, ts: usize) -> Vec<(Vector3, Vector3)> {
     }
     // Initial normal: pick any vector not parallel to tangent.
     let t0 = tangents[0];
-    let helper = if t0.y.abs() < 0.999 { Vector3::new(0.0, 1.0, 0.0) } else { Vector3::new(1.0, 0.0, 0.0) };
+    let helper = if t0.y.abs() < 0.999 {
+        Vector3::new(0.0, 1.0, 0.0)
+    } else {
+        Vector3::new(1.0, 0.0, 0.0)
+    };
     let mut normal = t0.cross(helper).normalize();
     let mut binormal = t0.cross(normal).normalize();
     let mut frames = Vec::with_capacity(ts + 1);

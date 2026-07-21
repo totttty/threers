@@ -28,7 +28,10 @@ impl Default for PhongMaterial {
 
 impl PhongMaterial {
     pub fn new(color: Color) -> Self {
-        Self { color, ..Default::default() }
+        Self {
+            color,
+            ..Default::default()
+        }
     }
 
     pub fn with_specular(mut self, specular: Color, shininess: f32) -> Self {

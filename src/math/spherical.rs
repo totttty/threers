@@ -11,7 +11,11 @@ pub struct Spherical {
 
 impl Default for Spherical {
     fn default() -> Self {
-        Self { radius: 1.0, phi: 0.0, theta: 0.0 }
+        Self {
+            radius: 1.0,
+            phi: 0.0,
+            theta: 0.0,
+        }
     }
 }
 
@@ -27,7 +31,11 @@ impl Spherical {
     pub fn from_cartesian_coords(x: f32, y: f32, z: f32) -> Self {
         let radius = (x * x + y * y + z * z).sqrt();
         if radius == 0.0 {
-            return Self { radius: 0.0, phi: 0.0, theta: 0.0 };
+            return Self {
+                radius: 0.0,
+                phi: 0.0,
+                theta: 0.0,
+            };
         }
         Self {
             radius,

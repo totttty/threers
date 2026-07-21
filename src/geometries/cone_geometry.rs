@@ -1,6 +1,6 @@
-use std::f32::consts::PI;
-use crate::core::BufferGeometry;
 use super::CylinderGeometry;
+use crate::core::BufferGeometry;
+use std::f32::consts::PI;
 
 pub struct ConeGeometry;
 
@@ -15,7 +15,16 @@ impl ConeGeometry {
         theta_start: f32,
         theta_length: f32,
     ) -> BufferGeometry {
-        CylinderGeometry::new(0.0, radius, height, radial_segments, height_segments, open_ended, theta_start, theta_length)
+        CylinderGeometry::new(
+            0.0,
+            radius,
+            height,
+            radial_segments,
+            height_segments,
+            open_ended,
+            theta_start,
+            theta_length,
+        )
     }
 
     pub fn default_(radius: f32, height: f32) -> BufferGeometry {

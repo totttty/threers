@@ -8,13 +8,19 @@ pub struct Layers {
 }
 
 impl Default for Layers {
-    fn default() -> Self { Self { mask: 1 } }
+    fn default() -> Self {
+        Self { mask: 1 }
+    }
 }
 
 impl Layers {
-    pub const fn new() -> Self { Self { mask: 1 } }
+    pub const fn new() -> Self {
+        Self { mask: 1 }
+    }
 
-    pub const fn with_mask(mask: u32) -> Self { Self { mask } }
+    pub const fn with_mask(mask: u32) -> Self {
+        Self { mask }
+    }
 
     pub fn set(&mut self, channel: u8) -> &mut Self {
         self.mask = 1u32 << (channel & 31);

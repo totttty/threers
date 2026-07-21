@@ -11,15 +11,23 @@ pub struct Css3dRenderer {
 }
 
 impl Css3dRenderer {
-    pub fn new(width: u32, height: u32) -> Self { Self { width, height } }
+    pub fn new(width: u32, height: u32) -> Self {
+        Self { width, height }
+    }
 
-    pub fn collect_named_transforms(&self, scene: &mut Scene, camera: &dyn Camera) -> Vec<(String, [f32; 16])> {
+    pub fn collect_named_transforms(
+        &self,
+        scene: &mut Scene,
+        camera: &dyn Camera,
+    ) -> Vec<(String, [f32; 16])> {
         scene.update_world();
         let view = camera.view_matrix();
         let mut out = Vec::new();
         let root = scene.root;
         scene.arena.traverse_visible(root, &mut |_, obj| {
-            if obj.name.is_empty() { return; }
+            if obj.name.is_empty() {
+                return;
+            }
             let m = view.multiply(&obj.matrix_world);
             out.push((obj.name.clone(), m.elements));
         });

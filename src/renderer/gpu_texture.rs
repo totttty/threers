@@ -1,7 +1,9 @@
 #![allow(dead_code)]
 
+use crate::textures::{
+    CubeTexture, CubeUvAtlas, Texture, TextureFilter, TextureFormat, TextureWrap,
+};
 use std::sync::Arc;
-use crate::textures::{Texture, TextureFormat, TextureFilter, TextureWrap, CubeTexture, CubeUvAtlas};
 
 /// WebGPU `write_texture` requires `bytes_per_row` to be a multiple of 256 when height > 1.
 const TEXTURE_ROW_ALIGN: u32 = 256;
@@ -125,7 +127,8 @@ impl GpuCubeTexture {
             (wgpu::TextureFormat::Rgba16Float, bytes, bpr)
         } else {
             let bpp = 4u32;
-            let (bytes, bpr) = pad_rows_for_upload(atlas.pixels.as_ref(), atlas.width, atlas.height, bpp);
+            let (bytes, bpr) =
+                pad_rows_for_upload(atlas.pixels.as_ref(), atlas.width, atlas.height, bpp);
             (wgpu_fmt, bytes, bpr)
         };
         let uv_tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -218,7 +221,11 @@ impl GpuCubeTexture {
                 wgpu::ImageCopyTexture {
                     texture: &texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 },
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: layer as u32,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 face,
@@ -227,7 +234,11 @@ impl GpuCubeTexture {
                     bytes_per_row: Some(bytes_per_row),
                     rows_per_image: Some(size),
                 },
-                wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: 1,
+                },
             );
         }
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -235,7 +246,12 @@ impl GpuCubeTexture {
             dimension: Some(wgpu::TextureViewDimension::Cube),
             ..Default::default()
         });
-        Self { texture, view, cube_uv_texture: None, cube_uv_view: None }
+        Self {
+            texture,
+            view,
+            cube_uv_texture: None,
+            cube_uv_view: None,
+        }
     }
 
     fn upload_mip_faces(
@@ -274,7 +290,11 @@ impl GpuCubeTexture {
                     wgpu::ImageCopyTexture {
                         texture: &texture,
                         mip_level: level as u32,
-                        origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 },
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: layer as u32,
+                        },
                         aspect: wgpu::TextureAspect::All,
                     },
                     face,
@@ -283,7 +303,11 @@ impl GpuCubeTexture {
                         bytes_per_row: Some(bytes_per_row),
                         rows_per_image: Some(size),
                     },
-                    wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+                    wgpu::Extent3d {
+                        width: size,
+                        height: size,
+                        depth_or_array_layers: 1,
+                    },
                 );
             }
         }
@@ -292,7 +316,12 @@ impl GpuCubeTexture {
             dimension: Some(wgpu::TextureViewDimension::Cube),
             ..Default::default()
         });
-        Self { texture, view, cube_uv_texture: None, cube_uv_view: None }
+        Self {
+            texture,
+            view,
+            cube_uv_texture: None,
+            cube_uv_view: None,
+        }
     }
 }
 

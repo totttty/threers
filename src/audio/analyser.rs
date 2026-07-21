@@ -10,11 +10,16 @@ pub struct AudioAnalyser {
 
 impl AudioAnalyser {
     pub fn new(fft_size: u32) -> Self {
-        Self { fft_size, frequency_data: vec![0.0; (fft_size / 2) as usize] }
+        Self {
+            fft_size,
+            frequency_data: vec![0.0; (fft_size / 2) as usize],
+        }
     }
 
     pub fn average_frequency(&self) -> f32 {
-        if self.frequency_data.is_empty() { return 0.0; }
+        if self.frequency_data.is_empty() {
+            return 0.0;
+        }
         self.frequency_data.iter().sum::<f32>() / self.frequency_data.len() as f32
     }
 }

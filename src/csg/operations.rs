@@ -4,24 +4,26 @@ use crate::core::{BufferAttribute, BufferGeometry};
 use crate::math::{Matrix3, Triangle};
 
 use super::attribute_data::{AttrSet, TypedAttributeData};
+use super::brush::CsgBrush;
 use super::constants::*;
 use super::geometry_prep::{index_at, read_position, tri_count};
-use super::brush::CsgBrush;
 use super::hit_side::{
-    get_hit_side_js, get_hit_side_with_coplanar_check_js, get_operation_action,
-    matrix_b_into_a,
+    get_hit_side_js, get_hit_side_with_coplanar_check_js, get_operation_action, matrix_b_into_a,
 };
 use super::intersection_map::IntersectionMap;
 use super::js_topology::{
-    interp_bary_js, js_tri_from_indices, matrix_a_to_b_brushes, read_position_js,
-    JsMatrix3, JsMatrix4, JsVec3, SplitBary,
+    interp_bary_js, js_tri_from_indices, matrix_a_to_b_brushes, read_position_js, JsMatrix3,
+    JsMatrix4, JsVec3, SplitBary,
 };
 use super::triangle_splitter::TriangleSplitter;
 use super::triangle_utils::is_tri_degenerate;
 
 const FLOATING_COPLANAR_EPSILON: f32 = 1e-14;
 
-pub fn collect_intersecting_triangles(a: &CsgBrush, b: &CsgBrush) -> (IntersectionMap, IntersectionMap) {
+pub fn collect_intersecting_triangles(
+    a: &CsgBrush,
+    b: &CsgBrush,
+) -> (IntersectionMap, IntersectionMap) {
     let mut a_map = IntersectionMap::new();
     let mut b_map = IntersectionMap::new();
     let matrix = matrix_b_into_a(&a.matrix_world, &b.matrix_world);
@@ -79,14 +81,50 @@ pub fn perform_operation(
     b.prepare_geometry();
     let (a_inter, b_inter) = collect_intersecting_triangles(a, b);
     let group_offset_a = if use_groups { 0 } else { -1 };
-    perform_split_triangle_operations(a, b, &a_inter, operations, false, splitter, attribute_data, group_offset_a);
-    perform_whole_triangle_operations(a, b, &a_inter, operations, false, attribute_data, group_offset_a);
+    perform_split_triangle_operations(
+        a,
+        b,
+        &a_inter,
+        operations,
+        false,
+        splitter,
+        attribute_data,
+        group_offset_a,
+    );
+    perform_whole_triangle_operations(
+        a,
+        b,
+        &a_inter,
+        operations,
+        false,
+        attribute_data,
+        group_offset_a,
+    );
 
-    let non_hollow = operations.iter().any(|&op| op != HOLLOW_INTERSECTION && op != HOLLOW_SUBTRACTION);
+    let non_hollow = operations
+        .iter()
+        .any(|&op| op != HOLLOW_INTERSECTION && op != HOLLOW_SUBTRACTION);
     if non_hollow {
         let group_offset_b = if use_groups { 1 } else { -1 };
-        perform_split_triangle_operations(b, a, &b_inter, operations, true, splitter, attribute_data, group_offset_b);
-        perform_whole_triangle_operations(b, a, &b_inter, operations, true, attribute_data, group_offset_b);
+        perform_split_triangle_operations(
+            b,
+            a,
+            &b_inter,
+            operations,
+            true,
+            splitter,
+            attribute_data,
+            group_offset_b,
+        );
+        perform_whole_triangle_operations(
+            b,
+            a,
+            &b_inter,
+            operations,
+            true,
+            attribute_data,
+            group_offset_b,
+        );
     }
 }
 
@@ -277,7 +315,10 @@ fn tri_key_from_split_bary(
 }
 
 /// All clipped shell triangles (before hit-side), as world-space tri keys.
-pub(crate) fn shell_split_clipped_tri_keys(a: &mut CsgBrush, b: &mut CsgBrush) -> Vec<super::topology::TriKey> {
+pub(crate) fn shell_split_clipped_tri_keys(
+    a: &mut CsgBrush,
+    b: &mut CsgBrush,
+) -> Vec<super::topology::TriKey> {
     a.prepare_geometry();
     b.prepare_geometry();
     let (a_inter, _) = collect_intersecting_triangles(a, b);
@@ -347,7 +388,10 @@ pub(crate) fn shell_split_clipped_count(a: &mut CsgBrush, b: &mut CsgBrush) -> u
 }
 
 /// Shell-side kept keys after hit-side filter (same keying as JS `export-shell-split-tris.mjs`).
-pub(crate) fn shell_split_tri_keys(a: &mut CsgBrush, b: &mut CsgBrush) -> Vec<super::topology::TriKey> {
+pub(crate) fn shell_split_tri_keys(
+    a: &mut CsgBrush,
+    b: &mut CsgBrush,
+) -> Vec<super::topology::TriKey> {
     a.prepare_geometry();
     b.prepare_geometry();
     let (a_inter, _) = collect_intersecting_triangles(a, b);

@@ -1,6 +1,6 @@
+use super::PointerEvent;
 use crate::cameras::PerspectiveCamera;
 use crate::math::{Spherical, Vector3};
-use super::PointerEvent;
 
 /// Spherical orbit camera controls — rotate, pan, zoom around `target`.
 /// Mirrors three.js's `OrbitControls`.
@@ -47,7 +47,12 @@ impl OrbitControls {
 
     /// Apply one frame of input. `viewport` is (width, height) in pixels for
     /// pan-distance scaling.
-    pub fn update(&mut self, ev: PointerEvent, camera: &mut PerspectiveCamera, viewport: (f32, f32)) {
+    pub fn update(
+        &mut self,
+        ev: PointerEvent,
+        camera: &mut PerspectiveCamera,
+        viewport: (f32, f32),
+    ) {
         let (w, h) = viewport;
         let half_fov = camera.fov * 0.5;
         let dist = self.spherical.radius;
@@ -57,9 +62,10 @@ impl OrbitControls {
             // Convert pixel delta to angle delta. Use viewport height as the
             // reference (matches three.js's pixel-to-angle mapping).
             let dtheta = -ev.dx / h * std::f32::consts::PI * 2.0 * self.rotate_speed;
-            let dphi   = -ev.dy / h * std::f32::consts::PI * 2.0 * self.rotate_speed;
+            let dphi = -ev.dy / h * std::f32::consts::PI * 2.0 * self.rotate_speed;
             self.spherical.theta += dtheta;
-            self.spherical.phi = (self.spherical.phi + dphi).clamp(self.min_polar_angle, self.max_polar_angle);
+            self.spherical.phi =
+                (self.spherical.phi + dphi).clamp(self.min_polar_angle, self.max_polar_angle);
         }
         if ev.panning {
             // Pan in screen space: vertical = projected world distance per pixel.
@@ -77,7 +83,8 @@ impl OrbitControls {
         }
         if ev.wheel != 0.0 {
             let factor = (1.0 - ev.wheel * 0.001 * self.zoom_speed).clamp(0.1, 10.0);
-            self.spherical.radius = (self.spherical.radius * factor).clamp(self.min_distance, self.max_distance);
+            self.spherical.radius =
+                (self.spherical.radius * factor).clamp(self.min_distance, self.max_distance);
         }
 
         // Idle frames must not rewrite the camera — external sync may have set
@@ -109,7 +116,13 @@ mod tests {
         // External sync moves the camera without reseeding orbit.
         cam.position = Vector3::new(-3.8, 2.9, 1.25);
         cam.target = Vector3::ZERO;
-        let idle = PointerEvent { dx: 0.0, dy: 0.0, wheel: 0.0, rotating: false, panning: false };
+        let idle = PointerEvent {
+            dx: 0.0,
+            dy: 0.0,
+            wheel: 0.0,
+            rotating: false,
+            panning: false,
+        };
         orbit.update(idle, &mut cam, (800.0, 600.0));
         assert!((cam.position.x + 3.8).abs() < 1e-4);
         assert!((cam.position.y - 2.9).abs() < 1e-4);
@@ -123,10 +136,22 @@ mod tests {
         let mut orbit = OrbitControls::new(&cam);
         cam.position = Vector3::new(-3.8, 2.9, 1.25);
         orbit.reseed_from_camera(&cam);
-        let idle = PointerEvent { dx: 0.0, dy: 0.0, wheel: 0.0, rotating: false, panning: false };
+        let idle = PointerEvent {
+            dx: 0.0,
+            dy: 0.0,
+            wheel: 0.0,
+            rotating: false,
+            panning: false,
+        };
         orbit.update(idle, &mut cam, (800.0, 600.0));
         assert!((cam.position.x + 3.8).abs() < 1e-4);
-        let moved = PointerEvent { dx: 0.0, dy: 0.0, wheel: 0.0, rotating: false, panning: false };
+        let moved = PointerEvent {
+            dx: 0.0,
+            dy: 0.0,
+            wheel: 0.0,
+            rotating: false,
+            panning: false,
+        };
         orbit.update(moved, &mut cam, (800.0, 600.0));
         assert!((cam.position.x + 3.8).abs() < 1e-4);
     }

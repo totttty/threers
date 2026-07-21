@@ -1,6 +1,6 @@
+use crate::core::BufferGeometry;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use crate::core::BufferGeometry;
 
 /// GPU-side buffers for a single geometry, cached by `Arc<BufferGeometry>` pointer identity.
 pub struct GpuMesh {
@@ -21,7 +21,9 @@ impl GpuMesh {
     pub const VERTEX_STRIDE: u64 = 12 * 4;
 
     pub(crate) fn build_interleaved(geom: &BufferGeometry) -> Vec<f32> {
-        let positions = geom.get_attribute("position").expect("geometry needs position attribute");
+        let positions = geom
+            .get_attribute("position")
+            .expect("geometry needs position attribute");
         let normals = geom.get_attribute("normal");
         let uvs = geom.get_attribute("uv");
         let line_distances = geom.get_attribute("lineDistance");
@@ -30,14 +32,14 @@ impl GpuMesh {
         let vert_count = positions.count();
         let mut interleaved = Vec::with_capacity(vert_count * 12);
         for i in 0..vert_count {
-            interleaved.extend_from_slice(&positions.array[i * 3 .. i * 3 + 3]);
+            interleaved.extend_from_slice(&positions.array[i * 3..i * 3 + 3]);
             if let Some(n) = normals {
-                interleaved.extend_from_slice(&n.array[i * 3 .. i * 3 + 3]);
+                interleaved.extend_from_slice(&n.array[i * 3..i * 3 + 3]);
             } else {
                 interleaved.extend_from_slice(&[0.0, 0.0, 1.0]);
             }
             if let Some(u) = uvs {
-                interleaved.extend_from_slice(&u.array[i * 2 .. i * 2 + 2]);
+                interleaved.extend_from_slice(&u.array[i * 2..i * 2 + 2]);
             } else if let Some(ld) = line_distances {
                 interleaved.extend_from_slice(&[ld.array[i], 0.0]);
             } else {
@@ -46,10 +48,10 @@ impl GpuMesh {
             if let Some(c) = colors {
                 let s = c.item_size;
                 if s == 3 {
-                    interleaved.extend_from_slice(&c.array[i * 3 .. i * 3 + 3]);
+                    interleaved.extend_from_slice(&c.array[i * 3..i * 3 + 3]);
                     interleaved.push(1.0);
                 } else if s == 4 {
-                    interleaved.extend_from_slice(&c.array[i * 4 .. i * 4 + 4]);
+                    interleaved.extend_from_slice(&c.array[i * 4..i * 4 + 4]);
                 } else {
                     interleaved.extend_from_slice(&[1.0, 1.0, 1.0, 1.0]);
                 }
@@ -62,7 +64,10 @@ impl GpuMesh {
 
     pub fn upload(device: &wgpu::Device, geom: &BufferGeometry) -> Self {
         let interleaved = Self::build_interleaved(geom);
-        let vert_count = geom.get_attribute("position").map(|p| p.count()).unwrap_or(0);
+        let vert_count = geom
+            .get_attribute("position")
+            .map(|p| p.count())
+            .unwrap_or(0);
         let colors = geom.get_attribute("color").is_some();
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

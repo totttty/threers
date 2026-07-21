@@ -12,11 +12,18 @@ pub struct RectAreaLight {
 }
 
 impl Default for RectAreaLight {
-    fn default() -> Self { Self::new(Color::WHITE, 1.0, 10.0, 10.0) }
+    fn default() -> Self {
+        Self::new(Color::WHITE, 1.0, 10.0, 10.0)
+    }
 }
 
 impl RectAreaLight {
     pub const fn new(color: Color, intensity: f32, width: f32, height: f32) -> Self {
-        Self { color, intensity, width, height }
+        Self {
+            color,
+            intensity,
+            width,
+            height,
+        }
     }
 }

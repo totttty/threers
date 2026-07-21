@@ -2,7 +2,7 @@
 //!
 //! Implements the three.js architecture and API surface: a scene graph of
 //! [`Object3D`]s, [`BufferGeometry`] with named attributes, [`Material`]s,
-//! [`Camera`]s, and a [`Renderer`] that walks the graph and draws. Backed by
+//! cameras, and a [`Renderer`] that walks the graph and draws. Backed by
 //! wgpu on native and WebGPU in the browser.
 //!
 //! # Crates and targets
@@ -13,20 +13,31 @@
 //! # Web usage
 //!
 //! Import `web/threejs-shim.js` for a drop-in `THREE.*` API over the wasm
-//! bindings from [`wasm`]. Existing three.js r165-style apps can swap in with
-//! minimal changes.
+//! bindings. Existing three.js r165-style apps can swap in with minimal changes.
+//!
+//! # Feature flags
+//!
+//! | Feature | Role |
+//! |---------|------|
+//! | `mesh-bvh` | Accelerated raycast / shapecast |
+//! | `bvh-csg` | Constructive solid geometry (implies `mesh-bvh`) |
+//! | `video` | Native frame-sequence export via ffmpeg / native GIF |
+//! | `native-codec` | Pure-Rust GIF, APNG, VP9/WebM, HEVC (wasm-safe) |
 //!
 //! # Modules
 //!
 //! | Module | Role |
 //! |--------|------|
 //! | [`core`] | Scene graph, geometry, raycaster |
-//! | [`renderer`] | wgpu draw + post-processing |
+//! | [`renderer`] | wgpu draw + post-processing; headless offscreen (native) |
 //! | [`postprocessing`] | EffectComposer-style pass chain (native) |
 //! | [`loaders`] | glTF, OBJ, HDR, … |
 //! | [`extras`] | PMREM, noise, marching cubes, … |
-//! | [`mesh_bvh`] | Opt-in BVH (`mesh-bvh` feature) |
-//! | [`csg`] | Opt-in CSG (`bvh-csg` feature) |
+//! | [`materials`] | PBR materials and [`ShaderMaterial`] |
+//! | `mesh_bvh` | Opt-in BVH (`mesh-bvh` feature) |
+//! | `csg` | Opt-in CSG (`bvh-csg` feature) |
+//! | `video` | Opt-in video export (`video` feature, native) |
+//! | `codec` | Opt-in media codecs (`native-codec` feature) |
 
 pub mod math;
 pub mod core;
@@ -100,11 +111,12 @@ pub use geometries::{
     TextGeometry, Glyph, BoxLineGeometry,
 };
 pub use materials::{
-    Material, MaterialKind, MaterialTextureSlots,
+    Material, MaterialKind, MaterialTextureSlots, TransparencyMode,
     BasicMaterial, LambertMaterial, PhongMaterial,
     StandardMaterial, PhysicalMaterial,
     NormalMaterial, DepthMaterial, ToonMaterial, MatcapMaterial,
     LineBasicMaterial, PointsMaterial, SpriteMaterial,
+    ShaderMaterial,
 };
 pub use materials::MirrorMaterial;
 pub use lights::{
@@ -159,6 +171,39 @@ pub use extras::{MarchingCubes, CcdIkSolver, IkBone, Octree, SimplexNoise, Pmrem
 pub use stats::Stats;
 pub use scene::Scene;
 pub use renderer::{Renderer, RenderTarget};
+#[cfg(not(target_arch = "wasm32"))]
+pub use renderer::headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
+
+/// Native video export (frame sequence → ffmpeg). Enable the `video` feature.
+#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+pub mod video;
+#[cfg(all(feature = "video", not(target_arch = "wasm32")))]
+pub use video::{export_video, VideoCodec, VideoError, VideoOptions, VideoQuality};
+
+/// From-scratch, pure-Rust media codecs (HEVC, VP9/WebM, APNG, GIF, bitstream) —
+/// no ffmpeg, no C bindings, and wasm-compatible. Enable the `native-codec`
+/// feature.
+#[cfg(feature = "native-codec")]
+pub mod codec;
+#[cfg(feature = "native-codec")]
+pub use codec::apng::ApngEncoder;
+#[cfg(feature = "native-codec")]
+pub use codec::gif::{
+    decode_gif, encode_gif, DecodedFrame, DisposalMethod, DisposalMode, GifDecoder, GifEncoder,
+    GifError, GifFrameMeta, GifInfo, GifOptions, GifVersion, GifWriter, LzwClearMode, PaletteMode,
+    QuantizerKind,
+};
+#[cfg(feature = "native-codec")]
+pub use codec::hevc::{HevcEncoder, TransparentEncoder, Yuv420Frame};
+#[cfg(feature = "native-codec")]
+pub use codec::webm::{encode_gray_webm, encode_webm, mux_webm, WebmCodec, WebmFrame, WebmParams};
+#[cfg(feature = "native-codec")]
+pub use codec::vp9::{
+    encode_inter_frame, encode_inter_frame_altref, encode_inter_frame_compound,
+    encode_inter_frame_golden, encode_inter_frame_refresh, encode_inter_newmv_residual,
+    encode_inter_newmv_skip, encode_inter_residual, encode_inter_zeromv_skip, encode_intra_frame,
+    encode_intra_gray, Reconstruction,
+};
 
 #[cfg(feature = "mesh-bvh")]
 pub use mesh_bvh::{MeshBvh, BvhHit, BuildOptions as MeshBvhBuildOptions, SerializedMeshBvh, AVERAGE, CENTER, SAH, NOT_INTERSECTED, INTERSECTED, CONTAINED};

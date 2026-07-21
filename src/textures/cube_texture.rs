@@ -1,5 +1,5 @@
+use super::{TextureFilter, TextureFormat, TextureWrap};
 use std::sync::Arc;
-use super::{TextureFormat, TextureFilter, TextureWrap};
 
 /// CPU-side CubeUV PMREM atlas (three.js `CubeUVReflectionMapping` layout).
 #[derive(Debug, Clone)]
@@ -43,7 +43,14 @@ impl CubeTexture {
             mag_filter: TextureFilter::Linear,
             min_filter: TextureFilter::Linear,
             wrap: TextureWrap::ClampToEdge,
-            faces: [Arc::new(f0), Arc::new(f1), Arc::new(f2), Arc::new(f3), Arc::new(f4), Arc::new(f5)],
+            faces: [
+                Arc::new(f0),
+                Arc::new(f1),
+                Arc::new(f2),
+                Arc::new(f3),
+                Arc::new(f4),
+                Arc::new(f5),
+            ],
             pmrem_mips: None,
             pmrem_sizes: None,
             cube_uv_atlas: None,
@@ -51,10 +58,21 @@ impl CubeTexture {
     }
 
     pub fn with_pmrem_mips(mut self, mips: Vec<[Vec<u8>; 6]>, sizes: Vec<u32>) -> Self {
-        self.pmrem_mips = Some(mips.into_iter().map(|f| {
-            let [a, b, c, d, e, g] = f;
-            [Arc::new(a), Arc::new(b), Arc::new(c), Arc::new(d), Arc::new(e), Arc::new(g)]
-        }).collect());
+        self.pmrem_mips = Some(
+            mips.into_iter()
+                .map(|f| {
+                    let [a, b, c, d, e, g] = f;
+                    [
+                        Arc::new(a),
+                        Arc::new(b),
+                        Arc::new(c),
+                        Arc::new(d),
+                        Arc::new(e),
+                        Arc::new(g),
+                    ]
+                })
+                .collect(),
+        );
         self.pmrem_sizes = Some(sizes);
         self
     }
@@ -69,6 +87,9 @@ impl CubeTexture {
     }
 
     pub fn mip_level_count(&self) -> u32 {
-        self.pmrem_sizes.as_ref().map(|s| s.len() as u32).unwrap_or(1)
+        self.pmrem_sizes
+            .as_ref()
+            .map(|s| s.len() as u32)
+            .unwrap_or(1)
     }
 }

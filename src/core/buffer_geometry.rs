@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use crate::math::{Box3, Sphere, Vector3};
 use super::BufferAttribute;
+use crate::math::{Box3, Sphere, Vector3};
+use std::collections::HashMap;
 
 #[cfg(feature = "mesh-bvh")]
 use std::sync::Arc;
@@ -21,9 +21,25 @@ pub struct BufferGeometry {
     pub bounds_tree: Option<Arc<crate::mesh_bvh::MeshBvh>>,
 }
 
+/// A process-wide monotonic version stamp. The renderer's GPU-buffer cache is
+/// keyed by a geometry's heap *pointer* and re-uploads only when `geometry_version`
+/// changes. When scenes are rebuilt every frame (e.g. an animation) a freed
+/// geometry's address is often *recycled* for a new one; if versions could
+/// coincide, the cache would false-hit and draw the freed geometry's stale
+/// buffers ("ghost" meshes). Drawing every version from one global counter makes
+/// every stamp unique, so a recycled address can never false-match.
+fn next_geometry_version() -> u32 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static VERSION: AtomicU32 = AtomicU32::new(1);
+    VERSION.fetch_add(1, Ordering::Relaxed)
+}
+
 impl BufferGeometry {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            geometry_version: next_geometry_version(),
+            ..Self::default()
+        }
     }
 
     pub fn set_attribute(&mut self, name: impl Into<String>, attr: BufferAttribute) -> &mut Self {
@@ -31,7 +47,7 @@ impl BufferGeometry {
         // Invalidate cached bounds — they depend on positions.
         self.bounding_box = None;
         self.bounding_sphere = None;
-        self.geometry_version = self.geometry_version.wrapping_add(1);
+        self.geometry_version = next_geometry_version();
         #[cfg(feature = "mesh-bvh")]
         {
             self.bounds_tree = None;
@@ -45,7 +61,7 @@ impl BufferGeometry {
 
     pub fn set_index(&mut self, indices: Vec<u32>) -> &mut Self {
         self.index = Some(indices);
-        self.geometry_version = self.geometry_version.wrapping_add(1);
+        self.geometry_version = next_geometry_version();
         #[cfg(feature = "mesh-bvh")]
         {
             self.bounds_tree = None;
@@ -58,15 +74,24 @@ impl BufferGeometry {
         if let Some(idx) = &self.index {
             idx.len()
         } else {
-            self.attributes.get("position").map(|a| a.count()).unwrap_or(0)
+            self.attributes
+                .get("position")
+                .map(|a| a.count())
+                .unwrap_or(0)
         }
     }
 
     /// Iterate position vertices as `Vector3` (item_size must be 3).
     pub fn positions(&self) -> Option<impl Iterator<Item = Vector3> + '_> {
         let pos = self.attributes.get("position")?;
-        if pos.item_size != 3 { return None; }
-        Some(pos.array.chunks_exact(3).map(|c| Vector3::new(c[0], c[1], c[2])))
+        if pos.item_size != 3 {
+            return None;
+        }
+        Some(
+            pos.array
+                .chunks_exact(3)
+                .map(|c| Vector3::new(c[0], c[1], c[2])),
+        )
     }
 
     /// Compute (or refresh) the bounding box from the "position" attribute.
@@ -75,8 +100,14 @@ impl BufferGeometry {
         let bb = match self.positions() {
             Some(iter) => {
                 let mut b = Box3::empty();
-                for p in iter { b.expand_by_point(p); }
-                if b.is_empty() { Box3::new(Vector3::ZERO, Vector3::ZERO) } else { b }
+                for p in iter {
+                    b.expand_by_point(p);
+                }
+                if b.is_empty() {
+                    Box3::new(Vector3::ZERO, Vector3::ZERO)
+                } else {
+                    b
+                }
             }
             None => Box3::new(Vector3::ZERO, Vector3::ZERO),
         };
@@ -88,13 +119,17 @@ impl BufferGeometry {
     /// Matches three.js's `computeBoundingSphere`: center on the bounding box
     /// center, then radius = max distance to any vertex.
     pub fn compute_bounding_sphere(&mut self) -> Sphere {
-        let bb = self.bounding_box.unwrap_or_else(|| self.compute_bounding_box());
+        let bb = self
+            .bounding_box
+            .unwrap_or_else(|| self.compute_bounding_box());
         let center = bb.center();
         let mut max_r2 = 0.0f32;
         if let Some(iter) = self.positions() {
             for p in iter {
                 let d2 = (p - center).length_sq();
-                if d2 > max_r2 { max_r2 = d2; }
+                if d2 > max_r2 {
+                    max_r2 = d2;
+                }
             }
         }
         let s = Sphere::new(center, max_r2.sqrt());
@@ -127,14 +162,8 @@ mod tests {
     fn unit_cube_positions() -> BufferAttribute {
         BufferAttribute::new(
             vec![
-                -1.0, -1.0, -1.0,
-                 1.0, -1.0, -1.0,
-                -1.0,  1.0, -1.0,
-                 1.0,  1.0, -1.0,
-                -1.0, -1.0,  1.0,
-                 1.0, -1.0,  1.0,
-                -1.0,  1.0,  1.0,
-                 1.0,  1.0,  1.0,
+                -1.0, -1.0, -1.0, 1.0, -1.0, -1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, -1.0,
+                1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
             ],
             3,
         )

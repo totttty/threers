@@ -17,11 +17,7 @@ impl Default for Matrix3 {
 impl Matrix3 {
     pub const fn identity() -> Self {
         Self {
-            elements: [
-                1.0, 0.0, 0.0,
-                0.0, 1.0, 0.0,
-                0.0, 0.0, 1.0,
-            ],
+            elements: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
         }
     }
 
@@ -32,9 +28,7 @@ impl Matrix3 {
         for col in 0..3 {
             for row in 0..3 {
                 r[col * 3 + row] =
-                    a[row]      * b[col * 3]
-                    + a[row + 3]  * b[col * 3 + 1]
-                    + a[row + 6]  * b[col * 3 + 2];
+                    a[row] * b[col * 3] + a[row + 3] * b[col * 3 + 1] + a[row + 6] * b[col * 3 + 2];
             }
         }
         Self { elements: r }
@@ -43,20 +37,22 @@ impl Matrix3 {
     pub fn transpose(&self) -> Self {
         let m = &self.elements;
         Self {
-            elements: [
-                m[0], m[3], m[6],
-                m[1], m[4], m[7],
-                m[2], m[5], m[8],
-            ],
+            elements: [m[0], m[3], m[6], m[1], m[4], m[7], m[2], m[5], m[8]],
         }
     }
 
     /// Inverse via cofactor expansion. Returns identity if singular.
     pub fn invert(&self) -> Self {
         let m = &self.elements;
-        let n11 = m[0]; let n21 = m[1]; let n31 = m[2];
-        let n12 = m[3]; let n22 = m[4]; let n32 = m[5];
-        let n13 = m[6]; let n23 = m[7]; let n33 = m[8];
+        let n11 = m[0];
+        let n21 = m[1];
+        let n31 = m[2];
+        let n12 = m[3];
+        let n22 = m[4];
+        let n32 = m[5];
+        let n13 = m[6];
+        let n23 = m[7];
+        let n33 = m[8];
 
         let t11 = n33 * n22 - n32 * n23;
         let t12 = n32 * n13 - n33 * n12;
@@ -86,11 +82,7 @@ impl Matrix3 {
     pub fn from_matrix4(m4: &Matrix4) -> Self {
         let m = &m4.elements;
         Self {
-            elements: [
-                m[0], m[1], m[2],
-                m[4], m[5], m[6],
-                m[8], m[9], m[10],
-            ],
+            elements: [m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]],
         }
     }
 
@@ -114,7 +106,9 @@ mod tests {
 
     #[test]
     fn transpose_of_transpose_is_original() {
-        let m = Matrix3 { elements: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0] };
+        let m = Matrix3 {
+            elements: [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+        };
         assert_eq!(m.transpose().transpose(), m);
     }
 
@@ -124,7 +118,13 @@ mod tests {
         let n = Matrix3::normal_matrix(&t);
         let id = Matrix3::identity();
         for i in 0..9 {
-            assert!((n.elements[i] - id.elements[i]).abs() < 1e-5, "i={} got {} want {}", i, n.elements[i], id.elements[i]);
+            assert!(
+                (n.elements[i] - id.elements[i]).abs() < 1e-5,
+                "i={} got {} want {}",
+                i,
+                n.elements[i],
+                id.elements[i]
+            );
         }
     }
 }

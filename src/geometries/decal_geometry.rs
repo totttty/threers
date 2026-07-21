@@ -23,13 +23,14 @@ impl DecalGeometry {
         let inv_orient = orientation.invert();
         let half = size * 0.5;
 
-        let to_local = |p: Vector3| -> Vector3 {
-            (p - position).apply_quaternion(inv_orient)
-        };
+        let to_local = |p: Vector3| -> Vector3 { (p - position).apply_quaternion(inv_orient) };
 
         let mut local_positions: Vec<Vector3> = Vec::new();
         let triangles_iter: Box<dyn Iterator<Item = [usize; 3]>> = if let Some(idx) = base_indices {
-            Box::new(idx.chunks_exact(3).map(|c| [c[0] as usize, c[1] as usize, c[2] as usize]))
+            Box::new(
+                idx.chunks_exact(3)
+                    .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize]),
+            )
         } else {
             Box::new((0..base_positions.len() / 3).map(|i| [i * 3, i * 3 + 1, i * 3 + 2]))
         };
@@ -37,16 +38,17 @@ impl DecalGeometry {
             let a = to_local(base_positions[tri[0]]);
             let b = to_local(base_positions[tri[1]]);
             let c = to_local(base_positions[tri[2]]);
-            let inside = |p: Vector3| {
-                p.x.abs() <= half.x && p.y.abs() <= half.y && p.z.abs() <= half.z
-            };
+            let inside =
+                |p: Vector3| p.x.abs() <= half.x && p.y.abs() <= half.y && p.z.abs() <= half.z;
             if inside(a) || inside(b) || inside(c) {
                 local_positions.push(a);
                 local_positions.push(b);
                 local_positions.push(c);
             }
         }
-        if local_positions.is_empty() { return g; }
+        if local_positions.is_empty() {
+            return g;
+        }
 
         // Transform decal-local back to world space and build UVs from x/y.
         let mut positions = Vec::with_capacity(local_positions.len() * 3);
@@ -61,15 +63,12 @@ impl DecalGeometry {
             for (lp, wp) in [(tri[0], world_a), (tri[1], world_b), (tri[2], world_c)] {
                 positions.extend_from_slice(&[wp.x, wp.y, wp.z]);
                 normals.extend_from_slice(&[n.x, n.y, n.z]);
-                uvs.extend_from_slice(&[
-                    lp.x / size.x + 0.5,
-                    lp.y / size.y + 0.5,
-                ]);
+                uvs.extend_from_slice(&[lp.x / size.x + 0.5, lp.y / size.y + 0.5]);
             }
         }
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        g.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        g.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        g.set_attribute("normal", BufferAttribute::new(normals, 3));
+        g.set_attribute("uv", BufferAttribute::new(uvs, 2));
         g
     }
 }

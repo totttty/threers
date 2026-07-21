@@ -1,5 +1,5 @@
-use crate::core::{BufferAttribute, BufferGeometry};
 use super::xml;
+use crate::core::{BufferAttribute, BufferGeometry};
 
 pub struct ColladaLoader;
 
@@ -15,15 +15,24 @@ impl ColladaLoader {
     /// triangulated `BufferGeometry`.
     pub fn parse(src: &str) -> Result<BufferGeometry, ColladaError> {
         let root = xml::parse(src).map_err(|_| ColladaError::Xml("xml parse"))?;
-        let lib_geom = root.find_child("library_geometries").ok_or(ColladaError::NoGeometry)?;
-        let geom = lib_geom.find_child("geometry").ok_or(ColladaError::NoGeometry)?;
+        let lib_geom = root
+            .find_child("library_geometries")
+            .ok_or(ColladaError::NoGeometry)?;
+        let geom = lib_geom
+            .find_child("geometry")
+            .ok_or(ColladaError::NoGeometry)?;
         let mesh = geom.find_child("mesh").ok_or(ColladaError::NoGeometry)?;
 
-        let mut sources: std::collections::HashMap<String, Vec<f32>> = std::collections::HashMap::new();
+        let mut sources: std::collections::HashMap<String, Vec<f32>> =
+            std::collections::HashMap::new();
         for src_elem in mesh.find_children("source") {
             let id = src_elem.attributes.get("id").cloned().unwrap_or_default();
             if let Some(fa) = src_elem.find_child("float_array") {
-                let nums: Vec<f32> = fa.text.split_whitespace().filter_map(|s| s.parse().ok()).collect();
+                let nums: Vec<f32> = fa
+                    .text
+                    .split_whitespace()
+                    .filter_map(|s| s.parse().ok())
+                    .collect();
                 sources.insert(id, nums);
             }
         }
@@ -36,29 +45,61 @@ impl ColladaLoader {
             _ => return Err(ColladaError::NoGeometry),
         };
 
-        struct Input { semantic: String, source: String, offset: usize }
+        struct Input {
+            semantic: String,
+            source: String,
+            offset: usize,
+        }
         let mut inputs: Vec<Input> = Vec::new();
         for inp in prim.find_children("input") {
             let semantic = inp.attributes.get("semantic").cloned().unwrap_or_default();
-            let source = inp.attributes.get("source").cloned().unwrap_or_default().trim_start_matches('#').to_string();
-            let offset: usize = inp.attributes.get("offset").and_then(|s| s.parse().ok()).unwrap_or(0);
-            inputs.push(Input { semantic, source, offset });
+            let source = inp
+                .attributes
+                .get("source")
+                .cloned()
+                .unwrap_or_default()
+                .trim_start_matches('#')
+                .to_string();
+            let offset: usize = inp
+                .attributes
+                .get("offset")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            inputs.push(Input {
+                semantic,
+                source,
+                offset,
+            });
         }
         let stride = inputs.iter().map(|i| i.offset).max().unwrap_or(0) + 1;
 
         let vertex_source: Option<String> = (|| -> Option<String> {
             let v = mesh.find_child("vertices")?;
             for inp in v.find_children("input") {
-                if inp.attributes.get("semantic").map(|s| s == "POSITION").unwrap_or(false) {
-                    return inp.attributes.get("source").map(|s| s.trim_start_matches('#').to_string());
+                if inp
+                    .attributes
+                    .get("semantic")
+                    .map(|s| s == "POSITION")
+                    .unwrap_or(false)
+                {
+                    return inp
+                        .attributes
+                        .get("source")
+                        .map(|s| s.trim_start_matches('#').to_string());
                 }
             }
             None
         })();
 
         let p_elem = prim.find_child("p").ok_or(ColladaError::NoGeometry)?;
-        let indices: Vec<u32> = p_elem.text.split_whitespace().filter_map(|s| s.parse().ok()).collect();
-        if indices.is_empty() { return Err(ColladaError::NoGeometry); }
+        let indices: Vec<u32> = p_elem
+            .text
+            .split_whitespace()
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        if indices.is_empty() {
+            return Err(ColladaError::NoGeometry);
+        }
 
         let resolve = |sem: &str| -> Option<&Vec<f32>> {
             let id = inputs.iter().find(|i| i.semantic == sem)?;
@@ -69,13 +110,25 @@ impl ColladaLoader {
             }
         };
 
-        let pos_arr = resolve("VERTEX").or_else(|| resolve("POSITION")).ok_or(ColladaError::NoGeometry)?;
+        let pos_arr = resolve("VERTEX")
+            .or_else(|| resolve("POSITION"))
+            .ok_or(ColladaError::NoGeometry)?;
         let nrm_arr = resolve("NORMAL");
         let uv_arr = resolve("TEXCOORD");
 
-        let pos_off = inputs.iter().find(|i| i.semantic == "VERTEX" || i.semantic == "POSITION").map(|i| i.offset).unwrap_or(0);
-        let nrm_off = inputs.iter().find(|i| i.semantic == "NORMAL").map(|i| i.offset);
-        let uv_off  = inputs.iter().find(|i| i.semantic == "TEXCOORD").map(|i| i.offset);
+        let pos_off = inputs
+            .iter()
+            .find(|i| i.semantic == "VERTEX" || i.semantic == "POSITION")
+            .map(|i| i.offset)
+            .unwrap_or(0);
+        let nrm_off = inputs
+            .iter()
+            .find(|i| i.semantic == "NORMAL")
+            .map(|i| i.offset);
+        let uv_off = inputs
+            .iter()
+            .find(|i| i.semantic == "TEXCOORD")
+            .map(|i| i.offset);
 
         let mut positions: Vec<f32> = Vec::new();
         let mut normals: Vec<f32> = Vec::new();
@@ -99,8 +152,12 @@ impl ColladaLoader {
 
         let mut g = BufferGeometry::new();
         g.set_attribute("position", BufferAttribute::new(positions, 3));
-        if !normals.is_empty() { g.set_attribute("normal", BufferAttribute::new(normals, 3)); }
-        if !uvs.is_empty() { g.set_attribute("uv", BufferAttribute::new(uvs, 2)); }
+        if !normals.is_empty() {
+            g.set_attribute("normal", BufferAttribute::new(normals, 3));
+        }
+        if !uvs.is_empty() {
+            g.set_attribute("uv", BufferAttribute::new(uvs, 2));
+        }
         Ok(g)
     }
 }

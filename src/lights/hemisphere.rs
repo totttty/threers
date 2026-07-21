@@ -10,11 +10,17 @@ pub struct HemisphereLight {
 }
 
 impl Default for HemisphereLight {
-    fn default() -> Self { Self::new(Color::WHITE, Color::BLACK, 1.0) }
+    fn default() -> Self {
+        Self::new(Color::WHITE, Color::BLACK, 1.0)
+    }
 }
 
 impl HemisphereLight {
     pub const fn new(sky_color: Color, ground_color: Color, intensity: f32) -> Self {
-        Self { sky_color, ground_color, intensity }
+        Self {
+            sky_color,
+            ground_color,
+            intensity,
+        }
     }
 }

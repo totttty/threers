@@ -6,7 +6,9 @@ pub trait Curve2: Send + Sync {
 
     fn get_points(&self, divisions: usize) -> Vec<Vector2> {
         let n = divisions.max(1);
-        (0..=n).map(|i| self.get_point(i as f32 / n as f32)).collect()
+        (0..=n)
+            .map(|i| self.get_point(i as f32 / n as f32))
+            .collect()
     }
 
     fn get_tangent(&self, t: f32) -> Vector2 {
@@ -28,7 +30,9 @@ pub trait Curve3: Send + Sync {
 
     fn get_points(&self, divisions: usize) -> Vec<Vector3> {
         let n = divisions.max(1);
-        (0..=n).map(|i| self.get_point(i as f32 / n as f32)).collect()
+        (0..=n)
+            .map(|i| self.get_point(i as f32 / n as f32))
+            .collect()
     }
 
     fn get_tangent(&self, t: f32) -> Vector3 {

@@ -1,6 +1,6 @@
-use std::f32::consts::PI;
-use crate::core::{BufferGeometry, BufferAttribute};
+use crate::core::{BufferAttribute, BufferGeometry};
 use crate::math::Vector3;
+use std::f32::consts::PI;
 
 pub struct TorusKnotGeometry;
 
@@ -18,9 +18,9 @@ impl TorusKnotGeometry {
         let rs = radial_segments.max(3);
 
         let mut positions = Vec::new();
-        let mut normals   = Vec::new();
-        let mut uvs       = Vec::new();
-        let mut indices   = Vec::new();
+        let mut normals = Vec::new();
+        let mut uvs = Vec::new();
+        let mut indices = Vec::new();
 
         let pos_on_curve = |u: f32| -> Vector3 {
             let cu = u.cos();
@@ -46,7 +46,7 @@ impl TorusKnotGeometry {
             for j in 0..=rs {
                 let v = j as f32 / rs as f32 * PI * 2.0;
                 let cx = -tube * v.cos();
-                let cy =  tube * v.sin();
+                let cy = tube * v.sin();
                 let pos = Vector3::new(
                     p1.x + cx * n.x + cy * b.x,
                     p1.y + cx * n.y + cy * b.y,
@@ -73,8 +73,8 @@ impl TorusKnotGeometry {
 
         let mut geom = BufferGeometry::new();
         geom.set_attribute("position", BufferAttribute::new(positions, 3));
-        geom.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        geom.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        geom.set_attribute("normal", BufferAttribute::new(normals, 3));
+        geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
         geom
     }

@@ -8,6 +8,6 @@ mod passes;
 
 pub use composer::EffectComposer;
 pub use passes::{
-    Pass, RenderPass, BloomPass, FxaaPass, OutlinePass, ToneMappingPass,
-    FilmPass, GlitchPass, SsaoPass, SsrPass, CopyPass,
+    BloomPass, CopyPass, FilmPass, FxaaPass, GlitchPass, OutlinePass, Pass, RenderPass, SsaoPass,
+    SsrPass, ToneMappingPass,
 };

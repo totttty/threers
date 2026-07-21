@@ -14,19 +14,28 @@ impl CameraHelper {
         let inv = proj.multiply(&view).invert();
         let ndc = [
             Vector3::new(-1.0, -1.0, -1.0),
-            Vector3::new( 1.0, -1.0, -1.0),
-            Vector3::new( 1.0,  1.0, -1.0),
-            Vector3::new(-1.0,  1.0, -1.0),
-            Vector3::new(-1.0, -1.0,  1.0),
-            Vector3::new( 1.0, -1.0,  1.0),
-            Vector3::new( 1.0,  1.0,  1.0),
-            Vector3::new(-1.0,  1.0,  1.0),
+            Vector3::new(1.0, -1.0, -1.0),
+            Vector3::new(1.0, 1.0, -1.0),
+            Vector3::new(-1.0, 1.0, -1.0),
+            Vector3::new(-1.0, -1.0, 1.0),
+            Vector3::new(1.0, -1.0, 1.0),
+            Vector3::new(1.0, 1.0, 1.0),
+            Vector3::new(-1.0, 1.0, 1.0),
         ];
         let corners: Vec<Vector3> = ndc.iter().map(|p| unproject(*p, &inv)).collect();
         let edges = [
-            (0,1),(1,2),(2,3),(3,0),
-            (4,5),(5,6),(6,7),(7,4),
-            (0,4),(1,5),(2,6),(3,7),
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
         ];
         let mut positions = Vec::with_capacity(edges.len() * 6);
         for (a, b) in edges {

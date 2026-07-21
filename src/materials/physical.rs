@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use crate::math::{Color, Vector2};
 use crate::textures::Texture;
+use std::sync::Arc;
 
 /// Extended PBR with clearcoat, IOR, transmission, sheen, iridescence layers.
 /// Matches three.js's `MeshPhysicalMaterial`. The current renderer only honors
@@ -23,11 +23,25 @@ pub struct PhysicalMaterial {
     pub ior: f32,
     pub transmission: f32,
     pub thickness: f32,
+    /// Chromatic dispersion (Abbe-like). 0 = none. Splits the refraction IOR per
+    /// RGB channel so the screen-space-glass path shows a rainbow edge fringe.
+    pub dispersion: f32,
+    /// Per-vertex emission: adds `vertexColor.rgb × vertexColor.a` as emitted
+    /// light, scaled by this factor (0 = off). A general mechanism for data-baked
+    /// or decal glow — the alpha channel gates *where* it emits and the rgb sets
+    /// the color, both authored into the mesh's vertex colors by the app.
+    pub vertex_emissive: f32,
     pub sheen: f32,
     pub sheen_color: Color,
     pub sheen_roughness: f32,
     pub iridescence: f32,
     pub iridescence_ior: f32,
+    /// Anisotropy strength (0 = isotropic). Stretches the specular highlight
+    /// along the surface tangent for a brushed/streaked look.
+    pub anisotropy: f32,
+    /// Anisotropy direction as a rotation (radians) of the tangent in the
+    /// surface plane.
+    pub anisotropy_rotation: f32,
     pub attenuation_distance: f32,
     pub attenuation_color: Color,
 
@@ -39,11 +53,15 @@ pub struct PhysicalMaterial {
     pub emissive_map: Option<Arc<Texture>>,
 
     pub side: u32,
+
+    /// Transparency compositing technique (blend / single-layer glass / OIT).
+    pub transparency: super::TransparencyMode,
 }
 
 impl Default for PhysicalMaterial {
     fn default() -> Self {
         Self {
+            transparency: super::TransparencyMode::default(),
             color: Color::WHITE,
             emissive: Color::BLACK,
             emissive_intensity: 1.0,
@@ -58,11 +76,15 @@ impl Default for PhysicalMaterial {
             ior: 1.5,
             transmission: 0.0,
             thickness: 0.01,
+            dispersion: 0.0,
+            vertex_emissive: 0.0,
             sheen: 0.0,
             sheen_color: Color::BLACK,
             sheen_roughness: 1.0,
             iridescence: 0.0,
             iridescence_ior: 1.3,
+            anisotropy: 0.0,
+            anisotropy_rotation: 0.0,
             attenuation_distance: f32::INFINITY,
             attenuation_color: Color::WHITE,
             map: None,
@@ -77,5 +99,10 @@ impl Default for PhysicalMaterial {
 }
 
 impl PhysicalMaterial {
-    pub fn new(color: Color) -> Self { Self { color, ..Default::default() } }
+    pub fn new(color: Color) -> Self {
+        Self {
+            color,
+            ..Default::default()
+        }
+    }
 }

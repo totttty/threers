@@ -1,5 +1,5 @@
+use crate::core::{BufferAttribute, BufferGeometry};
 use std::f32::consts::PI;
-use crate::core::{BufferGeometry, BufferAttribute};
 
 pub struct CapsuleGeometry;
 
@@ -7,15 +7,20 @@ impl CapsuleGeometry {
     /// Cylinder along Y with hemispherical end caps. Matches three.js's
     /// `CapsuleGeometry(radius, length, capSegments, radialSegments)`. `length`
     /// is the cylinder length between the cap centers.
-    pub fn new(radius: f32, length: f32, cap_segments: usize, radial_segments: usize) -> BufferGeometry {
+    pub fn new(
+        radius: f32,
+        length: f32,
+        cap_segments: usize,
+        radial_segments: usize,
+    ) -> BufferGeometry {
         let cs = cap_segments.max(1);
         let rs = radial_segments.max(3);
         let half_l = length * 0.5;
 
         let mut positions = Vec::new();
-        let mut normals   = Vec::new();
-        let mut uvs       = Vec::new();
-        let mut indices   = Vec::new();
+        let mut normals = Vec::new();
+        let mut uvs = Vec::new();
+        let mut indices = Vec::new();
 
         // Build rings: top hemisphere (cs rings), cylinder (2 rings shared with caps),
         // bottom hemisphere (cs rings). Total rings = 2*cs + 2.
@@ -46,12 +51,16 @@ impl CapsuleGeometry {
                 positions.extend_from_slice(&[x, y, z]);
                 let (nx, ny, nz) = if ring < cs {
                     let cy = half_l;
-                    let dx = x; let dy = y - cy; let dz = z;
+                    let dx = x;
+                    let dy = y - cy;
+                    let dz = z;
                     let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-8);
                     (dx / l, dy / l, dz / l)
                 } else if ring > cs {
                     let cy = -half_l;
-                    let dx = x; let dy = y - cy; let dz = z;
+                    let dx = x;
+                    let dy = y - cy;
+                    let dz = z;
                     let l = (dx * dx + dy * dy + dz * dz).sqrt().max(1e-8);
                     (dx / l, dy / l, dz / l)
                 } else {
@@ -76,8 +85,8 @@ impl CapsuleGeometry {
 
         let mut geom = BufferGeometry::new();
         geom.set_attribute("position", BufferAttribute::new(positions, 3));
-        geom.set_attribute("normal",   BufferAttribute::new(normals, 3));
-        geom.set_attribute("uv",       BufferAttribute::new(uvs, 2));
+        geom.set_attribute("normal", BufferAttribute::new(normals, 3));
+        geom.set_attribute("uv", BufferAttribute::new(uvs, 2));
         geom.set_index(indices);
         geom
     }

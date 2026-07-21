@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use crate::textures::CubeUvAtlas;
+use std::sync::Arc;
 
 const LOD_MIN: u32 = 4;
 
@@ -21,7 +21,11 @@ fn cube_uv_atlas_row(tile_y: u32, face_size: u32, yi: u32) -> u32 {
 
 /// three.js PMREM plane layout: slots 0–2 bottom row, 3–5 top row (GL y-up).
 pub fn pmrem_slot_row(pmrem_slot: usize) -> u32 {
-    if pmrem_slot >= 3 { 0 } else { 1 }
+    if pmrem_slot >= 3 {
+        0
+    } else {
+        1
+    }
 }
 
 fn pmrem_slot_to_face(lod: usize) -> [usize; 6] {
@@ -43,7 +47,15 @@ pub fn blit_cube_faces_to_atlas_lod(
     faces: &[Vec<u8>; 6],
 ) {
     let (x_off, y_off) = atlas_lod_origin(lod_out, face_size, cube_size, lod_max);
-    blit_cube_faces_to_tile(atlas, atlas_w, x_off, y_off, face_size, faces, lod_out as usize);
+    blit_cube_faces_to_tile(
+        atlas,
+        atlas_w,
+        x_off,
+        y_off,
+        face_size,
+        faces,
+        lod_out as usize,
+    );
 }
 
 /// Read six cube faces back out of a CubeUV atlas LOD tile (CubeTexture order).
@@ -70,7 +82,8 @@ pub fn extract_cube_faces_from_atlas_lod(
         let src_y = y_off + row * face_size;
         for y in 0..face_size {
             for x in 0..face_size {
-                let src_off = (((cube_uv_atlas_row(src_y, face_size, y)) * atlas_w + src_x + x) * 4) as usize;
+                let src_off =
+                    (((cube_uv_atlas_row(src_y, face_size, y)) * atlas_w + src_x + x) * 4) as usize;
                 let dst_off = ((y * face_size + x) * 4) as usize;
                 if src_off + 3 < atlas.len() && dst_off + 3 < faces[cube_face].len() {
                     faces[cube_face][dst_off..dst_off + 4]
@@ -113,14 +126,22 @@ pub fn cube_uv_get_face(dir: [f32; 3]) -> f32 {
     let abs_dir = [dir[0].abs(), dir[1].abs(), dir[2].abs()];
     if abs_dir[0] > abs_dir[2] {
         if abs_dir[0] > abs_dir[1] {
-            if dir[0] > 0.0 { 0.0 } else { 3.0 }
+            if dir[0] > 0.0 {
+                0.0
+            } else {
+                3.0
+            }
         } else if dir[1] > 0.0 {
             1.0
         } else {
             4.0
         }
     } else if abs_dir[2] > abs_dir[1] {
-        if dir[2] > 0.0 { 2.0 } else { 5.0 }
+        if dir[2] > 0.0 {
+            2.0
+        } else {
+            5.0
+        }
     } else if dir[1] > 0.0 {
         1.0
     } else {
@@ -129,7 +150,12 @@ pub fn cube_uv_get_face(dir: [f32; 3]) -> f32 {
 }
 
 /// Bilinear sample from a PMREM-order six-face cube (`faces[0]` = +X … `faces[5]` = -Z).
-pub fn sample_pmrem_faces(faces: [&[u8]; 6], face_size: u32, linear: bool, dir: [f32; 3]) -> [f32; 3] {
+pub fn sample_pmrem_faces(
+    faces: [&[u8]; 6],
+    face_size: u32,
+    linear: bool,
+    dir: [f32; 3],
+) -> [f32; 3] {
     let face = cube_uv_get_face(dir) as usize;
     let uv = cube_uv_get_uv_cpu(dir, face as f32);
     sample_face_bilinear(faces[face], face_size, uv[0], uv[1], linear)
@@ -171,7 +197,11 @@ fn decode_px(data: &[u8], off: usize, linear: bool) -> f32 {
         return 0.0;
     }
     let s = data[off] as f32 / 255.0;
-    if linear { s } else { srgb_to_linear(s) }
+    if linear {
+        s
+    } else {
+        srgb_to_linear(s)
+    }
 }
 
 fn decode_rgb(data: &[u8], off: usize, linear: bool) -> [f32; 3] {
@@ -183,7 +213,11 @@ fn decode_rgb(data: &[u8], off: usize, linear: bool) -> [f32; 3] {
 }
 
 fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 /// Pack six-face cubemap LOD levels into a CubeUV 2D atlas.
@@ -200,7 +234,8 @@ pub fn pack_cube_uv_atlas(
 
     for (lod_out, (faces, face_size)) in levels.iter().zip(size_lods.iter()).enumerate() {
         let output_size = *face_size;
-        let x_off = 3 * output_size
+        let x_off = 3
+            * output_size
             * if lod_out as u32 > lod_max - LOD_MIN {
                 lod_out as u32 - (lod_max - LOD_MIN)
             } else {
@@ -208,7 +243,15 @@ pub fn pack_cube_uv_atlas(
             };
         let y_bottom = 4 * (cube_size - output_size);
         let y_off = height - y_bottom - 2 * output_size;
-        blit_cube_faces_to_tile(&mut pixels, width, x_off, y_off, output_size, faces, lod_out);
+        blit_cube_faces_to_tile(
+            &mut pixels,
+            width,
+            x_off,
+            y_off,
+            output_size,
+            faces,
+            lod_out,
+        );
     }
 
     let texel_width = 1.0 / width as f32;
@@ -248,7 +291,8 @@ fn blit_cube_faces_to_tile(
                 if src_off + 3 >= data.len() {
                     continue;
                 }
-                let dst_off = (((cube_uv_atlas_row(dst_y, face_size, y)) * atlas_w + dst_x + x) * 4) as usize;
+                let dst_off =
+                    (((cube_uv_atlas_row(dst_y, face_size, y)) * atlas_w + dst_x + x) * 4) as usize;
                 if dst_off + 3 >= atlas.len() {
                     continue;
                 }
@@ -306,9 +350,15 @@ fn sample_atlas_pixel(pixels: &[u8], width: u32, height: u32, u: f32, v: f32) ->
     out
 }
 
-pub fn atlas_lod_origin(lod_out: u32, output_size: u32, cube_size: u32, lod_max: u32) -> (u32, u32) {
+pub fn atlas_lod_origin(
+    lod_out: u32,
+    output_size: u32,
+    cube_size: u32,
+    lod_max: u32,
+) -> (u32, u32) {
     let height = 4 * cube_size;
-    let x_off = 3 * output_size
+    let x_off = 3
+        * output_size
         * if lod_out > lod_max - LOD_MIN {
             lod_out - (lod_max - LOD_MIN)
         } else {
@@ -405,7 +455,8 @@ pub fn blit_cube_faces_to_atlas_lod_f32(
                 if src_off + 3 >= data.len() {
                     continue;
                 }
-                let dst_off = (((cube_uv_atlas_row(dst_y, face_size, y)) * atlas_w + dst_x + x) * 4) as usize;
+                let dst_off =
+                    (((cube_uv_atlas_row(dst_y, face_size, y)) * atlas_w + dst_x + x) * 4) as usize;
                 if dst_off + 3 >= atlas.len() {
                     continue;
                 }
@@ -574,17 +625,35 @@ pub fn sample_atlas_bilinear(atlas: &CubeUvAtlas, direction: [f32; 3], mip_int: 
 
 fn cube_uv_get_uv_cpu(direction: [f32; 3], face: f32) -> [f32; 2] {
     let uv = if face == 0.0 {
-        [direction[2] / direction[0].abs(), direction[1] / direction[0].abs()]
+        [
+            direction[2] / direction[0].abs(),
+            direction[1] / direction[0].abs(),
+        ]
     } else if face == 1.0 {
-        [-direction[0] / direction[1].abs(), -direction[2] / direction[1].abs()]
+        [
+            -direction[0] / direction[1].abs(),
+            -direction[2] / direction[1].abs(),
+        ]
     } else if face == 2.0 {
-        [-direction[0] / direction[2].abs(), direction[1] / direction[2].abs()]
+        [
+            -direction[0] / direction[2].abs(),
+            direction[1] / direction[2].abs(),
+        ]
     } else if face == 3.0 {
-        [-direction[2] / direction[0].abs(), direction[1] / direction[0].abs()]
+        [
+            -direction[2] / direction[0].abs(),
+            direction[1] / direction[0].abs(),
+        ]
     } else if face == 4.0 {
-        [-direction[0] / direction[1].abs(), direction[2] / direction[1].abs()]
+        [
+            -direction[0] / direction[1].abs(),
+            direction[2] / direction[1].abs(),
+        ]
     } else {
-        [direction[0] / direction[2].abs(), direction[1] / direction[2].abs()]
+        [
+            direction[0] / direction[2].abs(),
+            direction[1] / direction[2].abs(),
+        ]
     };
     [0.5 * (uv[0] + 1.0), 0.5 * (uv[1] + 1.0)]
 }

@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use super::BufferGeometry;
 use crate::materials::Material;
+use std::sync::Arc;
 
 /// A drawable: geometry + material. The renderer caches per-mesh GPU buffers
 /// using identity of these Arcs.

@@ -25,9 +25,18 @@ impl BoxHelper {
             Vector3::new(bb.min.x, bb.max.y, bb.max.z),
         ];
         let edges = [
-            (0,1),(1,2),(2,3),(3,0),
-            (4,5),(5,6),(6,7),(7,4),
-            (0,4),(1,5),(2,6),(3,7),
+            (0, 1),
+            (1, 2),
+            (2, 3),
+            (3, 0),
+            (4, 5),
+            (5, 6),
+            (6, 7),
+            (7, 4),
+            (0, 4),
+            (1, 5),
+            (2, 6),
+            (3, 7),
         ];
         let mut positions = Vec::with_capacity(edges.len() * 6);
         for (a, b) in edges {

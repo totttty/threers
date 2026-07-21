@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
-    use crate::core::BufferGeometry;
     use crate::core::BufferAttribute;
+    use crate::core::BufferGeometry;
     use crate::geometries::{BoxGeometry, SphereGeometry};
     use crate::utils::compute_vertex_normals;
     use crate::{
@@ -45,7 +45,10 @@ mod tests {
         let mut b = CsgBrush::new(BoxGeometry::new(1.0, 1.0, 1.0));
         let result = evaluator.evaluate(&mut a, &mut b, ADDITION);
         let verts = result.get_attribute("position").unwrap().count();
-        assert!(verts >= 36, "union should emit triangle soup, got {verts} verts");
+        assert!(
+            verts >= 36,
+            "union should emit triangle soup, got {verts} verts"
+        );
     }
 
     #[test]
@@ -103,7 +106,8 @@ mod tests {
         use super::super::operations::perform_operation;
         use crate::core::BufferAttribute;
 
-        const RAW: &[u8] = include_bytes!("../../tests/parity/scenes/rust/bvh-csg-after-sphere.geom.bin");
+        const RAW: &[u8] =
+            include_bytes!("../../tests/parity/scenes/rust/bvh-csg-after-sphere.geom.bin");
         let vert_count = u32::from_le_bytes(RAW[4..8].try_into().expect("header")) as usize;
         let pos_bytes = &RAW[8..8 + vert_count * 12];
         let mut positions = Vec::with_capacity(vert_count * 3);
@@ -125,7 +129,14 @@ mod tests {
         let mut attr = vec![TypedAttributeData::new()];
         attr[0].initialize_array("position", 3);
         attr[0].initialize_array("normal", 3);
-        perform_operation(&mut acc, &mut win_cut, &[SUBTRACTION], &mut splitter, &mut attr, false);
+        perform_operation(
+            &mut acc,
+            &mut win_cut,
+            &[SUBTRACTION],
+            &mut splitter,
+            &mut attr,
+            false,
+        );
         let verts = attr[0].get_count(0);
         assert!(
             (verts as i64 - 55_914).unsigned_abs() <= 200,
@@ -143,7 +154,12 @@ mod tests {
             let x = pos.array[i * 3];
             let y = pos.array[i * 3 + 1];
             let z = pos.array[i * 3 + 2];
-            if x >= wf_min.0 && x <= wf_max.0 && y >= wf_min.1 && y <= wf_max.1 && z >= wf_min.2 && z <= wf_max.2
+            if x >= wf_min.0
+                && x <= wf_max.0
+                && y >= wf_min.1
+                && y <= wf_max.1
+                && z >= wf_min.2
+                && z <= wf_max.2
             {
                 win += 1;
             }
@@ -154,7 +170,10 @@ mod tests {
         (win, z_ext)
     }
 
-    fn tri_key(pos: &crate::core::BufferAttribute, t: usize) -> (i32, i32, i32, i32, i32, i32, i32, i32, i32) {
+    fn tri_key(
+        pos: &crate::core::BufferAttribute,
+        t: usize,
+    ) -> (i32, i32, i32, i32, i32, i32, i32, i32, i32) {
         use super::super::triangle_utils::hash_vertex3;
         let i = t * 9;
         let a = crate::math::Vector3::new(pos.array[i], pos.array[i + 1], pos.array[i + 2]);
@@ -168,12 +187,13 @@ mod tests {
 
     #[test]
     fn native_sphere_soup_overlaps_js_reference() {
-        use std::collections::HashSet;
         use crate::core::BufferAttribute;
+        use std::collections::HashSet;
 
         const AFTER_SPHERE: &[u8] =
             include_bytes!("../../tests/parity/scenes/rust/bvh-csg-after-sphere.geom.bin");
-        let vert_count = u32::from_le_bytes(AFTER_SPHERE[4..8].try_into().expect("header")) as usize;
+        let vert_count =
+            u32::from_le_bytes(AFTER_SPHERE[4..8].try_into().expect("header")) as usize;
         let pos_bytes = &AFTER_SPHERE[8..8 + vert_count * 12];
         let mut positions = Vec::with_capacity(vert_count * 3);
         for chunk in pos_bytes.chunks_exact(4) {
@@ -221,13 +241,12 @@ mod tests {
     #[test]
     #[ignore = "Rust winFrame ADDITION still +1.2k verts over JS export on matching winCut input"]
     fn hierarchy_window_steps_from_js_sphere_match_export() {
-        
-        
         use crate::core::BufferAttribute;
 
         const AFTER_SPHERE: &[u8] =
             include_bytes!("../../tests/parity/scenes/rust/bvh-csg-after-sphere.geom.bin");
-        const FINAL: &[u8] = include_bytes!("../../tests/parity/scenes/rust/bvh-csg-hierarchy.geom.bin");
+        const FINAL: &[u8] =
+            include_bytes!("../../tests/parity/scenes/rust/bvh-csg-hierarchy.geom.bin");
 
         let load_positions = |raw: &[u8]| -> BufferGeometry {
             let vert_count = u32::from_le_bytes(raw[4..8].try_into().expect("header")) as usize;
@@ -284,7 +303,10 @@ mod tests {
         evaluator.use_groups = false;
         let geom = build_bvh_csg_hierarchy_geometry(&mut evaluator, AFTER_SPHERE, AFTER_WINCUT);
         let verts = geom.get_attribute("position").unwrap().count();
-        assert!(verts > 58_000, "reference-sphere hierarchy expected ~59k verts, got {verts}");
+        assert!(
+            verts > 58_000,
+            "reference-sphere hierarchy expected ~59k verts, got {verts}"
+        );
 
         let pos = geom.get_attribute("position").unwrap();
         let mut toward_cam = 0usize;
@@ -400,7 +422,8 @@ mod tests {
 
     #[test]
     fn window_frame_region_has_geometry() {
-        const RAW: &[u8] = include_bytes!("../../tests/parity/scenes/rust/bvh-csg-hierarchy.geom.bin");
+        const RAW: &[u8] =
+            include_bytes!("../../tests/parity/scenes/rust/bvh-csg-hierarchy.geom.bin");
         let js_vert_count = u32::from_le_bytes(RAW[4..8].try_into().expect("header")) as usize;
         let pos_bytes = &RAW[8..8 + js_vert_count * 12];
         let mut positions = Vec::with_capacity(js_vert_count * 3);
@@ -423,7 +446,8 @@ mod tests {
 
     #[test]
     fn hierarchy_matches_js_export_vertex_count() {
-        const RAW: &[u8] = include_bytes!("../../tests/parity/scenes/rust/bvh-csg-hierarchy.geom.bin");
+        const RAW: &[u8] =
+            include_bytes!("../../tests/parity/scenes/rust/bvh-csg-hierarchy.geom.bin");
         let expected_verts = u32::from_le_bytes(RAW[4..8].try_into().expect("header")) as usize;
 
         let geom = build_hierarchy();

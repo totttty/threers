@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use std::f32::consts::PI;
-use crate::textures::{CubeTexture, CubeUvAtlas, TextureFormat};
-use crate::math::Vector3;
 use super::cube_uv::{
-    atlas_lod_origin, extract_cube_faces_from_atlas_lod,
-    pmrem_face_uv, pmrem_get_direction, sample_atlas_pixels_bilinear_f32,
+    atlas_lod_origin, extract_cube_faces_from_atlas_lod, pmrem_face_uv, pmrem_get_direction,
+    sample_atlas_pixels_bilinear_f32,
 };
+use crate::math::Vector3;
+use crate::textures::{CubeTexture, CubeUvAtlas, TextureFormat};
+use std::f32::consts::PI;
+use std::sync::Arc;
 
 /// Number of PMREM LOD planes — matches three.js for a 256³ cube (lodMax=8).
 pub const PMREM_MIP_LEVELS: u32 = 11;
@@ -19,16 +19,56 @@ const INV_PHI: f32 = 0.618_033_988_749_894_9;
 
 /// Dodecahedron axis directions used by three.js PMREM blur passes.
 const BLUR_POLE_AXES: [Vector3; 10] = [
-    Vector3 { x: -PHI, y: INV_PHI, z: 0.0 },
-    Vector3 { x: PHI, y: INV_PHI, z: 0.0 },
-    Vector3 { x: -INV_PHI, y: 0.0, z: PHI },
-    Vector3 { x: INV_PHI, y: 0.0, z: PHI },
-    Vector3 { x: 0.0, y: PHI, z: -INV_PHI },
-    Vector3 { x: 0.0, y: PHI, z: INV_PHI },
-    Vector3 { x: -1.0, y: 1.0, z: -1.0 },
-    Vector3 { x: 1.0, y: 1.0, z: -1.0 },
-    Vector3 { x: -1.0, y: 1.0, z: 1.0 },
-    Vector3 { x: 1.0, y: 1.0, z: 1.0 },
+    Vector3 {
+        x: -PHI,
+        y: INV_PHI,
+        z: 0.0,
+    },
+    Vector3 {
+        x: PHI,
+        y: INV_PHI,
+        z: 0.0,
+    },
+    Vector3 {
+        x: -INV_PHI,
+        y: 0.0,
+        z: PHI,
+    },
+    Vector3 {
+        x: INV_PHI,
+        y: 0.0,
+        z: PHI,
+    },
+    Vector3 {
+        x: 0.0,
+        y: PHI,
+        z: -INV_PHI,
+    },
+    Vector3 {
+        x: 0.0,
+        y: PHI,
+        z: INV_PHI,
+    },
+    Vector3 {
+        x: -1.0,
+        y: 1.0,
+        z: -1.0,
+    },
+    Vector3 {
+        x: 1.0,
+        y: 1.0,
+        z: -1.0,
+    },
+    Vector3 {
+        x: -1.0,
+        y: 1.0,
+        z: 1.0,
+    },
+    Vector3 {
+        x: 1.0,
+        y: 1.0,
+        z: 1.0,
+    },
 ];
 
 /// Prefiltered MipMap Radiance Environment generator. Builds a CPU-side
@@ -62,9 +102,7 @@ impl PmremGenerator {
         let mut atlas = vec![0.0f32; pixel_count];
         let mut ping = vec![0.0f32; pixel_count];
 
-        rasterize_mip0_cube_uv_to_atlas_f32(
-            &mut atlas, width, &mip0_cube, cube_size, lod_max,
-        );
+        rasterize_mip0_cube_uv_to_atlas_f32(&mut atlas, width, &mip0_cube, cube_size, lod_max);
 
         let mut mip_faces: Vec<[Vec<u8>; 6]> = vec![clone_cube_faces(&mip0_cube)];
         let mut mip_sizes: Vec<u32> = vec![size_lods[0]];
@@ -72,23 +110,52 @@ impl PmremGenerator {
         let mut atlas_bytes = vec![0u8; pixel_count];
         for i in 1..level_count {
             let target_size = size_lods[i];
-            let delta = (sigmas[i] * sigmas[i] - sigmas[i - 1] * sigmas[i - 1]).max(0.0).sqrt();
+            let delta = (sigmas[i] * sigmas[i] - sigmas[i - 1] * sigmas[i - 1])
+                .max(0.0)
+                .sqrt();
             if delta > 0.0 {
                 let pole = BLUR_POLE_AXES[(level_count - i - 1) as usize % BLUR_POLE_AXES.len()];
                 // Do not copy the full atlas into ping — three.js only renders the blur viewport
                 // into the ping target; stale mip0 in ping was leaking into long-pass samples.
                 blur_atlas_half(
-                    &atlas, &mut ping, width, height, cube_size, lod_max,
-                    i as u32 - 1, i as u32, size_lods[i - 1], target_size, delta, true, pole,
+                    &atlas,
+                    &mut ping,
+                    width,
+                    height,
+                    cube_size,
+                    lod_max,
+                    i as u32 - 1,
+                    i as u32,
+                    size_lods[i - 1],
+                    target_size,
+                    delta,
+                    true,
+                    pole,
                 );
                 blur_atlas_half(
-                    &ping, &mut atlas, width, height, cube_size, lod_max,
-                    i as u32, i as u32, target_size, target_size, delta, false, pole,
+                    &ping,
+                    &mut atlas,
+                    width,
+                    height,
+                    cube_size,
+                    lod_max,
+                    i as u32,
+                    i as u32,
+                    target_size,
+                    target_size,
+                    delta,
+                    false,
+                    pole,
                 );
             }
             quantize_atlas_f32_to_u8(&atlas, &mut atlas_bytes);
             mip_faces.push(extract_cube_faces_from_atlas_lod(
-                &atlas_bytes, width, cube_size, lod_max, i as u32, target_size,
+                &atlas_bytes,
+                width,
+                cube_size,
+                lod_max,
+                i as u32,
+                target_size,
             ));
             mip_sizes.push(target_size);
         }
@@ -110,8 +177,12 @@ impl PmremGenerator {
             mip_sizes[0],
             TextureFormat::Rgba8Unorm,
             [
-                level0[0].clone(), level0[1].clone(), level0[2].clone(),
-                level0[3].clone(), level0[4].clone(), level0[5].clone(),
+                level0[0].clone(),
+                level0[1].clone(),
+                level0[2].clone(),
+                level0[3].clone(),
+                level0[4].clone(),
+                level0[5].clone(),
             ],
         )
         .with_pmrem_mips(mip_faces, mip_sizes)
@@ -132,13 +203,26 @@ impl PmremGenerator {
     }
 
     /// Convert an equirectangular HDR texture into a CubeTexture.
-    pub fn from_equirect(equirect_rgba: &[u8], src_w: u32, src_h: u32, cube_size: u32) -> CubeTexture {
+    pub fn from_equirect(
+        equirect_rgba: &[u8],
+        src_w: u32,
+        src_h: u32,
+        cube_size: u32,
+    ) -> CubeTexture {
         let face_pixels = (cube_size as usize) * (cube_size as usize) * 4;
         if equirect_rgba.is_empty() || src_w == 0 || src_h == 0 {
-            return CubeTexture::new(cube_size, TextureFormat::Rgba8UnormSrgb, [
-                vec![0u8; face_pixels], vec![0u8; face_pixels], vec![0u8; face_pixels],
-                vec![0u8; face_pixels], vec![0u8; face_pixels], vec![0u8; face_pixels],
-            ]);
+            return CubeTexture::new(
+                cube_size,
+                TextureFormat::Rgba8UnormSrgb,
+                [
+                    vec![0u8; face_pixels],
+                    vec![0u8; face_pixels],
+                    vec![0u8; face_pixels],
+                    vec![0u8; face_pixels],
+                    vec![0u8; face_pixels],
+                    vec![0u8; face_pixels],
+                ],
+            );
         }
         let sample = |u: f32, v: f32| -> [u8; 4] {
             let x = (u * src_w as f32).floor() as usize;
@@ -146,7 +230,12 @@ impl PmremGenerator {
             let x = x.min(src_w as usize - 1);
             let y = y.min(src_h as usize - 1);
             let off = (y * src_w as usize + x) * 4;
-            [equirect_rgba[off], equirect_rgba[off+1], equirect_rgba[off+2], equirect_rgba[off+3]]
+            [
+                equirect_rgba[off],
+                equirect_rgba[off + 1],
+                equirect_rgba[off + 2],
+                equirect_rgba[off + 3],
+            ]
         };
         let mut faces: [Vec<u8>; 6] = Default::default();
         for face in 0..6 {
@@ -156,12 +245,12 @@ impl PmremGenerator {
                     let u = (xi as f32 + 0.5) / cube_size as f32 * 2.0 - 1.0;
                     let v = (yi as f32 + 0.5) / cube_size as f32 * 2.0 - 1.0;
                     let dir = match face {
-                        0 => [ 1.0, -v, -u],
-                        1 => [-1.0, -v,  u],
-                        2 => [ u,  1.0,  v],
-                        3 => [ u, -1.0, -v],
-                        4 => [ u,  -v,  1.0],
-                        _ => [-u,  -v, -1.0],
+                        0 => [1.0, -v, -u],
+                        1 => [-1.0, -v, u],
+                        2 => [u, 1.0, v],
+                        3 => [u, -1.0, -v],
+                        4 => [u, -v, 1.0],
+                        _ => [-u, -v, -1.0],
                     };
                     let len = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
                     let nx = dir[0] / len;
@@ -176,7 +265,11 @@ impl PmremGenerator {
             faces[face] = data;
         }
         let [f0, f1, f2, f3, f4, f5] = faces;
-        CubeTexture::new(cube_size, TextureFormat::Rgba8UnormSrgb, [f0, f1, f2, f3, f4, f5])
+        CubeTexture::new(
+            cube_size,
+            TextureFormat::Rgba8UnormSrgb,
+            [f0, f1, f2, f3, f4, f5],
+        )
     }
 }
 
@@ -222,10 +315,18 @@ fn cube_from_mip(pmrem: &CubeTexture, idx: usize) -> CubeTexture {
     let sizes = pmrem.pmrem_sizes.as_ref().expect("pmrem sizes");
     let faces = &mips[idx];
     let size = sizes[idx];
-    CubeTexture::new(size, pmrem.format, [
-        faces[0].as_ref().clone(), faces[1].as_ref().clone(), faces[2].as_ref().clone(),
-        faces[3].as_ref().clone(), faces[4].as_ref().clone(), faces[5].as_ref().clone(),
-    ])
+    CubeTexture::new(
+        size,
+        pmrem.format,
+        [
+            faces[0].as_ref().clone(),
+            faces[1].as_ref().clone(),
+            faces[2].as_ref().clone(),
+            faces[3].as_ref().clone(),
+            faces[4].as_ref().clone(),
+            faces[5].as_ref().clone(),
+        ],
+    )
 }
 
 fn blend_cube_mips(pmrem: &CubeTexture, a: usize, b: usize, t: f32) -> CubeTexture {
@@ -269,7 +370,11 @@ fn resize_face_bytes(data: &[u8], src_size: u32, dst_size: u32, format: TextureF
             for c in 0..3 {
                 let sample = |sx: usize, sy: usize| -> f32 {
                     let v = data[(sy * src_size as usize + sx) * 4 + c] as f32 / 255.0;
-                    if format == TextureFormat::Rgba8Unorm { v } else { srgb_to_linear(v) }
+                    if format == TextureFormat::Rgba8Unorm {
+                        v
+                    } else {
+                        srgb_to_linear(v)
+                    }
                 };
                 let v0 = sample(x0, y0) * (1.0 - tx) + sample(x1, y0) * tx;
                 let v1 = sample(x0, y1) * (1.0 - tx) + sample(x1, y1) * tx;
@@ -328,11 +433,9 @@ fn rasterize_mip0_cube_uv_to_atlas_f32(
             for xi in 0..face_size {
                 let (u, v) = pmrem_face_uv(face_size, xi, yi);
                 let d = pmrem_get_direction(pmrem_slot, u, v);
-                let rgb = sample_cube_linear(
-                    cube,
-                    Vector3::new(-d[0], d[1], d[2]),
-                );
-                let dst_off = (((dst_y + (face_size - 1 - yi)) * atlas_w + dst_x + xi) * 4) as usize;
+                let rgb = sample_cube_linear(cube, Vector3::new(-d[0], d[1], d[2]));
+                let dst_off =
+                    (((dst_y + (face_size - 1 - yi)) * atlas_w + dst_x + xi) * 4) as usize;
                 if dst_off + 3 < atlas.len() {
                     atlas[dst_off] = rgb[0];
                     atlas[dst_off + 1] = rgb[1];
@@ -390,7 +493,8 @@ fn blur_atlas_half(
 
     let mip_int = lod_max as f32 - lod_in as f32;
     let pole_axis = pole_axis.normalize();
-    let (dst_x0, dst_y0) = super::cube_uv::atlas_lod_origin(lod_out, output_size, cube_size, lod_max);
+    let (dst_x0, dst_y0) =
+        super::cube_uv::atlas_lod_origin(lod_out, output_size, cube_size, lod_max);
 
     for pmrem_face in 0..6u32 {
         let col = pmrem_face % 3;
@@ -428,8 +532,12 @@ fn blur_atlas_half(
                     if i == 0 {
                         let sd0 = rotate_dir_raw(axis, dir_vec, 0.0);
                         let rgb0 = sample_atlas_pixels_bilinear_f32(
-                            src, width, height, lod_max,
-                            [sd0[0], sd0[1], sd0[2]], mip_int,
+                            src,
+                            width,
+                            height,
+                            lod_max,
+                            [sd0[0], sd0[1], sd0[2]],
+                            mip_int,
                         );
                         total[0] += rgb0[0] * w;
                         total[1] += rgb0[1] * w;
@@ -438,12 +546,20 @@ fn blur_atlas_half(
                         let sn = rotate_dir_raw(axis, dir_vec, -theta);
                         let sp = rotate_dir_raw(axis, dir_vec, theta);
                         let rgb_n = sample_atlas_pixels_bilinear_f32(
-                            src, width, height, lod_max,
-                            [sn[0], sn[1], sn[2]], mip_int,
+                            src,
+                            width,
+                            height,
+                            lod_max,
+                            [sn[0], sn[1], sn[2]],
+                            mip_int,
                         );
                         let rgb_p = sample_atlas_pixels_bilinear_f32(
-                            src, width, height, lod_max,
-                            [sp[0], sp[1], sp[2]], mip_int,
+                            src,
+                            width,
+                            height,
+                            lod_max,
+                            [sp[0], sp[1], sp[2]],
+                            mip_int,
                         );
                         total[0] += (rgb_n[0] + rgb_p[0]) * w;
                         total[1] += (rgb_n[1] + rgb_p[1]) * w;
@@ -451,7 +567,8 @@ fn blur_atlas_half(
                     }
                 }
 
-                let dst_off = (((face_y0 + (output_size - 1 - yi)) * width + face_x0 + xi) * 4) as usize;
+                let dst_off =
+                    (((face_y0 + (output_size - 1 - yi)) * width + face_x0 + xi) * 4) as usize;
                 if dst_off + 3 < dst.len() {
                     dst[dst_off] = total[0];
                     dst[dst_off + 1] = total[1];
@@ -497,12 +614,17 @@ fn half_blur_resample(
     } else {
         2.0 * PI / (2.0 * MAX_BLUR_SAMPLES as f32 - 1.0)
     };
-    let sigma_pixels = if sigma > 0.0 { sigma / radians_per_pixel } else { 0.0 };
+    let sigma_pixels = if sigma > 0.0 {
+        sigma / radians_per_pixel
+    } else {
+        0.0
+    };
     let sample_count = if sigma > 0.0 {
         (1.0 + 3.0 * sigma_pixels).floor() as u32 + 1
     } else {
         1
-    }.min(MAX_BLUR_SAMPLES);
+    }
+    .min(MAX_BLUR_SAMPLES);
 
     let mut weights = Vec::with_capacity(sample_count as usize);
     let mut sum = 0.0f32;
@@ -574,7 +696,11 @@ fn half_blur_resample(
         faces[face] = data;
     }
     let [f0, f1, f2, f3, f4, f5] = faces;
-    CubeTexture::new(out_size, TextureFormat::Rgba8Unorm, [f0, f1, f2, f3, f4, f5])
+    CubeTexture::new(
+        out_size,
+        TextureFormat::Rgba8Unorm,
+        [f0, f1, f2, f3, f4, f5],
+    )
 }
 
 fn rotate_dir_raw(axis: Vector3, dir: Vector3, angle: f32) -> [f32; 3] {
@@ -628,17 +754,21 @@ fn resize_cube(input: &CubeTexture, size: u32) -> CubeTexture {
 #[cfg(test)]
 fn face_dir(face: usize, u: f32, v: f32) -> Vector3 {
     match face {
-        0 => Vector3::new( 1.0, -v, -u),
-        1 => Vector3::new(-1.0, -v,  u),
-        2 => Vector3::new( u,  1.0,  v),
-        3 => Vector3::new( u, -1.0, -v),
-        4 => Vector3::new( u,  -v,  1.0),
-        _ => Vector3::new(-u,  -v, -1.0),
+        0 => Vector3::new(1.0, -v, -u),
+        1 => Vector3::new(-1.0, -v, u),
+        2 => Vector3::new(u, 1.0, v),
+        3 => Vector3::new(u, -1.0, -v),
+        4 => Vector3::new(u, -v, 1.0),
+        _ => Vector3::new(-u, -v, -1.0),
     }
 }
 
 fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 fn linear_to_byte(c: f32) -> u8 {
@@ -647,7 +777,11 @@ fn linear_to_byte(c: f32) -> u8 {
 
 fn linear_to_srgb_byte(c: f32) -> u8 {
     let c = c.clamp(0.0, 1.0);
-    let s = if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+    let s = if c <= 0.0031308 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
     (s * 255.0).round() as u8
 }
 
@@ -656,7 +790,11 @@ fn sample_cube_linear(cube: &CubeTexture, dir: Vector3) -> [f32; 3] {
     if matches!(cube.format, TextureFormat::Rgba8Unorm) {
         rgb
     } else {
-        [srgb_to_linear(rgb[0]), srgb_to_linear(rgb[1]), srgb_to_linear(rgb[2])]
+        [
+            srgb_to_linear(rgb[0]),
+            srgb_to_linear(rgb[1]),
+            srgb_to_linear(rgb[2]),
+        ]
     }
 }
 
@@ -665,15 +803,31 @@ fn sample_cube_raw(cube: &CubeTexture, dir: Vector3) -> [f32; 3] {
     let abs_y = dir.y.abs();
     let abs_z = dir.z.abs();
     let (face, sc, tc, ma) = if abs_x >= abs_y && abs_x >= abs_z {
-        if dir.x > 0.0 { (0, -dir.z, -dir.y, abs_x) } else { (1, dir.z, -dir.y, abs_x) }
+        if dir.x > 0.0 {
+            (0, -dir.z, -dir.y, abs_x)
+        } else {
+            (1, dir.z, -dir.y, abs_x)
+        }
     } else if abs_y >= abs_z {
-        if dir.y > 0.0 { (2, dir.x, dir.z, abs_y) } else { (3, dir.x, -dir.z, abs_y) }
-    } else if dir.z > 0.0 { (4, dir.x, -dir.y, abs_z) } else { (5, -dir.x, -dir.y, abs_z) };
+        if dir.y > 0.0 {
+            (2, dir.x, dir.z, abs_y)
+        } else {
+            (3, dir.x, -dir.z, abs_y)
+        }
+    } else if dir.z > 0.0 {
+        (4, dir.x, -dir.y, abs_z)
+    } else {
+        (5, -dir.x, -dir.y, abs_z)
+    };
     let s = ((sc / ma) * 0.5 + 0.5).clamp(0.0, 1.0);
     let t = ((tc / ma) * 0.5 + 0.5).clamp(0.0, 1.0);
     let face_data = &cube.faces[face];
     if cube.size <= 1 {
-        let off = if face_data.len() >= 4 { 0 } else { return [0.0; 3]; };
+        let off = if face_data.len() >= 4 {
+            0
+        } else {
+            return [0.0; 3];
+        };
         return [
             face_data[off] as f32 / 255.0,
             face_data[off + 1] as f32 / 255.0,
@@ -725,14 +879,17 @@ mod tests {
         let height = 4 * size;
         let mut atlas = vec![0.0f32; (width * height * 4) as usize];
         rasterize_mip0_cube_uv_to_atlas_f32(&mut atlas, width, &base, size, lod_max);
-        let c = sample_atlas_pixels_bilinear_f32(&atlas, width, height, lod_max, [0.0, 0.0, 1.0], 5.0);
+        let c =
+            sample_atlas_pixels_bilinear_f32(&atlas, width, height, lod_max, [0.0, 0.0, 1.0], 5.0);
         eprintln!("step01 mip0 exact +Z {c:?}");
         assert!(c[1] < 0.08 && c[1] > 0.03, "mip0 +Z green {}", c[1]);
     }
 
     #[test]
     fn pmrem_blur_step02_mip0_at_blur_output_pixel() {
-        use super::super::cube_uv::{pmrem_face_uv, pmrem_get_direction, sample_atlas_pixels_bilinear_f32};
+        use super::super::cube_uv::{
+            pmrem_face_uv, pmrem_get_direction, sample_atlas_pixels_bilinear_f32,
+        };
         let size = 32;
         let lod_max = 5;
         let base = prepare_pmrem_cube(&parity_cube(size), size);
@@ -740,7 +897,8 @@ mod tests {
         let height = 4 * size;
         let mut atlas = vec![0.0f32; (width * height * 4) as usize];
         rasterize_mip0_cube_uv_to_atlas_f32(&mut atlas, width, &base, size, lod_max);
-        let exact = sample_atlas_pixels_bilinear_f32(&atlas, width, height, lod_max, [0.0, 0.0, 1.0], 5.0);
+        let exact =
+            sample_atlas_pixels_bilinear_f32(&atlas, width, height, lod_max, [0.0, 0.0, 1.0], 5.0);
         for (xi, yi) in [(7u32, 7), (8, 8), (7, 8), (8, 7)] {
             let (u, v) = pmrem_face_uv(16, xi, yi);
             let d = pmrem_get_direction(2, u, v);
@@ -755,7 +913,9 @@ mod tests {
         let size = 32;
         let base = prepare_pmrem_cube(&parity_cube(size), size);
         let (_, sigmas) = pmrem_lod_chain(5);
-        let delta = (sigmas[1] * sigmas[1] - sigmas[0] * sigmas[0]).max(0.0).sqrt();
+        let delta = (sigmas[1] * sigmas[1] - sigmas[0] * sigmas[0])
+            .max(0.0)
+            .sqrt();
         let pole = BLUR_POLE_AXES[6];
         let blurred = blur_cube_resample(&base, 32, 16, delta, pole);
         let face = &blurred.faces[4];
@@ -779,13 +939,27 @@ mod tests {
         let mut atlas = vec![0.0f32; (width * height * 4) as usize];
         let mut ping = vec![0.0f32; atlas.len()];
         rasterize_mip0_cube_uv_to_atlas_f32(&mut atlas, width, &base, cube_size, lod_max);
-        let delta = (sigmas[1] * sigmas[1] - sigmas[0] * sigmas[0]).max(0.0).sqrt();
+        let delta = (sigmas[1] * sigmas[1] - sigmas[0] * sigmas[0])
+            .max(0.0)
+            .sqrt();
         let pole = BLUR_POLE_AXES[6];
         blur_atlas_half(
-            &atlas, &mut ping, width, height, cube_size, lod_max,
-            0, 1, size_lods[0], size_lods[1], delta, true, pole,
+            &atlas,
+            &mut ping,
+            width,
+            height,
+            cube_size,
+            lod_max,
+            0,
+            1,
+            size_lods[0],
+            size_lods[1],
+            delta,
+            true,
+            pole,
         );
-        let c = sample_atlas_pixels_bilinear_f32(&ping, width, height, lod_max, [0.0, 0.0, 1.0], 4.0);
+        let c =
+            sample_atlas_pixels_bilinear_f32(&ping, width, height, lod_max, [0.0, 0.0, 1.0], 4.0);
         eprintln!("step04 atlas lat-only +Z mip_int=4 {c:?}");
     }
 
@@ -802,18 +976,44 @@ mod tests {
         let mut atlas = vec![0.0f32; (width * height * 4) as usize];
         let mut ping = vec![0.0f32; atlas.len()];
         rasterize_mip0_cube_uv_to_atlas_f32(&mut atlas, width, &base, cube_size, lod_max);
-        let delta = (sigmas[1] * sigmas[1] - sigmas[0] * sigmas[0]).max(0.0).sqrt();
+        let delta = (sigmas[1] * sigmas[1] - sigmas[0] * sigmas[0])
+            .max(0.0)
+            .sqrt();
         let pole = BLUR_POLE_AXES[6];
         blur_atlas_half(
-            &atlas, &mut ping, width, height, cube_size, lod_max,
-            0, 1, size_lods[0], size_lods[1], delta, true, pole,
+            &atlas,
+            &mut ping,
+            width,
+            height,
+            cube_size,
+            lod_max,
+            0,
+            1,
+            size_lods[0],
+            size_lods[1],
+            delta,
+            true,
+            pole,
         );
-        let lat = sample_atlas_pixels_bilinear_f32(&ping, width, height, lod_max, [0.0, 0.0, 1.0], 4.0);
+        let lat =
+            sample_atlas_pixels_bilinear_f32(&ping, width, height, lod_max, [0.0, 0.0, 1.0], 4.0);
         blur_atlas_half(
-            &ping, &mut atlas, width, height, cube_size, lod_max,
-            1, 1, size_lods[1], size_lods[1], delta, false, pole,
+            &ping,
+            &mut atlas,
+            width,
+            height,
+            cube_size,
+            lod_max,
+            1,
+            1,
+            size_lods[1],
+            size_lods[1],
+            delta,
+            false,
+            pole,
         );
-        let full = sample_atlas_pixels_bilinear_f32(&atlas, width, height, lod_max, [0.0, 0.0, 1.0], 4.0);
+        let full =
+            sample_atlas_pixels_bilinear_f32(&atlas, width, height, lod_max, [0.0, 0.0, 1.0], 4.0);
         eprintln!("step05 lat {lat:?} after long {full:?}");
     }
 
@@ -835,46 +1035,74 @@ mod tests {
     #[test]
     fn pmrem_atlas_has_color_data() {
         let size = 32;
-        let src = CubeTexture::new(size, TextureFormat::Rgba8UnormSrgb, [
-            solid(size, 255, 64, 64), solid(size, 64, 255, 64), solid(size, 64, 64, 255),
-            solid(size, 255, 255, 64), solid(size, 255, 64, 255), solid(size, 64, 255, 255),
-        ]);
+        let src = CubeTexture::new(
+            size,
+            TextureFormat::Rgba8UnormSrgb,
+            [
+                solid(size, 255, 64, 64),
+                solid(size, 64, 255, 64),
+                solid(size, 64, 64, 255),
+                solid(size, 255, 255, 64),
+                solid(size, 255, 64, 255),
+                solid(size, 64, 255, 255),
+            ],
+        );
         let pmrem = PmremGenerator::generate_pmrem(&src, size);
         let atlas = pmrem.cube_uv_atlas.as_ref().expect("atlas");
         assert_eq!(atlas.width, 336);
         assert_eq!(atlas.height, 128);
         assert!((atlas.texel_width - 1.0 / 336.0).abs() < 1e-6);
-        let non_zero = atlas.pixels.chunks(4).filter(|c| c[0] | c[1] | c[2] > 0).count();
+        let non_zero = atlas
+            .pixels
+            .chunks(4)
+            .filter(|c| c[0] | c[1] | c[2] > 0)
+            .count();
         assert!(non_zero > 1000, "atlas mostly empty: {non_zero}");
-        let sample = super::super::cube_uv::sample_atlas_bilinear(
-            atlas, [0.0, 0.0, 1.0], 1.0,
+        let sample = super::super::cube_uv::sample_atlas_bilinear(atlas, [0.0, 0.0, 1.0], 1.0);
+        assert!(
+            sample[0] + sample[1] + sample[2] > 0.5,
+            "atlas sample black: {sample:?}"
         );
-        assert!(sample[0] + sample[1] + sample[2] > 0.5, "atlas sample black: {sample:?}");
     }
 
     #[test]
     fn pmrem_cube_uv_samples_non_black_at_roughness() {
         let size = 32;
-        let src = CubeTexture::new(size, TextureFormat::Rgba8UnormSrgb, [
-            solid(size, 255, 64, 64), solid(size, 64, 255, 64), solid(size, 64, 64, 255),
-            solid(size, 255, 255, 64), solid(size, 255, 64, 255), solid(size, 64, 255, 255),
-        ]);
+        let src = CubeTexture::new(
+            size,
+            TextureFormat::Rgba8UnormSrgb,
+            [
+                solid(size, 255, 64, 64),
+                solid(size, 64, 255, 64),
+                solid(size, 64, 64, 255),
+                solid(size, 255, 255, 64),
+                solid(size, 255, 64, 255),
+                solid(size, 64, 255, 255),
+            ],
+        );
         let pmrem = PmremGenerator::generate_pmrem(&src, size);
         let atlas = pmrem.cube_uv_atlas.as_ref().expect("atlas");
         let mut non_zero = 0;
         for y in 32..64 {
             for x in 144..192 {
                 let i = ((y * atlas.width + x) * 4) as usize;
-                if atlas.pixels[i] | atlas.pixels[i+1] | atlas.pixels[i+2] > 0 { non_zero += 1; }
+                if atlas.pixels[i] | atlas.pixels[i + 1] | atlas.pixels[i + 2] > 0 {
+                    non_zero += 1;
+                }
             }
         }
-        assert!(non_zero > 50, "filter_int strip empty at x=144: {non_zero} px");
+        assert!(
+            non_zero > 50,
+            "filter_int strip empty at x=144: {non_zero} px"
+        );
 
         let mip: f32 = if 0.45_f32 >= 0.8 {
             (1.0 - 0.45) * 1.0 / 0.2 - 2.0
         } else if 0.45_f32 >= 0.4 {
             (0.8 - 0.45) * 3.0 / 0.4 - 1.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         let mip_i = mip.floor();
         let mip_f = mip - mip_i;
         let c0 = super::super::cube_uv::sample_atlas_bilinear(atlas, [0.0, 0.0, 1.0], mip_i);
@@ -885,44 +1113,88 @@ mod tests {
             c0[2] * (1.0 - mip_f) + c1[2] * mip_f,
         ];
         let lum = sample[0] + sample[1] + sample[2];
-        assert!(lum > 0.5, "roughness 0.45 sample too dark: {sample:?} mip={mip}");
+        assert!(
+            lum > 0.5,
+            "roughness 0.45 sample too dark: {sample:?} mip={mip}"
+        );
     }
 
     #[test]
     fn pmrem_direction_color_diag() {
         let size = 32;
-        let src = CubeTexture::new(size, TextureFormat::Rgba8UnormSrgb, [
-            solid(size, 255, 64, 64), solid(size, 64, 255, 64), solid(size, 64, 64, 255),
-            solid(size, 255, 255, 64), solid(size, 255, 64, 255), solid(size, 64, 255, 255),
-        ]);
+        let src = CubeTexture::new(
+            size,
+            TextureFormat::Rgba8UnormSrgb,
+            [
+                solid(size, 255, 64, 64),
+                solid(size, 64, 255, 64),
+                solid(size, 64, 64, 255),
+                solid(size, 255, 255, 64),
+                solid(size, 255, 64, 255),
+                solid(size, 64, 255, 255),
+            ],
+        );
         let pmrem = PmremGenerator::generate_pmrem(&src, size);
         let atlas = pmrem.cube_uv_atlas.as_ref().unwrap();
         let dirs = [
-            ("+X", [1.0,0.0,0.0]), ("-X", [-1.0,0.0,0.0]),
-            ("+Y", [0.0,1.0,0.0]), ("-Y", [0.0,-1.0,0.0]),
-            ("+Z", [0.0,0.0,1.0]), ("-Z", [0.0,0.0,-1.0]),
+            ("+X", [1.0, 0.0, 0.0]),
+            ("-X", [-1.0, 0.0, 0.0]),
+            ("+Y", [0.0, 1.0, 0.0]),
+            ("-Y", [0.0, -1.0, 0.0]),
+            ("+Z", [0.0, 0.0, 1.0]),
+            ("-Z", [0.0, 0.0, -1.0]),
         ];
         let rough = 0.45_f32;
-        let mip = if rough >= 0.4 { (0.8 - rough) * 3.0 / 0.4 - 1.0 } else { 0.0 };
+        let mip = if rough >= 0.4 {
+            (0.8 - rough) * 3.0 / 0.4 - 1.0
+        } else {
+            0.0
+        };
         let mip_i = mip.floor();
         let mip_f = mip - mip_i;
         eprintln!("mip={mip} i={mip_i} f={mip_f}");
         for (name, d) in dirs {
             let c0 = super::super::cube_uv::sample_atlas_bilinear(atlas, d, mip_i);
             let c1 = super::super::cube_uv::sample_atlas_bilinear(atlas, d, mip_i + 1.0);
-            let c = [c0[0]*(1.0-mip_f)+c1[0]*mip_f, c0[1]*(1.0-mip_f)+c1[1]*mip_f, c0[2]*(1.0-mip_f)+c1[2]*mip_f];
-            let rgb = [ (c[0]*255.0) as u8, (c[1]*255.0) as u8, (c[2]*255.0) as u8 ];
+            let c = [
+                c0[0] * (1.0 - mip_f) + c1[0] * mip_f,
+                c0[1] * (1.0 - mip_f) + c1[1] * mip_f,
+                c0[2] * (1.0 - mip_f) + c1[2] * mip_f,
+            ];
+            let rgb = [
+                (c[0] * 255.0) as u8,
+                (c[1] * 255.0) as u8,
+                (c[2] * 255.0) as u8,
+            ];
             eprintln!("{name} atlas {rgb:?}");
         }
         let refl = [0.0, 0.0, 1.0];
         let c0 = super::super::cube_uv::sample_atlas_bilinear(atlas, refl, mip_i);
         let c1 = super::super::cube_uv::sample_atlas_bilinear(atlas, refl, mip_i + 1.0);
-        let c = [c0[0]*(1.0-mip_f)+c1[0]*mip_f, c0[1]*(1.0-mip_f)+c1[1]*mip_f, c0[2]*(1.0-mip_f)+c1[2]*mip_f];
-        eprintln!("reflect +Z atlas linear {c:?} srgb approx {:?}", [(c[0]*255.0) as u8,(c[1]*255.0) as u8,(c[2]*255.0) as u8]);
+        let c = [
+            c0[0] * (1.0 - mip_f) + c1[0] * mip_f,
+            c0[1] * (1.0 - mip_f) + c1[1] * mip_f,
+            c0[2] * (1.0 - mip_f) + c1[2] * mip_f,
+        ];
+        eprintln!(
+            "reflect +Z atlas linear {c:?} srgb approx {:?}",
+            [
+                (c[0] * 255.0) as u8,
+                (c[1] * 255.0) as u8,
+                (c[2] * 255.0) as u8
+            ]
+        );
 
         // Irradiance sample used by multiscattering (roughness = 1.0 → mip -2).
         let irr = super::super::cube_uv::sample_atlas_bilinear(atlas, [0.0, 0.0, 1.0], -2.0);
-        eprintln!("irradiance +Z mip-2 linear {irr:?} srgb {:?}", [(irr[0]*255.0) as u8,(irr[1]*255.0) as u8,(irr[2]*255.0) as u8]);
+        eprintln!(
+            "irradiance +Z mip-2 linear {irr:?} srgb {:?}",
+            [
+                (irr[0] * 255.0) as u8,
+                (irr[1] * 255.0) as u8,
+                (irr[2] * 255.0) as u8
+            ]
+        );
 
         // Simulate IBL for metal r=0.45 at sphere center.
         let radiance = c;
@@ -947,10 +1219,21 @@ mod tests {
             radiance[1] * fss_ess + fms * ems * cosine_weighted_irr[1],
             radiance[2] * fss_ess + fms * ems * cosine_weighted_irr[2],
         ];
-        eprintln!("IBL simulated linear {lit:?} srgb {:?}", [(lit[0]*255.0) as u8,(lit[1]*255.0) as u8,(lit[2]*255.0) as u8]);
+        eprintln!(
+            "IBL simulated linear {lit:?} srgb {:?}",
+            [
+                (lit[0] * 255.0) as u8,
+                (lit[1] * 255.0) as u8,
+                (lit[2] * 255.0) as u8
+            ]
+        );
 
         for test_r in [0.35_f32, 0.45, 0.55] {
-            let m = if test_r >= 0.4 { (0.8 - test_r) * 3.0 / 0.4 - 1.0 } else { 0.0 };
+            let m = if test_r >= 0.4 {
+                (0.8 - test_r) * 3.0 / 0.4 - 1.0
+            } else {
+                0.0
+            };
             let mi = m.floor();
             let mf = m - mi;
             let c0 = super::super::cube_uv::sample_atlas_bilinear(atlas, [0.0, 0.0, 1.0], mi);
@@ -960,18 +1243,33 @@ mod tests {
                 c0[1] * (1.0 - mf) + c1[1] * mf,
                 c0[2] * (1.0 - mf) + c1[2] * mf,
             ];
-            eprintln!("+Z rough={test_r} mip={m:.3} rgb {:?}", [(s[0]*255.0) as u8, (s[1]*255.0) as u8, (s[2]*255.0) as u8]);
+            eprintln!(
+                "+Z rough={test_r} mip={m:.3} rgb {:?}",
+                [
+                    (s[0] * 255.0) as u8,
+                    (s[1] * 255.0) as u8,
+                    (s[2] * 255.0) as u8
+                ]
+            );
         }
     }
 
     #[test]
     fn pmrem_atlas_threejs_uv_probe() {
-        use super::super::cube_uv::{sample_atlas_bilinear, sample_cube_uv_env, read_atlas_texel};
+        use super::super::cube_uv::{read_atlas_texel, sample_atlas_bilinear, sample_cube_uv_env};
         let size = 32;
-        let src = CubeTexture::new(size, TextureFormat::Rgba8UnormSrgb, [
-            solid(size, 255, 64, 64), solid(size, 64, 255, 64), solid(size, 64, 64, 255),
-            solid(size, 255, 255, 64), solid(size, 255, 64, 255), solid(size, 64, 255, 255),
-        ]);
+        let src = CubeTexture::new(
+            size,
+            TextureFormat::Rgba8UnormSrgb,
+            [
+                solid(size, 255, 64, 64),
+                solid(size, 64, 255, 64),
+                solid(size, 64, 64, 255),
+                solid(size, 255, 255, 64),
+                solid(size, 255, 64, 255),
+                solid(size, 64, 255, 255),
+            ],
+        );
         let pmrem = PmremGenerator::generate_pmrem(&src, size);
         let atlas = pmrem.cube_uv_atlas.as_ref().unwrap();
         if let (Some(mips), Some(sizes)) = (&pmrem.pmrem_mips, &pmrem.pmrem_sizes) {
@@ -1006,20 +1304,34 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn gpu_cube_uv_atlas_upload_matches_cpu() {
-        use crate::renderer::gpu_texture::GpuCubeTexture;
-        use crate::renderer::gpu_texture::f16_bits_to_f32;
         use super::super::cube_uv::{atlas_bilinear_uv, sample_cube_uv_env};
+        use crate::renderer::gpu_texture::f16_bits_to_f32;
+        use crate::renderer::gpu_texture::GpuCubeTexture;
 
         let size = 32;
-        let src = CubeTexture::new(size, TextureFormat::Rgba8UnormSrgb, [
-            solid(size, 255, 64, 64), solid(size, 64, 255, 64), solid(size, 64, 64, 255),
-            solid(size, 255, 255, 64), solid(size, 255, 64, 255), solid(size, 64, 255, 255),
-        ]);
+        let src = CubeTexture::new(
+            size,
+            TextureFormat::Rgba8UnormSrgb,
+            [
+                solid(size, 255, 64, 64),
+                solid(size, 64, 255, 64),
+                solid(size, 64, 64, 255),
+                solid(size, 255, 255, 64),
+                solid(size, 255, 64, 255),
+                solid(size, 64, 255, 255),
+            ],
+        );
         let pmrem = PmremGenerator::generate_pmrem(&src, size);
         let atlas = pmrem.cube_uv_atlas.as_ref().expect("atlas");
 
         let cpu = sample_cube_uv_env(atlas, [0.0, 0.0, 1.0], 0.45);
-        let (u, v) = atlas_bilinear_uv(atlas.width, atlas.height, atlas.lod_max, [0.0, 0.0, 1.0], 1.0);
+        let (u, v) = atlas_bilinear_uv(
+            atlas.width,
+            atlas.height,
+            atlas.lod_max,
+            [0.0, 0.0, 1.0],
+            1.0,
+        );
         let f32_px = atlas.pixels_f32.as_ref().expect("f32 atlas");
         let x = (u * (atlas.width - 1) as f32).round() as u32;
         let y = (v * (atlas.height - 1) as f32).round() as u32;
@@ -1119,15 +1431,23 @@ mod tests {
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn gpu_cube_uv_shader_sample_matches_cpu() {
-        use crate::renderer::gpu_texture::GpuCubeTexture;
         use super::super::cube_uv::sample_cube_uv_env;
+        use crate::renderer::gpu_texture::GpuCubeTexture;
         use wgpu::util::DeviceExt;
 
         let size = 32;
-        let src = CubeTexture::new(size, TextureFormat::Rgba8UnormSrgb, [
-            solid(size, 255, 64, 64), solid(size, 64, 255, 64), solid(size, 64, 64, 255),
-            solid(size, 255, 255, 64), solid(size, 255, 64, 255), solid(size, 64, 255, 255),
-        ]);
+        let src = CubeTexture::new(
+            size,
+            TextureFormat::Rgba8UnormSrgb,
+            [
+                solid(size, 255, 64, 64),
+                solid(size, 64, 255, 64),
+                solid(size, 64, 64, 255),
+                solid(size, 255, 255, 64),
+                solid(size, 255, 64, 255),
+                solid(size, 64, 255, 255),
+            ],
+        );
         let pmrem = PmremGenerator::generate_pmrem(&src, size);
         let atlas = pmrem.cube_uv_atlas.as_ref().expect("atlas");
         let cpu = sample_cube_uv_env(atlas, [0.0, 0.0, 1.0], 0.45);
@@ -1165,7 +1485,8 @@ mod tests {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("cube uv sample"),
-            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(r#"
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                r#"
 struct Params { texel_w: f32, texel_h: f32, lod_max: f32, roughness: f32, _pad: vec2<f32> }
 @group(0) @binding(0) var tex: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
@@ -1236,7 +1557,8 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
     let c1 = bilinear_cube_uv(dir, mip_i + 1.0);
     return vec4(mix(c0, c1, mip_f), 1.0);
 }
-"#)),
+"#,
+            )),
         });
 
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1273,7 +1595,13 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
 
         #[repr(C)]
         #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-        struct Params { texel_w: f32, texel_h: f32, lod_max: f32, roughness: f32, _pad: [f32; 2] }
+        struct Params {
+            texel_w: f32,
+            texel_h: f32,
+            lod_max: f32,
+            roughness: f32,
+            _pad: [f32; 2],
+        }
 
         let params = Params {
             texel_w: atlas.texel_width,
@@ -1292,9 +1620,18 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
             label: Some("cube uv sample bg"),
             layout: &bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(uv_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
-                wgpu::BindGroupEntry { binding: 2, resource: param_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(uv_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: param_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -1306,7 +1643,11 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
 
         let color_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("out"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1369,18 +1710,33 @@ fn bilinear_cube_uv(direction: vec3<f32>, mip_int: f32) -> vec3<f32> {
             mapped_at_creation: false,
         });
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture { texture: &color_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::ImageCopyTexture {
+                texture: &color_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             wgpu::ImageCopyBuffer {
                 buffer: &read_buf,
-                layout: wgpu::ImageDataLayout { offset: 0, bytes_per_row: Some(padded_bpr), rows_per_image: Some(1) },
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bpr),
+                    rows_per_image: Some(1),
+                },
             },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
         queue.submit(Some(encoder.finish()));
 
         let slice = read_buf.slice(..);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
         device.poll(wgpu::Maintain::Wait);
         rx.recv().unwrap().unwrap();
         let data = slice.get_mapped_range();

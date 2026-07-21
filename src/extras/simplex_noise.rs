@@ -27,14 +27,18 @@ impl SimplexNoise {
 
 fn corner_contrib(x: f32, y: f32, i: i32, j: i32) -> f32 {
     let t = 0.5 - x * x - y * y;
-    if t < 0.0 { return 0.0; }
+    if t < 0.0 {
+        return 0.0;
+    }
     let t2 = t * t;
     let g = grad(hash(i, j), x, y);
     t2 * t2 * g
 }
 
 fn hash(i: i32, j: i32) -> u32 {
-    let mut h = (i as u32).wrapping_mul(374761393).wrapping_add((j as u32).wrapping_mul(668265263));
+    let mut h = (i as u32)
+        .wrapping_mul(374761393)
+        .wrapping_add((j as u32).wrapping_mul(668265263));
     h = (h ^ (h >> 13)).wrapping_mul(1274126177);
     h ^ (h >> 16)
 }

@@ -1,5 +1,5 @@
-use crate::math::Vector3;
 use super::Curve3;
+use crate::math::Vector3;
 
 /// Centripetal Catmull-Rom spline through 3D points. Matches three.js's
 /// `CatmullRomCurve3` (default tension 0.5, type "centripetal").
@@ -12,15 +12,23 @@ pub struct CatmullRomCurve3 {
 
 impl CatmullRomCurve3 {
     pub fn new(points: Vec<Vector3>) -> Self {
-        Self { points, closed: false, tension: 0.5 }
+        Self {
+            points,
+            closed: false,
+            tension: 0.5,
+        }
     }
 }
 
 impl Curve3 for CatmullRomCurve3 {
     fn get_point(&self, t: f32) -> Vector3 {
         let n = self.points.len();
-        if n == 0 { return Vector3::ZERO; }
-        if n == 1 { return self.points[0]; }
+        if n == 0 {
+            return Vector3::ZERO;
+        }
+        if n == 1 {
+            return self.points[0];
+        }
         let segments = if self.closed { n } else { n - 1 };
         let p = t * segments as f32;
         let i = (p.floor() as usize).min(segments - 1);
@@ -41,7 +49,14 @@ impl Curve3 for CatmullRomCurve3 {
     }
 }
 
-fn catmull_rom(p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3, t: f32, tension: f32) -> Vector3 {
+fn catmull_rom(
+    p0: Vector3,
+    p1: Vector3,
+    p2: Vector3,
+    p3: Vector3,
+    t: f32,
+    tension: f32,
+) -> Vector3 {
     let t2 = t * t;
     let t3 = t2 * t;
     let m1 = (p2 - p0) * tension;
