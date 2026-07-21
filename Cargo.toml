@@ -19,6 +19,38 @@ crate-type = ["cdylib", "rlib"]
 name = "headless_video"
 required-features = ["video"]
 
+[[example]]
+name = "export_h264"
+required-features = ["video"]
+
+[[example]]
+name = "export_hevc"
+required-features = ["video"]
+
+[[example]]
+name = "export_hevc_vt"
+required-features = ["video"]
+
+[[example]]
+name = "export_vp9"
+required-features = ["video"]
+
+[[example]]
+name = "export_vp9_alpha"
+required-features = ["video"]
+
+[[example]]
+name = "export_gif"
+required-features = ["video", "native-codec"]
+
+[[example]]
+name = "export_apng"
+required-features = ["video", "native-codec"]
+
+[[example]]
+name = "export_webm_native"
+required-features = ["native-codec"]
+
 [features]
 default = []
 mesh-bvh = []

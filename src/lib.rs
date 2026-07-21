@@ -178,13 +178,23 @@ pub use renderer::headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
 #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
 pub mod video;
 #[cfg(all(feature = "video", not(target_arch = "wasm32")))]
-pub use video::{export_video, VideoCodec, VideoError, VideoOptions, VideoQuality};
+pub use video::{
+    export_video, export_video_with_progress, format_video_progress, VideoCodec, VideoError,
+    VideoExportEvent, VideoExportPhase, VideoExportProgress, VideoExporter, VideoOptions,
+    VideoQuality,
+};
 
 /// From-scratch, pure-Rust media codecs (HEVC, VP9/WebM, APNG, GIF, bitstream) —
 /// no ffmpeg, no C bindings, and wasm-compatible. Enable the `native-codec`
 /// feature.
 #[cfg(feature = "native-codec")]
 pub mod codec;
+#[cfg(feature = "native-codec")]
+pub use codec::animation::{
+    encode_animation_rgba, encode_animation_rgba_with_progress, format_animation_progress,
+    AnimationEncodeError, AnimationEncodeOptions, AnimationExportPhase, AnimationExportProgress,
+    BrowserCodec,
+};
 #[cfg(feature = "native-codec")]
 pub use codec::apng::ApngEncoder;
 #[cfg(feature = "native-codec")]

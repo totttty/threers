@@ -14,6 +14,7 @@
 //! - [`crate::codec::apng`] / [`crate::codec::gif`] — animated PNG and GIF89a encode
 //!   (GIF also decodes).
 
+pub mod animation;
 pub mod apng;
 pub mod bitstream;
 pub mod gif;
@@ -22,6 +23,11 @@ pub mod mp4;
 pub mod vp9;
 pub mod webm;
 
+pub use animation::{
+    encode_animation_rgba, encode_animation_rgba_with_progress, format_animation_progress,
+    AnimationEncodeError, AnimationEncodeOptions, AnimationExportPhase, AnimationExportProgress,
+    BrowserCodec,
+};
 pub use apng::ApngEncoder;
 pub use bitstream::{emulation_prevention, rbsp_trailing_bits, BitWriter};
 pub use gif::{

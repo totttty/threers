@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>export video — threers</title>
+  <link rel="stylesheet" href="/web/examples/controls-demo.css">
+  <style>
+    .toolbar {
+      display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+      padding: 12px 16px; border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    .toolbar label { color: var(--muted); font-size: 13px; }
+    .toolbar select, .toolbar button {
+      font: inherit; padding: 6px 10px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    }
+    .toolbar button.primary {
+      background: var(--accent); border-color: transparent; color: #fff; cursor: pointer;
+    }
+    .toolbar button.primary:disabled { opacity: 0.5; cursor: wait; }
+    #status { color: var(--muted); font-size: 13px; margin-left: auto; }
+    .preview { position: relative; min-height: 360px; }
+    #canvas { width: 100%; height: 420px; display: block; background: #0b0c10; }
+    #err { color: #f66; padding: 8px 16px; white-space: pre-wrap; }
+    .note { padding: 12px 16px; color: var(--muted); font-size: 13px; line-height: 1.45; max-width: 720px; }
+    code { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>threers <span class="tag">· export video</span></h1>
+    <span class="status">wasm · native-codec · download</span>
+    <nav>
+      <a href="/web/examples/">all examples</a>
+      <a href="/tests/parity/">parity</a>
+    </nav>
+  </header>
+  <div class="toolbar">
+    <label for="fmt">Format</label>
+    <select id="fmt">
+      <option value="gif">GIF (browser)</option>
+      <option value="apng">APNG (browser)</option>
+      <option value="webm">WebM VP9</option>
+      <option value="webm-alpha">WebM VP9 + alpha</option>
+    </select>
+    <label for="frames">Frames</label>
+    <select id="frames">
+      <option value="15">15</option>
+      <option value="30" selected>30</option>
+      <option value="45">45</option>
+    </select>
+    <button class="primary" id="export" type="button">Export &amp; download</button>
+    <span id="status">ready</span>
+  </div>
+  <div class="preview">
+    <canvas id="canvas" width="320" height="240"></canvas>
+    <div id="err"></div>
+  </div>
+  <p class="note">
+    Requires a wasm build with <code>native-codec</code>:
+    <code>NATIVE_CODEC=1 web/build.sh</code>.
+    Uses <code>VideoExporter.from(...).gif().frames(n).download('cube')</code>
+    (<code>threers/video-export.js</code> for buffer-only encode).
+  </p>
+  <script type="module" src="/web/examples/export-video-demo.js"></script>
+</body>
+</html>

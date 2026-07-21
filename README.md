@@ -28,8 +28,8 @@ A **drop-in three.js replacement** for Rust and the browser, backed by [wgpu](ht
 - wgpu renderer with post-processing (FXAA, bloom, SSAO, glitch, halftone, …)
 - Loaders (glTF, OBJ, STL, HDR, …), animation, controls, helpers
 - **Headless** offscreen render → tightly packed RGBA (`HeadlessRenderer`, native)
-- **Video export** (`video`) — frame sequence → ffmpeg; native GIF when `native-codec` is on
-- **Native codecs** (`native-codec`) — pure-Rust GIF (encode/decode), APNG, VP9/WebM, HEVC/MP4; wasm-safe
+- **Video export** (`video`) — frame sequence → ffmpeg; native GIF/APNG when `native-codec` is on
+- **Native codecs** (`native-codec`) — pure-Rust GIF (encode/decode), APNG, VP9/WebM, HEVC/MP4; wasm-safe browser download
 - **Opt-in mesh BVH** (`mesh-bvh`) — accelerated raycast / shapecast (three-mesh-bvh–compatible)
 - **Opt-in CSG** (`bvh-csg`) — boolean ops on `BufferGeometry` (three-bvh-csg–compatible); Rust native + JS addon
 - **Web**: `web/threejs-shim.js` + wasm — drop-in `THREE.*` replacement targeting three.js r165
@@ -71,10 +71,28 @@ let _geom = ev.evaluate(&mut a, &mut b, SUBTRACTION);
 
 ### Headless render & video export
 
-Native-only. `HeadlessRenderer` owns the wgpu device and an offscreen target; `export_video` pipes RGBA frames to ffmpeg (or the in-process GIF encoder when both features are enabled).
+Native-only. `HeadlessRenderer` owns the wgpu device and an offscreen target; `export_video` pipes RGBA frames to ffmpeg (or in-process GIF/APNG when `native-codec` is enabled).
 
 ```bash
-cargo run --release --example headless_video --features video
+cargo run --release --example headless_video --features video   # H.264 demo
+```
+
+Per-format examples (optional `--out PATH`):
+
+| Example | Features | Output |
+|---------|----------|--------|
+| `export_h264` | `video` | `.mp4` (libx264) |
+| `export_hevc` | `video` | `.mp4` (libx265) |
+| `export_hevc_vt` | `video` | `.mp4` (hevc_videotoolbox) |
+| `export_vp9` | `video` | `.webm` opaque |
+| `export_vp9_alpha` | `video` | `.webm` + alpha |
+| `export_gif` | `video,native-codec` | `.gif` (no ffmpeg) |
+| `export_apng` | `video,native-codec` | animated PNG |
+| `export_webm_native` | `native-codec` | `.webm` pure-Rust VP9 |
+
+```bash
+cargo run --release --example export_gif --features "video,native-codec"
+cargo run --release --example export_vp9 --features video -- --out /tmp/cube.webm
 ```
 
 ```rust
@@ -86,7 +104,7 @@ let opts = VideoOptions::new("out.mp4").fps(30).codec(VideoCodec::H264);
 // export_video(w, h, frame_count, &opts, |i| { /* advance scene */; hr.render_to_rgba(...) })
 ```
 
-GIF without spawning ffmpeg:
+GIF / APNG without spawning ffmpeg:
 
 ```rust
 // features = ["video", "native-codec"]
@@ -95,6 +113,22 @@ let opts = VideoOptions::new("out.gif")
     .codec(VideoCodec::Gif)
     .transparent(true)
     .gif_colors(128);
+```
+
+Browser-friendly bytes API (also used from wasm):
+
+```rust
+// features = ["native-codec"]
+use threers::{encode_animation_rgba, AnimationEncodeOptions, BrowserCodec};
+let bytes = encode_animation_rgba(
+    &AnimationEncodeOptions {
+        width: 320, height: 240, fps: 15,
+        codec: BrowserCodec::Webm,
+        transparent: false,
+        gif_colors: 256,
+    },
+    frames, // Vec<Vec<u8>> of RGBA
+).unwrap();
 ```
 
 ### Native codecs (GIF, APNG, VP9, HEVC)
@@ -128,6 +162,73 @@ wasm-pack build --target web --out-dir web/pkg && bash web/post-build.sh
 # Or via the feature build scripts:
 MESH_BVH=1 web/build.sh          # mesh-bvh addon
 BVH_CSG=1 web/build.sh           # CSG addon (implies mesh-bvh)
+NATIVE_CODEC=1 web/build.sh      # GIF/APNG/WebM browser export bindings
+```
+
+**Export video in the browser** (after `NATIVE_CODEC=1` build): open
+[`web/examples/export-video.html`](web/examples/export-video.html) — render frames, encode GIF/APNG/WebM in-process, download the file. No ffmpeg.
+
+JS/TS API (`native-codec` wasm) — prefer `VideoExporter`:
+
+```js
+import {
+  initThreers,
+  VideoExporter,
+  assertVideoExportAvailable,
+} from '/web/threejs-shim.js';
+
+await initThreers('/web/pkg/threers_bg.wasm');
+assertVideoExportAvailable();
+
+const result = await VideoExporter.from(renderer, scene, camera)
+  .gif({ transparent: true })
+  .fps(15)
+  .parallel(3) // pipeline GPU readbacks (1–8)
+  .frames(30)
+  .update((i, n) => { cube.rotation.y = (i / n) * Math.PI * 2; })
+  .onProgress(({ message }) => console.log(message))
+  .download('cube');
+// or events:
+// exporter.on(VideoExportEvent.Progress, (e) => …)
+// exporter.on(VideoExportEvent.Complete, ({ detail }) => …)
+```
+
+Trace progress with events:
+
+```js
+exporter
+  .on(VideoExportEvent.Progress, (e) => console.log(e.message, e.ratio))
+  .on(VideoExportEvent.Complete, ({ detail }) => console.log(detail.result.summary));
+```
+
+Rust (same event model via callbacks):
+
+```rust
+use threers::{VideoCodec, VideoExporter, VideoExportEvent};
+
+VideoExporter::new("out/cube.gif")
+    .size(320, 240)
+    .frames(45)
+    .fps(15)
+    .codec(VideoCodec::Gif)
+    .on_progress(|p| eprintln!("{}", p.message))
+    .on_event(|ev| {
+        if let VideoExportEvent::Complete { output, .. } = ev {
+            eprintln!("wrote {output}");
+        }
+    })
+    .export(|i| { /* return RGBA for frame i */ vec![] })?;
+```
+
+Shorthands: `.gif()`, `.apng()`, `.webm({ alpha: true })`. Format strings like `"webm-alpha"` work via `.format(...)` / `parseVideoFormat`. Filenames need no extension (`"cube"` → `"cube.gif"`). Scene size defaults to the canvas; WebM sizes snap to multiples of 8. `.parallel(N)` overlaps render + async pixel readback across N targets. `.worker(true)` encodes in a Web Worker (`video-export-worker.js`).
+
+Buffer-only: `VideoExporter.encode(frames, { width, height, format, … })` or `encodeVideoFramesInWorker(...)` from `/web/video-export.js`.
+
+Headless check (needs Chromium + `NATIVE_CODEC=1` wasm):
+
+```bash
+NATIVE_CODEC=1 web/build.sh
+cd web && npm run test:video-export
 ```
 
 Then load `web/examples/index.html` or any page that imports `/web/threejs-shim.js` and calls `initThreers('/web/pkg/threers_bg.wasm')`.
@@ -227,7 +328,7 @@ CHANGELOG.md         Release history
 | CSG unit/parity tests | `cargo test --features bvh-csg --lib csg` |
 | GIF codec tests | `cargo test --features native-codec --lib codec::gif --test gif` |
 | Wasm release | `wasm-pack build --target web --out-dir web/pkg && bash web/post-build.sh` |
-| Feature wasm | `BVH_CSG=1 web/build.sh` / `MESH_BVH=1 web/build.sh` |
+| Feature wasm | `BVH_CSG=1` / `MESH_BVH=1` / `NATIVE_CODEC=1 web/build.sh` |
 | Parity scenes | `cd tests/parity && node generate-scenes.js` |
 | Rust scene snippets (parity UI Rust tab) | `cd tests/parity && node generate-rust-scenes.js` |
 | Regenerate shim types | `node web/scripts/generate-shim-types.mjs` (also runs in post-build) |

@@ -10,12 +10,15 @@
     "types": [],
     "paths": {
       "/web/threejs-shim.js": ["./threejs-shim.d.ts"],
+      "/web/video-export.js": ["./video-export.d.ts"],
       "/web/pkg/threers.js": ["./pkg/threers.d.ts"]
     }
   },
   "include": [
     "threejs-shim.d.ts",
-    "examples/controls-threers.ts"
+    "video-export.d.ts",
+    "examples/controls-threers.ts",
+    "examples/export-video.ts"
   ],
   "exclude": [
     "examples/controls-threejs.ts"

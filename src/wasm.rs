@@ -4394,3 +4394,113 @@ pub fn merge_geometries(geometries: Vec<WebBufferGeometry>) -> Result<WebBufferG
         inner: Arc::new(merged),
     })
 }
+
+// ---------------------------------------------------------------------------
+// Browser animation export (native-codec): GIF / APNG / WebM from RGBA frames
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "native-codec")]
+fn js_rgba_frames(frames: &js_sys::Array) -> Result<Vec<Vec<u8>>, JsValue> {
+    let n = frames.length() as usize;
+    if n == 0 {
+        return Err(JsValue::from_str("encode: need at least one frame"));
+    }
+    let mut out = Vec::with_capacity(n);
+    for i in 0..frames.length() {
+        let v = frames.get(i);
+        let u8a = js_sys::Uint8Array::new(&v);
+        let mut buf = vec![0u8; u8a.length() as usize];
+        u8a.copy_to(&mut buf);
+        out.push(buf);
+    }
+    Ok(out)
+}
+
+#[cfg(feature = "native-codec")]
+fn encode_browser_animation(
+    width: u32,
+    height: u32,
+    fps: u32,
+    codec: crate::BrowserCodec,
+    transparent: bool,
+    gif_colors: u16,
+    frames: &js_sys::Array,
+) -> Result<js_sys::Uint8Array, JsValue> {
+    let collected = js_rgba_frames(frames)?;
+    let opts = crate::AnimationEncodeOptions {
+        width,
+        height,
+        fps: fps.max(1),
+        codec,
+        transparent,
+        gif_colors: gif_colors.clamp(2, 256),
+    };
+    let bytes = crate::encode_animation_rgba(&opts, collected)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    Ok(js_sys::Uint8Array::from(bytes.as_slice()))
+}
+
+/// Encode RGBA frames to an animated GIF (`native-codec` feature).
+#[cfg(feature = "native-codec")]
+#[wasm_bindgen(js_name = encodeGifRgba)]
+pub fn encode_gif_rgba(
+    width: u32,
+    height: u32,
+    fps: u32,
+    colors: u16,
+    transparent: bool,
+    frames: js_sys::Array,
+) -> Result<js_sys::Uint8Array, JsValue> {
+    encode_browser_animation(
+        width,
+        height,
+        fps,
+        crate::BrowserCodec::Gif,
+        transparent,
+        colors,
+        &frames,
+    )
+}
+
+/// Encode RGBA frames to an animated PNG (`native-codec` feature).
+#[cfg(feature = "native-codec")]
+#[wasm_bindgen(js_name = encodeApngRgba)]
+pub fn encode_apng_rgba(
+    width: u32,
+    height: u32,
+    fps: u32,
+    transparent: bool,
+    frames: js_sys::Array,
+) -> Result<js_sys::Uint8Array, JsValue> {
+    encode_browser_animation(
+        width,
+        height,
+        fps,
+        crate::BrowserCodec::Apng,
+        transparent,
+        256,
+        &frames,
+    )
+}
+
+/// Encode RGBA frames to a VP9 WebM (`native-codec` feature).
+/// Width and height must be multiples of 8.
+#[cfg(feature = "native-codec")]
+#[wasm_bindgen(js_name = encodeWebmRgba)]
+pub fn encode_webm_rgba(
+    width: u32,
+    height: u32,
+    fps: u32,
+    transparent: bool,
+    frames: js_sys::Array,
+) -> Result<js_sys::Uint8Array, JsValue> {
+    encode_browser_animation(
+        width,
+        height,
+        fps,
+        crate::BrowserCodec::Webm,
+        transparent,
+        256,
+        &frames,
+    )
+}

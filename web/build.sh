@@ -19,12 +19,20 @@ fi
 
 echo "==> Building threers ($PROFILE) for wasm32-unknown-unknown..."
 FEATURES=""
+FEATURE_LIST=()
 if [ "${BVH_CSG:-}" = "1" ]; then
-    FEATURES="--features bvh-csg"
+    FEATURE_LIST+=("bvh-csg")
     echo "    (bvh-csg feature enabled — includes mesh-bvh)"
 elif [ "${MESH_BVH:-}" = "1" ]; then
-    FEATURES="--features mesh-bvh"
+    FEATURE_LIST+=("mesh-bvh")
     echo "    (mesh-bvh feature enabled)"
+fi
+if [ "${NATIVE_CODEC:-}" = "1" ]; then
+    FEATURE_LIST+=("native-codec")
+    echo "    (native-codec feature enabled — GIF/APNG/WebM browser export)"
+fi
+if [ "${#FEATURE_LIST[@]}" -gt 0 ]; then
+    FEATURES="--features $(IFS=,; echo "${FEATURE_LIST[*]}")"
 fi
 cargo build --target wasm32-unknown-unknown --lib $PROFILE_FLAG $FEATURES
 

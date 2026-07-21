@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>threers video-export tests</title>
+  <style>
+    body { font: 14px/1.4 ui-monospace, Menlo, monospace; background: #111; color: #ddd; margin: 16px; }
+    #log { white-space: pre-wrap; }
+    .ok { color: #6d6; }
+    .fail { color: #f66; }
+    canvas { display: none; }
+  </style>
+</head>
+<body>
+  <h1>video-export · wasm · parallel · worker</h1>
+  <div id="log">starting…</div>
+  <canvas id="c" width="64" height="48"></canvas>
+  <script type="module">
+    import THREE, {
+      initThreers,
+      VideoExporter,
+      VideoEncodeWorker,
+      VideoFormat,
+      assertVideoExportAvailable,
+      captureSceneFrames,
+      encodeVideoFramesInWorker,
+    } from '/web/threejs-shim.js';
+
+    const logEl = document.getElementById('log');
+    const lines = [];
+    function log(msg, cls = '') {
+      lines.push(cls ? `<span class="${cls}">${msg}</span>` : msg);
+      logEl.innerHTML = lines.join('\n');
+    }
+
+    function checksum(buf) {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < buf.length; i++) {
+        h ^= buf[i];
+        h = Math.imul(h, 16777619);
+      }
+      return (h >>> 0).toString(16).padStart(8, '0');
+    }
+
+    function assert(cond, msg) {
+      if (!cond) throw new Error(msg);
+    }
+
+    function solidFrame(w, h, r, g, b, a = 255) {
+      const out = new Uint8Array(w * h * 4);
+      for (let i = 0; i < w * h; i++) {
+        out[i * 4] = r;
+        out[i * 4 + 1] = g;
+        out[i * 4 + 2] = b;
+        out[i * 4 + 3] = a;
+      }
+      return out;
+    }
+
+    function framesEqual(a, b) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i].length !== b[i].length) return false;
+        for (let j = 0; j < a[i].length; j++) {
+          if (a[i][j] !== b[i][j]) return false;
+        }
+      }
+      return true;
+    }
+
+    const results = {
+      ok: false,
+      tests: [],
+      error: null,
+      webgpu: !!navigator.gpu,
+    };
+    window.__THREERS_VIDEO_TEST__ = results;
+
+    async function test(name, fn) {
+      try {
+        await fn();
+        results.tests.push({ name, ok: true });
+        log(`PASS  ${name}`, 'ok');
+      } catch (e) {
+        results.tests.push({ name, ok: false, error: String(e?.message || e) });
+        log(`FAIL  ${name}: ${e?.message || e}`, 'fail');
+        throw e;
+      }
+    }
+
+    async function main() {
+      await initThreers('/web/pkg/threers_bg.wasm');
+      assertVideoExportAvailable();
+      log('wasm native-codec ready');
+
+      const W = 64;
+      const H = 48;
+      const synthetic = [
+        solidFrame(W, H, 255, 0, 0),
+        solidFrame(W, H, 0, 255, 0),
+        solidFrame(W, H, 0, 0, 255),
+        solidFrame(W, H, 255, 255, 0),
+      ];
+
+      await test('progress events on VideoExporter', async () => {
+        const seen = [];
+        const exporter = new VideoExporter({
+          width: W, height: H, fps: 10, format: VideoFormat.Gif, gifColors: 16,
+        });
+        exporter.on('start', () => seen.push('start'));
+        exporter.on('progress', (e) => seen.push(`progress:${e.phase}`));
+        exporter.on('encode', () => seen.push('encode'));
+        exporter.on('complete', ({ detail }) => {
+          seen.push('complete');
+          assert(detail.result?.bytes?.length > 0, 'complete result');
+        });
+        exporter.encode(synthetic);
+        assert(seen.includes('start'), 'missing start');
+        assert(seen.includes('progress:encode') || seen.includes('encode'), 'missing encode progress');
+        assert(seen.includes('complete'), 'missing complete');
+        results.events = seen;
+      });
+
+      await test('main-thread wasm GIF encode', async () => {
+        const result = VideoExporter.encode(synthetic, {
+          width: W, height: H, fps: 10, format: VideoFormat.Gif, gifColors: 32,
+        });
+        assert(result.bytes[0] === 0x47 && result.bytes[1] === 0x49 && result.bytes[2] === 0x46, 'GIF magic');
+        assert(result.byteLength > 100, 'gif too small');
+        results.mainGifBytes = result.byteLength;
+        results.mainGifChecksum = checksum(result.bytes);
+      });
+
+      await test('web-worker wasm GIF encode', async () => {
+        const worker = new VideoEncodeWorker({
+          wasmUrl: new URL('/web/pkg/threers_bg.wasm', location.origin).href,
+          workerUrl: new URL('/web/video-export-worker.js', location.origin).href,
+        });
+        try {
+          const result = await worker.encode(synthetic, {
+            width: W, height: H, fps: 10, format: VideoFormat.Gif, gifColors: 32,
+          });
+          assert(result.bytes[0] === 0x47 && result.bytes[1] === 0x49 && result.bytes[2] === 0x46, 'GIF magic');
+          assert(result.byteLength === results.mainGifBytes, `worker size ${result.byteLength} != main ${results.mainGifBytes}`);
+          assert(checksum(result.bytes) === results.mainGifChecksum, 'worker gif bytes differ from main');
+        } finally {
+          worker.terminate();
+        }
+      });
+
+      await test('shared encodeVideoFramesInWorker APNG', async () => {
+        const result = await encodeVideoFramesInWorker(synthetic, {
+          width: W, height: H, fps: 10, format: VideoFormat.Apng, transparent: true,
+        }, {
+          wasmUrl: new URL('/web/pkg/threers_bg.wasm', location.origin).href,
+          workerUrl: new URL('/web/video-export-worker.js', location.origin).href,
+        });
+        assert(result.bytes[0] === 0x89 && result.bytes[1] === 0x50, 'PNG magic');
+        assert(result.byteLength > 100, 'apng too small');
+      });
+
+      if (!navigator.gpu) {
+        log('SKIP  parallel capture (no WebGPU)', 'fail');
+        results.tests.push({ name: 'parallel capture', ok: false, error: 'no WebGPU' });
+        throw new Error('WebGPU unavailable');
+      }
+
+      const canvas = document.getElementById('c');
+      const renderer = await THREE.WebGLRenderer.create(canvas);
+      renderer.setSize(W, H, false);
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0.1, 0.15, 0.25);
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshBasicMaterial({ color: 0x44aaff }),
+      );
+      scene.add(mesh);
+      const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 100);
+      camera.position.set(0, 0.8, 2.5);
+      camera.lookAt(0, 0, 0);
+
+      const frameCount = 8;
+      const update = (i, n) => { mesh.rotation.y = (i / n) * Math.PI * 2; };
+
+      let sequential;
+      await test('sequential capture (concurrency 1)', async () => {
+        sequential = await captureSceneFrames(renderer, scene, camera, {
+          width: W, height: H, frameCount, fps: 12, concurrency: 1, yield: false, update,
+        });
+        assert(sequential.length === frameCount, 'frame count');
+        assert(sequential[0].length === W * H * 4, 'rgba size');
+        results.seqChecksum = sequential.map(checksum).join(',');
+      });
+
+      await test('parallel capture (concurrency 3) matches sequential', async () => {
+        const parallel = await captureSceneFrames(renderer, scene, camera, {
+          width: W, height: H, frameCount, fps: 12, concurrency: 3, yield: false, update,
+        });
+        assert(parallel.length === frameCount, 'frame count');
+        assert(framesEqual(sequential, parallel), 'parallel frames differ from sequential');
+        results.parChecksum = parallel.map(checksum).join(',');
+      });
+
+      await test('parallel capture + worker encode end-to-end', async () => {
+        const result = await VideoExporter.from(renderer, scene, camera)
+          .gif({ colors: 32 })
+          .size(W, H)
+          .fps(12)
+          .parallel(3)
+          .worker(true)
+          .frames(frameCount)
+          .update(update)
+          .export();
+        assert(result.bytes[0] === 0x47, 'GIF magic');
+        assert(result.frameCount === frameCount, 'frameCount');
+        results.e2eBytes = result.byteLength;
+        results.e2eSummary = result.summary;
+      });
+
+      results.ok = results.tests.every((t) => t.ok);
+      document.title = results.ok ? 'PASS' : 'FAIL';
+      log(results.ok ? '\nALL PASSED' : '\nFAILED', results.ok ? 'ok' : 'fail');
+    }
+
+    main().catch((e) => {
+      results.ok = false;
+      results.error = String(e?.message || e);
+      document.title = 'FAIL';
+      log(`ERROR ${results.error}`, 'fail');
+    });
+  </script>
+</body>
+</html>

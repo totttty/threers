@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Web package versions (`web/package.json`, `web/pkg`) aligned to the crate version.
 - README updated with table of contents, headless/video/codec quick starts, and feature overview.
 - Expanded rustdoc on GIF encode/decode, video export, headless rendering, and `ShaderMaterial`.
+- Per-format `export_*` examples, `encode_animation_rgba` / `BrowserCodec`, and browser export demo (`NATIVE_CODEC=1`).
+- JS/TS video export API: `encodeVideoFrames`, `exportSceneVideo`, `BrowserVideoFormat` (`web/video-export.js` + shim).
 
 ## [0.0.1] — 2026-07-16
 

@@ -1,5 +1,8 @@
-//! Headless render → video, entirely in threers: `HeadlessRenderer` (no manual
-//! wgpu setup) + `export_video` (frame sequence → ffmpeg).
+//! Headless render → video via `HeadlessRenderer` + `export_video` (H.264 / ffmpeg).
+//!
+//! For every container format see the `export_*` examples:
+//! `export_h264`, `export_hevc`, `export_hevc_vt`, `export_vp9`,
+//! `export_vp9_alpha`, `export_gif`, `export_apng`, `export_webm_native`.
 //!
 //! ```text
 //! cargo run --release --example headless_video --features video
@@ -13,7 +16,6 @@ use threers::{
 };
 
 fn main() {
-    // 1) A headless renderer — this is the whole GPU setup.
     let (w, h) = (640u32, 480u32);
     let mut hr = HeadlessRenderer::builder()
         .size(w, h)
@@ -22,7 +24,6 @@ fn main() {
         .expect("headless renderer");
     let (rw, rh) = hr.render_size();
 
-    // 2) A scene: a shiny cube under a key light.
     let mut scene = Scene::new();
     scene.background = Color::new(0.05, 0.06, 0.09);
     scene.add_light(AmbientLight::new(Color::WHITE, 0.3));
@@ -39,7 +40,6 @@ fn main() {
     cam.position = Vector3::new(0.0, 1.4, 4.2);
     cam.look_at(Vector3::ZERO);
 
-    // 3) Export: rotate the cube per frame, render, stream to ffmpeg.
     let frames = 60;
     let opts = VideoOptions::new("./cube.mp4").fps(30).codec(VideoCodec::H264).crf(20);
     export_video(rw, rh, frames, &opts, |f| {

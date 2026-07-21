@@ -14,6 +14,10 @@
       "types": "./threejs-shim.d.ts",
       "default": "./threejs-shim.js"
     },
+    "./video-export.js": {
+      "types": "./video-export.d.ts",
+      "default": "./video-export.js"
+    },
     "./pkg/threers.js": {
       "types": "./pkg/threers.d.ts",
       "default": "./pkg/threers.js"
@@ -23,6 +27,9 @@
   "files": [
     "threejs-shim.js",
     "threejs-shim.d.ts",
+    "video-export.js",
+    "video-export.d.ts",
+    "video-export-worker.js",
     "pkg"
   ],
   "peerDependencies": {
@@ -35,9 +42,11 @@
   },
   "scripts": {
     "generate:types": "node scripts/generate-shim-types.mjs",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:video-export": "node scripts/test-video-export.mjs"
   },
   "devDependencies": {
+    "puppeteer-core": "^24.43.1",
     "three": "^0.165.0",
     "typescript": "^5.8.0"
   }

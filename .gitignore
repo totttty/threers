@@ -26,6 +26,9 @@ pnpm-debug.log*
 *.bak
 *.pending-snap
 
+# Example video export output
+/out/
+
 # Env / secrets
 .env
 .env.*

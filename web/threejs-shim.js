@@ -42,6 +42,63 @@ import init, {
     WebRaycaster, WebClock,
 } from './pkg/threers.js';
 import { Earcut } from './node_modules/three/src/extras/Earcut.js';
+import {
+    BrowserVideoFormat,
+    VideoEncodeWorker,
+    VideoExportError,
+    VideoExportErrorCode,
+    VideoExportEvent,
+    VideoExportProgressEvent,
+    VideoExporter,
+    VideoExportResult,
+    VideoFormat,
+    alignVideoSize,
+    assertVideoExportAvailable,
+    downloadVideoBytes,
+    emitProgress,
+    encodeAndDownloadVideoFrames,
+    encodeApngRgba as _encodeApngRgba,
+    encodeGifRgba as _encodeGifRgba,
+    encodeVideoFrames,
+    encodeVideoFramesInWorker,
+    encodeWebmRgba as _encodeWebmRgba,
+    formatBytes,
+    formatVideoProgress,
+    isVideoExportAvailable,
+    parseVideoFormat,
+    videoFilename,
+    videoMimeType,
+} from './video-export.js';
+
+export {
+    BrowserVideoFormat,
+    VideoEncodeWorker,
+    VideoExportError,
+    VideoExportErrorCode,
+    VideoExportEvent,
+    VideoExportProgressEvent,
+    VideoExporter,
+    VideoExportResult,
+    VideoFormat,
+    alignVideoSize,
+    assertVideoExportAvailable,
+    downloadVideoBytes,
+    emitProgress,
+    encodeAndDownloadVideoFrames,
+    encodeVideoFrames,
+    encodeVideoFramesInWorker,
+    formatBytes,
+    formatVideoProgress,
+    isVideoExportAvailable,
+    parseVideoFormat,
+    videoFilename,
+    videoMimeType,
+};
+
+/** Present when wasm was built with `--features native-codec` (throws if missing). */
+export const encodeGifRgba = _encodeGifRgba;
+export const encodeApngRgba = _encodeApngRgba;
+export const encodeWebmRgba = _encodeWebmRgba;
 
 /** Browsers reject wgpu's legacy `maxInterStageShaderComponents` limit name. */
 const STRIP_WEBGPU_LIMITS = new Set(['maxInterStageShaderComponents']);
@@ -3773,6 +3830,444 @@ export class WebGLRenderer {
     }
 }
 export const WebGPURenderer = WebGLRenderer;
+
+/**
+ * Render frames of `scene` through `renderer` into RGBA buffers.
+ *
+ * Size defaults to the canvas drawing-buffer size when `width`/`height` omitted.
+ * Prefer `frames` or `duration` (seconds × fps) for length.
+ * WebM capture sizes snap down to multiples of 8 unless `strictSize: true`.
+ *
+ * Set `parallel: true` (or `concurrency: N`) to pipeline GPU readbacks across
+ * multiple render targets so the next frame can render while a prior map_async
+ * completes. Default is sequential (`concurrency: 1`).
+ *
+ * @returns {Promise<Uint8Array[]>}
+ */
+export async function captureSceneFrames(renderer, scene, camera, options = {}) {
+    const canvas = renderer?.domElement;
+    let width = (options.width | 0) || (canvas?.width | 0);
+    let height = (options.height | 0) || (canvas?.height | 0);
+    const fps = Math.max(1, (options.fps | 0) || 30);
+    let frameCount = options.frameCount | 0;
+    if (!frameCount && options.frames) frameCount = options.frames | 0;
+    if (!frameCount && options.duration) {
+        frameCount = Math.max(1, Math.round(Number(options.duration) * fps));
+    }
+
+    const formatInfo = options.format != null
+        ? parseVideoFormat(options.format)
+        : { format: VideoFormat.Gif, transparent: false };
+    const format = formatInfo.format;
+
+    if (format === VideoFormat.Webm && width > 0 && height > 0) {
+        const aligned = alignVideoSize(width, height);
+        if (aligned.snapped) {
+            if (options.strictSize) {
+                throw new VideoExportError(
+                    `WebM/VP9 requires width and height multiples of 8 (got ${width}×${height})`,
+                    VideoExportErrorCode.InvalidDimensions,
+                    { hint: `use ${aligned.width}×${aligned.height}` },
+                );
+            }
+            width = aligned.width;
+            height = aligned.height;
+        }
+    }
+
+    if (width <= 0 || height <= 0 || frameCount <= 0) {
+        const missing = [];
+        if (width <= 0) missing.push('width');
+        if (height <= 0) missing.push('height');
+        if (frameCount <= 0) missing.push('frames|duration');
+        throw new VideoExportError(
+            `captureSceneFrames: missing ${missing.join(', ')}`,
+            VideoExportErrorCode.InvalidOption,
+            { hint: 'pass size()/frames() or ensure the canvas has a drawing buffer' },
+        );
+    }
+
+    const concurrency = resolveCaptureConcurrency(options, frameCount);
+    const signal = options.signal ?? null;
+    const onProgress = typeof options.onProgress === 'function' ? options.onProgress : null;
+    let mapFrame = typeof options.mapFrame === 'function' ? options.mapFrame : null;
+    if (!mapFrame && options.transparentCornerPunch) {
+        const punchSize = options.transparentCornerPunch === true
+            ? Math.min(40, width, height)
+            : Math.min(Math.max(1, options.transparentCornerPunch | 0), width, height);
+        mapFrame = (rgba) => {
+            const copy = new Uint8Array(rgba);
+            for (let y = 0; y < punchSize; y++) {
+                for (let x = 0; x < punchSize; x++) {
+                    copy[(y * width + x) * 4 + 3] = 0;
+                }
+            }
+            return copy;
+        };
+    }
+
+    const ownedTargets = [];
+    /** @type {InstanceType<typeof WebGLRenderTarget>[]} */
+    let targets;
+    if (Array.isArray(options.renderTargets) && options.renderTargets.length > 0) {
+        targets = options.renderTargets.slice(0, concurrency);
+        while (targets.length < concurrency) {
+            const rt = new WebGLRenderTarget(width, height);
+            ownedTargets.push(rt);
+            targets.push(rt);
+        }
+    } else if (options.renderTarget && concurrency === 1) {
+        targets = [options.renderTarget];
+    } else {
+        targets = [];
+        for (let i = 0; i < concurrency; i++) {
+            const rt = (i === 0 && options.renderTarget)
+                ? options.renderTarget
+                : new WebGLRenderTarget(width, height);
+            if (rt !== options.renderTarget) ownedTargets.push(rt);
+            targets.push(rt);
+        }
+    }
+
+    const prev = renderer.getRenderTarget?.() ?? null;
+    /** @type {(Uint8Array|undefined)[]} */
+    const frames = new Array(frameCount);
+    /** @type {({ index: number, promise: Promise<Uint8Array> }|null)[]} */
+    const slots = new Array(concurrency).fill(null);
+    const done = new Array(frameCount).fill(false);
+    let reported = 0;
+
+    const throwIfAborted = () => {
+        if (signal?.aborted) {
+            throw new VideoExportError('Video export aborted', VideoExportErrorCode.Aborted, {
+                cause: signal.reason,
+            });
+        }
+    };
+
+    const eventTarget = options.eventTarget
+        || (options.emitter && typeof options.emitter.dispatchEvent === 'function' ? options.emitter : null);
+
+    const reportThrough = () => {
+        while (reported < frameCount && done[reported]) {
+            reported += 1;
+            const info = {
+                phase: 'capture',
+                frame: reported,
+                frames: frameCount,
+                ratio: reported / (frameCount + 1),
+                format,
+            };
+            info.message = formatVideoProgress(info);
+            emitProgress(onProgress, info, eventTarget);
+        }
+    };
+
+    const settleSlot = async (slot) => {
+        const job = slots[slot];
+        if (!job) return;
+        slots[slot] = null;
+        const rgba = await job.promise;
+        frames[job.index] = rgba;
+        done[job.index] = true;
+        if (typeof options.onFrame === 'function') options.onFrame(job.index, frameCount);
+        reportThrough();
+    };
+
+    try {
+        if (eventTarget) {
+            eventTarget.dispatchEvent(new CustomEvent(VideoExportEvent.Start, {
+                detail: { phase: 'capture', frames: frameCount, format, concurrency },
+            }));
+        }
+        for (let i = 0; i < frameCount; i++) {
+            throwIfAborted();
+            const slot = i % concurrency;
+            if (slots[slot]) await settleSlot(slot);
+
+            if (typeof options.update === 'function') options.update(i, frameCount);
+            const rt = targets[slot];
+            renderer.setRenderTarget(rt);
+            renderer.render(scene, camera);
+
+            // Kick off async GPU readback without awaiting — next iterations can
+            // render into other targets while this map_async completes.
+            const index = i;
+            const promise = Promise.resolve(
+                renderer.readRenderTargetPixels(rt, 0, 0, width, height),
+            ).then((raw) => {
+                let rgba = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+                if (mapFrame) rgba = mapFrame(rgba, index, frameCount);
+                return rgba;
+            });
+            slots[slot] = { index, promise };
+
+            if (options.yield !== false) {
+                await new Promise((r) => setTimeout(r, 0));
+            }
+        }
+
+        for (let slot = 0; slot < concurrency; slot++) {
+            if (slots[slot]) await settleSlot(slot);
+        }
+    } catch (err) {
+        if (eventTarget) {
+            const aborted = VideoExportError.is(err) && err.code === VideoExportErrorCode.Aborted;
+            eventTarget.dispatchEvent(new CustomEvent(
+                aborted ? VideoExportEvent.Abort : VideoExportEvent.Error,
+                { detail: { error: err } },
+            ));
+        }
+        throw err;
+    } finally {
+        renderer.setRenderTarget(prev);
+        for (const rt of ownedTargets) {
+            try { rt.dispose?.(); } catch { /* ignore */ }
+        }
+    }
+
+    return frames;
+}
+
+/** @param {object} options @param {number} frameCount */
+function resolveCaptureConcurrency(options, frameCount) {
+    let n = 1;
+    if (options.concurrency != null) {
+        n = Number(options.concurrency) || 1;
+    } else if (options.parallel === true) {
+        n = 2;
+    } else if (typeof options.parallel === 'number') {
+        n = options.parallel;
+    } else if (options.parallel) {
+        n = 2;
+    }
+    n = Math.max(1, Math.min(8, n | 0));
+    return Math.min(n, Math.max(1, frameCount | 0));
+}
+
+/**
+ * Capture a scene animation and encode it to GIF / APNG / WebM.
+ * @returns {Promise<import('./video-export.js').VideoExportResult>}
+ */
+export async function exportSceneVideo(renderer, scene, camera, options = {}) {
+    const canvas = renderer?.domElement;
+    let width = (options.width | 0) || (canvas?.width | 0);
+    let height = (options.height | 0) || (canvas?.height | 0);
+    const fps = Math.max(1, (options.fps | 0) || 30);
+    const parsed = options.format != null
+        ? parseVideoFormat(options.format)
+        : { format: VideoFormat.Gif, transparent: false };
+    const format = parsed.format;
+    const transparent = options.transparent != null ? !!options.transparent : parsed.transparent;
+
+    if (format === VideoFormat.Webm && width > 0 && height > 0) {
+        const aligned = alignVideoSize(width, height);
+        if (aligned.snapped && !options.strictSize) {
+            width = aligned.width;
+            height = aligned.height;
+        }
+    }
+
+    const eventTarget = options.eventTarget
+        || (options.emitter && typeof options.emitter.dispatchEvent === 'function' ? options.emitter : null);
+
+    const frames = await captureSceneFrames(renderer, scene, camera, {
+        ...options,
+        width,
+        height,
+        fps,
+        format,
+        transparent,
+        eventTarget,
+    });
+    const exporter = (eventTarget instanceof VideoExporter)
+        ? eventTarget.configure({
+            width,
+            height,
+            fps,
+            format,
+            transparent,
+            gifColors: options.gifColors,
+            filename: options.filename,
+            basename: options.basename,
+            onProgress: options.onProgress,
+            signal: options.signal,
+            strictSize: options.strictSize,
+        })
+        : new VideoExporter({
+            width,
+            height,
+            fps,
+            format,
+            transparent,
+            gifColors: options.gifColors,
+            filename: options.filename,
+            basename: options.basename,
+            onProgress: options.onProgress,
+            signal: options.signal,
+            strictSize: options.strictSize,
+            eventTarget,
+        });
+    if (options.worker || options.encodeInWorker) {
+        return exporter.encodeInWorker(frames, {
+            wasmUrl: options.wasmUrl,
+            workerUrl: options.workerUrl,
+            worker: options.worker instanceof VideoEncodeWorker ? options.worker : undefined,
+            onProgress: options.onProgress,
+            signal: options.signal,
+            eventTarget: exporter,
+        });
+    }
+    return exporter.encode(frames);
+}
+
+/**
+ * Capture, encode, and trigger a file download.
+ * @returns {Promise<import('./video-export.js').VideoExportResult>}
+ */
+export async function exportAndDownloadSceneVideo(renderer, scene, camera, options = {}) {
+    const result = await exportSceneVideo(renderer, scene, camera, options);
+    return result.download(options.filename);
+}
+
+/**
+ * Bind a renderer/scene/camera and configure a fluent scene export.
+ *
+ * @example
+ * ```js
+ * await VideoExporter.from(renderer, scene, camera)
+ *   .gif({ transparent: true })
+ *   .parallel(3)
+ *   .frames(30)
+ *   .update((i, n) => { cube.rotation.y = (i / n) * Math.PI * 2; })
+ *   .onProgress(({ message }) => setStatus(message))
+ *   .download('cube');
+ * ```
+ */
+VideoExporter.from = function from(renderer, scene, camera, options = {}) {
+    const api = new VideoExporter(options);
+    let frameCount = options.frameCount || options.frames || 0;
+    let duration = options.duration || 0;
+    let update = typeof options.update === 'function' ? options.update : null;
+    let yieldBetween = options.yield !== false;
+    let cornerPunch = options.transparentCornerPunch || false;
+    let concurrency = resolveCaptureConcurrency(options, 1);
+
+    api.frames = function frames(n) {
+        frameCount = n | 0;
+        return api;
+    };
+    api.duration = function durationSec(seconds) {
+        duration = Number(seconds) || 0;
+        return api;
+    };
+    api.update = function updateFn(fn) {
+        update = fn;
+        return api;
+    };
+    api.yieldBetweenFrames = function yieldBetweenFrames(on = true) {
+        yieldBetween = !!on;
+        return api;
+    };
+    api.transparentCornerPunch = function transparentCornerPunch(on = true) {
+        cornerPunch = on;
+        return api;
+    };
+    /**
+     * Pipeline GPU readbacks across N render targets (1–8).
+     * `true` → 2; a number sets concurrency explicitly.
+     * @param {boolean|number} [n=true]
+     */
+    api.parallel = function parallel(n = true) {
+        concurrency = resolveCaptureConcurrency({ parallel: n }, 1);
+        return api;
+    };
+    /** Alias for {@link parallel}. @param {number} n */
+    api.concurrency = function concurrencyFn(n) {
+        concurrency = resolveCaptureConcurrency({ concurrency: n }, 1);
+        return api;
+    };
+    let useWorker = !!(options.worker || options.encodeInWorker);
+    api.worker = function worker(on = true) {
+        useWorker = !!on;
+        return api;
+    };
+
+    async function run(doDownload, filenameOverride) {
+        const canvas = renderer?.domElement;
+        let width = (api._opts.width | 0) || (canvas?.width | 0);
+        let height = (api._opts.height | 0) || (canvas?.height | 0);
+        if (api._opts.format === VideoFormat.Webm && width > 0 && height > 0) {
+            const aligned = alignVideoSize(width, height);
+            if (aligned.snapped && !api._opts.strictSize) {
+                width = aligned.width;
+                height = aligned.height;
+            }
+        }
+        api.size(width, height);
+        if (!frameCount && !duration) {
+            frameCount = 30; // sensible default for demos / quick exports
+        }
+        const opts = {
+            width,
+            height,
+            fps: api._opts.fps,
+            format: api._opts.format,
+            transparent: api._opts.transparent,
+            gifColors: api._opts.gifColors,
+            filename: filenameOverride || api._opts.filename,
+            basename: api._opts.basename,
+            frameCount,
+            duration,
+            frames: frameCount,
+            update,
+            mapFrame: api._mapFrame,
+            transparentCornerPunch: cornerPunch,
+            onProgress: api._onProgress,
+            signal: api._signal,
+            yield: yieldBetween,
+            strictSize: api._opts.strictSize,
+            concurrency,
+            parallel: concurrency > 1,
+            encodeInWorker: useWorker,
+            wasmUrl: options.wasmUrl,
+            workerUrl: options.workerUrl,
+            eventTarget: api,
+        };
+        const result = await exportSceneVideo(renderer, scene, camera, opts);
+        return doDownload ? result.download(opts.filename) : result;
+    }
+
+    api.export = (overrides) => {
+        if (overrides && typeof overrides === 'object') {
+            if (overrides.frames != null) frameCount = overrides.frames | 0;
+            if (overrides.frameCount != null) frameCount = overrides.frameCount | 0;
+            if (overrides.duration != null) duration = Number(overrides.duration) || 0;
+            if (typeof overrides.update === 'function') update = overrides.update;
+            if (overrides.parallel != null || overrides.concurrency != null) {
+                concurrency = resolveCaptureConcurrency(overrides, 1);
+            }
+            api.configure(overrides);
+        }
+        return run(false);
+    };
+    api.download = (filenameOrOverrides) => {
+        if (filenameOrOverrides && typeof filenameOrOverrides === 'object') {
+            const o = filenameOrOverrides;
+            if (o.frames != null) frameCount = o.frames | 0;
+            if (o.frameCount != null) frameCount = o.frameCount | 0;
+            if (o.duration != null) duration = Number(o.duration) || 0;
+            if (typeof o.update === 'function') update = o.update;
+            if (o.parallel != null || o.concurrency != null) {
+                concurrency = resolveCaptureConcurrency(o, 1);
+            }
+            api.configure(o);
+            return run(true, o.filename);
+        }
+        return run(true, typeof filenameOrOverrides === 'string' ? filenameOrOverrides : undefined);
+    };
+    return api;
+};
 
 // ---- Pass 5: remaining geometries (LatheGeometry, TubeGeometry,
 // ExtrudeGeometry, EdgesGeometry, WireframeGeometry, ShapeGeometry,
@@ -9324,6 +9819,35 @@ const THREE = {
     ShapePath: class ShapePath { constructor() { this.subPaths = []; this.currentPath = null; } moveTo(x, y) { this.currentPath = new Path(); this.currentPath.moveTo(x, y); this.subPaths.push(this.currentPath); return this; } lineTo(x, y) { this.currentPath?.lineTo(x, y); return this; } toShapes() { return []; } },
     // PolyhedronGeometry: subdivision-based polyhedron — alias to icosahedron for now.
     PolyhedronGeometry: class PolyhedronGeometry { constructor(_vertices, _indices, radius = 1, detail = 0) { Object.assign(this, new IcosahedronGeometry(radius, detail)); this.type = 'PolyhedronGeometry'; } },
+    // Video / animation export (native-codec wasm)
+    VideoFormat,
+    BrowserVideoFormat,
+    VideoExporter,
+    VideoExportResult,
+    VideoExportError,
+    VideoExportErrorCode,
+    VideoExportEvent,
+    VideoExportProgressEvent,
+    VideoEncodeWorker,
+    emitProgress,
+    isVideoExportAvailable,
+    assertVideoExportAvailable,
+    parseVideoFormat,
+    formatVideoProgress,
+    formatBytes,
+    alignVideoSize,
+    encodeVideoFrames,
+    encodeVideoFramesInWorker,
+    downloadVideoBytes,
+    encodeAndDownloadVideoFrames,
+    captureSceneFrames,
+    exportSceneVideo,
+    exportAndDownloadSceneVideo,
+    encodeGifRgba,
+    encodeApngRgba,
+    encodeWebmRgba,
+    videoMimeType,
+    videoFilename,
 };
 
 if (typeof window !== 'undefined') {

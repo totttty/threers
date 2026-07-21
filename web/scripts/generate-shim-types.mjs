@@ -533,6 +533,136 @@ export class HemisphereLight {
     _w?: unknown;
     constructor(skyColor?: ThreersColorInput, groundColor?: ThreersColorInput, intensity?: number);
 }
+
+// ---- Video export (native-codec) ----
+export {
+    VideoFormat,
+    BrowserVideoFormat,
+    VideoExporter,
+    VideoExportResult,
+    VideoExportError,
+    VideoExportErrorCode,
+    VideoExportEvent,
+    VideoExportProgressEvent,
+    VideoEncodeWorker,
+    isVideoExportAvailable,
+    assertVideoExportAvailable,
+    parseVideoFormat,
+    formatVideoProgress,
+    emitProgress,
+    formatBytes,
+    alignVideoSize,
+    videoMimeType,
+    videoFilename,
+    encodeVideoFrames,
+    encodeVideoFramesInWorker,
+    downloadVideoBytes,
+    encodeAndDownloadVideoFrames,
+    encodeGifRgba,
+    encodeApngRgba,
+    encodeWebmRgba,
+} from './video-export.js';
+
+export type {
+    VideoFormatName,
+    BrowserVideoFormatName,
+    VideoEncodeOptions,
+    VideoExportOptions,
+    VideoDownloadOptions,
+    VideoExportProgress,
+    VideoExportPhase,
+    VideoFormatPresetOptions,
+    VideoEncodeWorkerOptions,
+    VideoExportStartDetail,
+    VideoExportCompleteDetail,
+    VideoExportErrorDetail,
+} from './video-export.js';
+
+export type SceneVideoExportOptions = Omit<VideoEncodeOptions, 'width' | 'height'> & {
+    /** Defaults to canvas drawing-buffer width when omitted. */
+    width?: number;
+    /** Defaults to canvas drawing-buffer height when omitted. */
+    height?: number;
+    /** Frame count (alias: \`frames\`). Defaults to 30 for \`VideoExporter.from()\`. */
+    frameCount?: number;
+    frames?: number;
+    /** Alternative to frameCount: \`round(duration * fps)\` seconds. */
+    duration?: number;
+    update?: (frameIndex: number, frameCount: number) => void;
+    onFrame?: (frameIndex: number, frameCount: number) => void;
+    renderTarget?: WebGLRenderTarget;
+    /** Ring of targets for pipelined capture (length ≥ concurrency). */
+    renderTargets?: WebGLRenderTarget[];
+    /** Yield to the event loop between frames (default true). */
+    yield?: boolean;
+    /**
+     * Pipeline GPU readbacks across multiple render targets.
+     * \`true\` → 2 in flight; a number sets concurrency (1–8).
+     */
+    parallel?: boolean | number;
+    /** Explicit in-flight readback count (1–8). Overrides \`parallel\`. */
+    concurrency?: number;
+    /** Encode captured frames in a Web Worker (wasm off main thread). */
+    encodeInWorker?: boolean;
+    worker?: boolean | VideoEncodeWorker;
+    wasmUrl?: string;
+    workerUrl?: string;
+    /**
+     * Clear a top-left corner to alpha=0 each frame (boolean or pixel size).
+     * Prefer \`mapFrame\` for custom transforms.
+     */
+    transparentCornerPunch?: boolean | number;
+};
+
+export type SceneVideoExporter = VideoExporter & {
+    frames(n: number): SceneVideoExporter;
+    duration(seconds: number): SceneVideoExporter;
+    update(fn: (frameIndex: number, frameCount: number) => void): SceneVideoExporter;
+    yieldBetweenFrames(on?: boolean): SceneVideoExporter;
+    transparentCornerPunch(on?: boolean | number): SceneVideoExporter;
+    /** Pipeline readbacks: \`true\` → 2, or pass 1–8. */
+    parallel(n?: boolean | number): SceneVideoExporter;
+    concurrency(n: number): SceneVideoExporter;
+    /** Encode on a Web Worker after capture. */
+    worker(on?: boolean): SceneVideoExporter;
+    on(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): SceneVideoExporter;
+    off(type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions): SceneVideoExporter;
+    once(type: string, listener: EventListenerOrEventListenerObject): SceneVideoExporter;
+    export(overrides?: Partial<SceneVideoExportOptions>): Promise<VideoExportResult>;
+    download(
+        filenameOrOverrides?: string | Partial<SceneVideoExportOptions>,
+    ): Promise<VideoExportResult>;
+};
+
+declare module './video-export.js' {
+    namespace VideoExporter {
+        function from(
+            renderer: WebGLRenderer,
+            scene: Scene,
+            camera: PerspectiveCamera | OrthographicCamera | Camera,
+            options?: Partial<SceneVideoExportOptions>,
+        ): SceneVideoExporter;
+    }
+}
+
+export function captureSceneFrames(
+    renderer: WebGLRenderer,
+    scene: Scene,
+    camera: PerspectiveCamera | OrthographicCamera | Camera,
+    options?: Partial<SceneVideoExportOptions>,
+): Promise<Uint8Array[]>;
+export function exportSceneVideo(
+    renderer: WebGLRenderer,
+    scene: Scene,
+    camera: PerspectiveCamera | OrthographicCamera | Camera,
+    options?: Partial<SceneVideoExportOptions>,
+): Promise<VideoExportResult>;
+export function exportAndDownloadSceneVideo(
+    renderer: WebGLRenderer,
+    scene: Scene,
+    camera: PerspectiveCamera | OrthographicCamera | Camera,
+    options?: Partial<SceneVideoExportOptions>,
+): Promise<VideoExportResult>;
 `;
 
 const manualNames = new Set(
@@ -549,6 +679,48 @@ manualNames.add('MeshStandardMaterialParameters');
 manualNames.add('Intersection');
 manualNames.add('AnimationAction');
 manualNames.add('Pass');
+manualNames.add('VideoFormat');
+manualNames.add('BrowserVideoFormat');
+manualNames.add('VideoFormatName');
+manualNames.add('BrowserVideoFormatName');
+manualNames.add('VideoEncodeWorker');
+manualNames.add('VideoEncodeWorkerOptions');
+manualNames.add('encodeVideoFramesInWorker');
+manualNames.add('VideoExportEvent');
+manualNames.add('VideoExportProgressEvent');
+manualNames.add('emitProgress');
+manualNames.add('VideoExportStartDetail');
+manualNames.add('VideoExportCompleteDetail');
+manualNames.add('VideoExportErrorDetail');
+manualNames.add('VideoFormatPresetOptions');
+manualNames.add('VideoExporter');
+manualNames.add('VideoExportResult');
+manualNames.add('VideoExportError');
+manualNames.add('VideoExportErrorCode');
+manualNames.add('VideoEncodeOptions');
+manualNames.add('VideoExportOptions');
+manualNames.add('VideoDownloadOptions');
+manualNames.add('VideoExportProgress');
+manualNames.add('VideoExportPhase');
+manualNames.add('SceneVideoExportOptions');
+manualNames.add('SceneVideoExporter');
+manualNames.add('isVideoExportAvailable');
+manualNames.add('assertVideoExportAvailable');
+manualNames.add('parseVideoFormat');
+manualNames.add('formatVideoProgress');
+manualNames.add('formatBytes');
+manualNames.add('alignVideoSize');
+manualNames.add('videoMimeType');
+manualNames.add('videoFilename');
+manualNames.add('encodeVideoFrames');
+manualNames.add('downloadVideoBytes');
+manualNames.add('encodeAndDownloadVideoFrames');
+manualNames.add('encodeGifRgba');
+manualNames.add('encodeApngRgba');
+manualNames.add('encodeWebmRgba');
+manualNames.add('captureSceneFrames');
+manualNames.add('exportSceneVideo');
+manualNames.add('exportAndDownloadSceneVideo');
 
 const stubs = exports
     .filter((e) => e.kind === 'class' && !manualNames.has(e.name))
