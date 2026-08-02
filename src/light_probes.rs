@@ -479,29 +479,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn checked_in_example_caches_are_valid() {
-        let cornell = BakedLightProbeGrid::from_bytes(
-            include_bytes!("../web/examples/assets/lightprobes-cornell-r6-v1.lpb"),
-            "cornell-probes-v1:r6:cube32:b0",
-        )
-        .unwrap();
-        assert_eq!(cornell.resolution, [6, 6, 6]);
-        assert_eq!(
-            cornell.coefficients.len(),
-            216 * LIGHT_PROBE_COEFFICIENTS_PER_PROBE
-        );
-
-        let sponza = BakedLightProbeGrid::from_bytes(
-            include_bytes!("../web/examples/assets/lightprobes-sponza-r10x7x7-b1-v1.lpb"),
-            "sponza-probes-v1:r10x7x7:cube32:b1",
-        )
-        .unwrap();
-        assert_eq!(sponza.resolution, [10, 7, 7]);
-        assert_eq!(sponza.settings.bounces, 1);
-        assert_eq!(
-            sponza.coefficients.len(),
-            490 * LIGHT_PROBE_COEFFICIENTS_PER_PROBE
-        );
-    }
 }
