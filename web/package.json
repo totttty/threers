@@ -14,6 +14,14 @@
       "types": "./threejs-shim.d.ts",
       "default": "./threejs-shim.js"
     },
+    "./light-probe-grid.js": {
+      "types": "./light-probe-grid.d.ts",
+      "default": "./light-probe-grid.js"
+    },
+    "./light-probe-math.js": {
+      "types": "./light-probe-math.d.ts",
+      "default": "./light-probe-math.js"
+    },
     "./video-export.js": {
       "types": "./video-export.d.ts",
       "default": "./video-export.js"
@@ -27,6 +35,11 @@
   "files": [
     "threejs-shim.js",
     "threejs-shim.d.ts",
+    "gltf-accessor.js",
+    "light-probe-grid.js",
+    "light-probe-grid.d.ts",
+    "light-probe-math.js",
+    "light-probe-math.d.ts",
     "video-export.js",
     "video-export.d.ts",
     "video-export-worker.js",
@@ -43,6 +56,7 @@
   "scripts": {
     "generate:types": "node scripts/generate-shim-types.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:light-probes": "node --test tests/light-probes.test.mjs",
     "test:video-export": "node scripts/test-video-export.mjs"
   },
   "devDependencies": {

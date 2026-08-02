@@ -9,17 +9,110 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::gpu_mesh::{geom_cache_key, GpuMesh};
-use super::gpu_texture::{cube_cache_key, tex_cache_key, GpuCubeTexture, GpuTexture};
+use super::gpu_texture::{
+    cube_cache_key, f32_to_f16_bits, tex_cache_key, GpuCubeTexture, GpuTexture,
+};
 use super::shader::{
     MAX_DIR_LIGHTS, MAX_HEMI_LIGHTS, MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS, SHADER_SOURCE,
 };
 use crate::cameras::Camera;
 use crate::core::{BufferGeometry, ObjectKind};
 use crate::lights::Light;
+use crate::light_probes::MAX_LIGHT_PROBE_GRID_PROBES;
 use crate::materials::{Material, MaterialKind, MaterialTextureSlots};
-use crate::math::{Matrix3, Matrix4, Vector3};
+use crate::math::{Frustum, Matrix3, Matrix4, Sphere, Vector3};
 use crate::scene::Scene;
 use crate::textures::{CubeTexture, Texture, TextureFormat};
+
+/// Maximum number of irradiance probes accepted by the browser renderer.
+///
+/// Each probe stores nine RGBA32F-packed SH coefficients (144 bytes), so this
+/// cap reserves 288 KiB and comfortably covers the 10×7×7 Sponza preset.
+pub const LIGHT_PROBE_COEFFICIENT_BYTES: u64 =
+    (MAX_LIGHT_PROBE_GRID_PROBES * 9 * 4 * std::mem::size_of::<f32>()) as u64;
+
+/// Lightweight counters for the most recently encoded frame. They are kept in
+/// the renderer so browser benchmarks can prove that cache/culling paths were
+/// exercised instead of inferring them from timing alone.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RendererStats {
+    pub render_items: u32,
+    pub camera_visible_items: u32,
+    pub main_draw_calls: u32,
+    pub shadow_draw_calls: u32,
+    pub static_cache_hits: u32,
+    pub render_bundle_uses: u32,
+    pub render_bundle_compatible_draws: u32,
+    pub render_bundle_incompatible_draws: u32,
+    pub material_specialized_draws: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Topology {
+    Triangle,
+    TriangleAlpha,
+    TriangleWire,
+    TriangleNoCull,
+    Sky,
+    Line,
+    #[allow(dead_code)]
+    Point,
+    Sprite,
+    Instanced,
+    Skinned,
+    GlassDepth,
+    GlassColor,
+    Oit,
+    Refract,
+    Custom(u64, bool),
+}
+
+#[derive(Clone)]
+struct DrawMesh {
+    /// Stable traversal identity retained across static-cache frames. Unlike
+    /// the draw's post-sort position, this changes order when transparent
+    /// objects swap depth as the camera moves.
+    retained_id: usize,
+    key: *const BufferGeometry,
+    topology: Topology,
+    camera_visible: bool,
+    world_bounds: Sphere,
+    view_z: f32,
+    render_order: i32,
+    cast_shadow: bool,
+    refract_capture: bool,
+    alpha_test: f32,
+    model: [f32; 16],
+    normal_matrix: [f32; 16],
+    color: [f32; 4],
+    emissive: [f32; 4],
+    specular: [f32; 4],
+    shininess_or_near: f32,
+    opacity_or_far: f32,
+    roughness: f32,
+    metalness: f32,
+    ao_intensity: f32,
+    normal_scale: [f32; 2],
+    toon_steps: u32,
+    physical: [f32; 4],
+    physical2: [f32; 4],
+    shader_flags: u32,
+    kind: MaterialKind,
+    slots: MaterialTextureSlots,
+    instance_buf_idx: usize,
+    instance_count: u32,
+    skin_idx: usize,
+    shader_idx: usize,
+}
+
+struct StaticMainBundle {
+    /// `(per_mesh buffer slot, retained draw identity)` in encoded order.
+    /// Both halves matter: an invisible transparent draw can move a visible
+    /// draw to another buffer slot even when the visible identity is unchanged.
+    visible_draw_key: Vec<(usize, usize)>,
+    linear_framebuffer: bool,
+    bundle: wgpu::RenderBundle,
+}
 
 fn rt_sample_format(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
     if format == wgpu::TextureFormat::Rgba16Float {
@@ -27,6 +120,26 @@ fn rt_sample_format(format: wgpu::TextureFormat) -> wgpu::TextureFormat {
     } else {
         format.add_srgb_suffix()
     }
+}
+
+#[inline]
+fn should_update_static_outputs(static_mode: bool, invalidated: bool) -> bool {
+    !static_mode || invalidated
+}
+
+#[inline]
+fn shadow_bounds_visible(bounds: &Sphere, frustum: Option<&Frustum>) -> bool {
+    bounds.is_empty() || frustum.map_or(true, |frustum| frustum.intersects_sphere(bounds))
+}
+
+fn static_bundle_draw_key(
+    draws: impl Iterator<Item = (usize, usize, bool)>,
+) -> Vec<(usize, usize)> {
+    draws
+        .filter_map(|(buffer_slot, retained_id, visible)| {
+            visible.then_some((buffer_slot, retained_id))
+        })
+        .collect()
 }
 
 // ---------- GPU layout types ----------
@@ -63,6 +176,23 @@ struct HemiLightGpu {
     direction: [f32; 4],
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LightProbeGridState {
+    min: [f32; 4],
+    max: [f32; 4],
+    resolution: [u32; 4],
+}
+
+impl Default for LightProbeGridState {
+    fn default() -> Self {
+        Self {
+            min: [0.0; 4],
+            max: [1.0, 1.0, 1.0, 0.0],
+            resolution: [0; 4],
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct FrameUniforms {
@@ -90,6 +220,10 @@ struct FrameUniforms {
     viewport_size: [f32; 4],
     /// CubeUV PMREM: x/y texel size, z max mip, w = 1 when CubeUV active.
     env_map_params: [f32; 4],
+    /// Light-probe volume bounds and resolution. resolution.w is enabled.
+    probe_min: [f32; 4],
+    probe_max: [f32; 4],
+    probe_resolution: [u32; 4],
     dir_lights: [DirLightGpu; MAX_DIR_LIGHTS],
     point_lights: [PointLightGpu; MAX_POINT_LIGHTS],
     spot_lights: [SpotLightGpu; MAX_SPOT_LIGHTS],
@@ -116,6 +250,9 @@ impl Default for FrameUniforms {
             fog_params: [1.0, 1000.0, 0.0, 0.0],
             viewport_size: [1.0, 1.0, 0.0, 0.0],
             env_map_params: [0.0; 4],
+            probe_min: [0.0; 4],
+            probe_max: [1.0, 1.0, 1.0, 0.0],
+            probe_resolution: [0; 4],
             dir_lights: [DirLightGpu::default(); MAX_DIR_LIGHTS],
             point_lights: [PointLightGpu::default(); MAX_POINT_LIGHTS],
             spot_lights: [SpotLightGpu::default(); MAX_SPOT_LIGHTS],
@@ -206,7 +343,7 @@ struct TaaUniforms {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Pod, Zeroable, Default)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable, Default, PartialEq)]
 struct MeshUniforms {
     model: [f32; 16],
     normal_matrix: [f32; 16],
@@ -241,6 +378,57 @@ const FLAG_RECEIVE_SHADOW: u32 = 512;
 struct CachedGpuMesh {
     version: u32,
     mesh: GpuMesh,
+    bounds: Sphere,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TextureBindGroupKey {
+    textures: [usize; 7],
+    sampler: u8,
+}
+
+fn geometry_bounds(geom: &BufferGeometry) -> Sphere {
+    if let Some(bounds) = geom.bounding_sphere {
+        return bounds;
+    }
+    let points: Vec<Vector3> = geom
+        .positions()
+        .map(|positions| positions.collect())
+        .unwrap_or_default();
+    Sphere::from_points(&points)
+}
+
+fn create_frame_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    frame_buffer: &wgpu::Buffer,
+    probe_coeff_buffer: &wgpu::Buffer,
+    probe_texture_view: &wgpu::TextureView,
+    probe_sampler: &wgpu::Sampler,
+    label: &str,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: frame_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: probe_coeff_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(probe_texture_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(probe_sampler),
+            },
+        ],
+    })
 }
 
 /// Camera parameters forwarded into SSAO / SSR post-fx uniforms.
@@ -278,6 +466,9 @@ pub struct Renderer {
     queue: Arc<wgpu::Queue>,
     pipeline_tri: wgpu::RenderPipeline,
     pipeline_tri_alpha: wgpu::RenderPipeline,
+    pipeline_standard: wgpu::RenderPipeline,
+    pipeline_standard_alpha: wgpu::RenderPipeline,
+    pipeline_standard_nocull: wgpu::RenderPipeline,
     // Single-layer glass (depth prepass + LessEqual color pass), sRGB + f16.
     pipeline_glass_depth: wgpu::RenderPipeline,
     pipeline_glass_color: wgpu::RenderPipeline,
@@ -312,6 +503,9 @@ pub struct Renderer {
     pipeline_tri_f16: wgpu::RenderPipeline,
     pipeline_tri_alpha_f16: wgpu::RenderPipeline,
     pipeline_tri_nocull_f16: wgpu::RenderPipeline,
+    pipeline_standard_f16: wgpu::RenderPipeline,
+    pipeline_standard_alpha_f16: wgpu::RenderPipeline,
+    pipeline_standard_nocull_f16: wgpu::RenderPipeline,
     pipeline_tri_sky_f16: wgpu::RenderPipeline,
     pipeline_tri_wire_f16: wgpu::RenderPipeline,
     pipeline_line_f16: wgpu::RenderPipeline,
@@ -393,7 +587,6 @@ pub struct Renderer {
     cube_rt_view_cache: HashMap<u32, wgpu::TextureView>,
     cube_cache: HashMap<*const CubeTexture, GpuCubeTexture>,
     env_bind_group: wgpu::BindGroup,
-    shadow_env_bind_group: wgpu::BindGroup,
     env_sampler: wgpu::Sampler,
     default_env_cube: GpuCubeTexture,
     default_cube_uv_view: wgpu::TextureView,
@@ -412,8 +605,17 @@ pub struct Renderer {
     point_shadow_sampler: wgpu::Sampler,
 
     frame_buffer: wgpu::Buffer,
+    point_shadow_frame_buffers: [wgpu::Buffer; 6],
+    probe_coeff_buffer: wgpu::Buffer,
+    probe_texture: wgpu::Texture,
+    probe_texture_view: wgpu::TextureView,
+    probe_sampler: wgpu::Sampler,
+    probe_grid: LightProbeGridState,
     frame_bind_group: wgpu::BindGroup,
-    per_mesh: Vec<(wgpu::Buffer, wgpu::BindGroup, wgpu::BindGroup)>, // uniform, mesh bg, tex bg
+    point_shadow_frame_bind_groups: [wgpu::BindGroup; 6],
+    per_mesh: Vec<(wgpu::Buffer, wgpu::BindGroup, Arc<wgpu::BindGroup>)>, // uniform, mesh bg, tex bg
+    per_mesh_uniform_cache: Vec<Option<MeshUniforms>>,
+    texture_bind_group_cache: HashMap<TextureBindGroupKey, Arc<wgpu::BindGroup>>,
 
     sampler_linear: wgpu::Sampler,
     sampler_nearest_clamp: wgpu::Sampler,
@@ -473,6 +675,23 @@ pub struct Renderer {
     taa_sampler: wgpu::Sampler,
     pipeline_taa: wgpu::RenderPipeline,
     pipeline_taa_f16: wgpu::RenderPipeline,
+
+    /// Output transform requested by the three.js compatibility layer.
+    /// 0 = none, 1 = linear, 2 = ACES filmic.
+    tone_mapping: u32,
+    tone_mapping_exposure: f32,
+
+    last_stats: RendererStats,
+    /// Opt-in contract for scenes whose geometry, materials, and lights stay
+    /// unchanged between frames. The main camera may still move.
+    static_mode: bool,
+    /// Static light-space outputs are rebuilt on the first frame and after an
+    /// explicit invalidation, then reused until the next invalidation.
+    static_invalidated: bool,
+    /// Retained immutable draw metadata for the simple mesh-only static path.
+    /// Camera visibility and transparent depth are recomputed every frame.
+    static_draw_cache: Option<Vec<DrawMesh>>,
+    static_main_bundle: Option<StaticMainBundle>,
 
     color_format: wgpu::TextureFormat,
 }
@@ -679,8 +898,15 @@ impl Renderer {
             .unwrap_or(true);
         if stale {
             let mesh = GpuMesh::upload(&self.device, geom);
-            self.geom_cache
-                .insert(key, CachedGpuMesh { version: ver, mesh });
+            let bounds = geometry_bounds(geom);
+            self.geom_cache.insert(
+                key,
+                CachedGpuMesh {
+                    version: ver,
+                    mesh,
+                    bounds,
+                },
+            );
         }
     }
 
@@ -796,6 +1022,17 @@ impl Renderer {
         self.taa_enabled = enabled;
     }
 
+    /// Select the output tone-mapping operator and exposure used by PBR
+    /// materials. Unknown operators fall back to no tone mapping.
+    pub fn set_tone_mapping(&mut self, mode: u32, exposure: f32) {
+        self.tone_mapping = mode.min(2);
+        self.tone_mapping_exposure = if exposure.is_finite() {
+            exposure.max(0.0)
+        } else {
+            1.0
+        };
+    }
+
     /// Reset TAA accumulation (call on a hard cut / scene change to avoid ghosting).
     pub fn reset_taa(&mut self) {
         self.taa_frame = 0;
@@ -907,7 +1144,35 @@ impl Renderer {
 
         let frame_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("threers frame bgl"),
-            entries: &[uniform_entry(0)],
+            entries: &[
+                uniform_entry(0),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(LIGHT_PROBE_COEFFICIENT_BYTES),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
 
         let mesh_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1091,6 +1356,12 @@ impl Renderer {
             bind_group_layouts: &[&frame_bgl, &mesh_bgl, &tex_bgl, &env_bgl],
             push_constant_ranges: &[],
         });
+        let shadow_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("threers lean shadow layout"),
+                bind_group_layouts: &[&frame_bgl, &mesh_bgl],
+                push_constant_ranges: &[],
+            });
 
         // Skinned pipeline layout: same as the base 4 groups, but group 1 uses
         // the skinned mesh BGL (uniform + bones storage). Stays at 4 groups —
@@ -1210,6 +1481,45 @@ impl Renderer {
                 multiview: None,
             })
         };
+        let make_standard_pipeline =
+            |fmt: wgpu::TextureFormat, cull: Option<wgpu::Face>, alpha: bool, label: &str| {
+                let constants = HashMap::from([(
+                    "material_kind_override".to_string(),
+                    MaterialKind::Standard as u32 as f64,
+                )]);
+                let fragment_options = wgpu::PipelineCompilationOptions {
+                    constants: &constants,
+                    ..Default::default()
+                };
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: "vs_main",
+                        buffers: &vertex_buffers,
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: "fs_main",
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: fmt,
+                            blend: Some(if alpha {
+                                wgpu::BlendState::ALPHA_BLENDING
+                            } else {
+                                wgpu::BlendState::REPLACE
+                            }),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: fragment_options,
+                    }),
+                    primitive: primitive(wgpu::PrimitiveTopology::TriangleList, cull),
+                    depth_stencil: Some(depth_stencil(!alpha, wgpu::CompareFunction::Less)),
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview: None,
+                })
+            };
         // Single-layer "glass" pipelines. `depth_only` (the prepass) writes the
         // nearest glass depth with no color; the color pass alpha-blends only the
         // fragments at that nearest depth (LessEqual) and doesn't write depth.
@@ -1617,7 +1927,29 @@ impl Renderer {
             None,
             "threers tri nocull pipeline",
         );
+        let pipeline_standard = make_standard_pipeline(
+            color_format,
+            Some(wgpu::Face::Back),
+            false,
+            "threers specialized standard pipeline",
+        );
+        let pipeline_standard_alpha = make_standard_pipeline(
+            color_format,
+            Some(wgpu::Face::Back),
+            true,
+            "threers specialized standard alpha pipeline",
+        );
+        let pipeline_standard_nocull = make_standard_pipeline(
+            color_format,
+            None,
+            false,
+            "threers specialized standard nocull pipeline",
+        );
         let make_sky_pipeline = |fmt: wgpu::TextureFormat, label: &str| {
+            let constants = HashMap::from([(
+                "material_kind_override".to_string(),
+                MaterialKind::Sky as u32 as f64,
+            )]);
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&pipeline_layout),
@@ -1635,7 +1967,10 @@ impl Renderer {
                         blend: Some(wgpu::BlendState::REPLACE),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &constants,
+                        ..Default::default()
+                    },
                 }),
                 primitive: primitive(wgpu::PrimitiveTopology::TriangleList, None),
                 depth_stencil: Some(depth_stencil(false, wgpu::CompareFunction::LessEqual)),
@@ -1683,6 +2018,24 @@ impl Renderer {
             wgpu::PrimitiveTopology::TriangleList,
             None,
             "threers tri nocull f16 pipeline",
+        );
+        let pipeline_standard_f16 = make_standard_pipeline(
+            f16_format,
+            Some(wgpu::Face::Back),
+            false,
+            "threers specialized standard f16 pipeline",
+        );
+        let pipeline_standard_alpha_f16 = make_standard_pipeline(
+            f16_format,
+            Some(wgpu::Face::Back),
+            true,
+            "threers specialized standard alpha f16 pipeline",
+        );
+        let pipeline_standard_nocull_f16 = make_standard_pipeline(
+            f16_format,
+            None,
+            false,
+            "threers specialized standard nocull f16 pipeline",
         );
         let pipeline_tri_sky_f16 = make_sky_pipeline(f16_format, "threers tri sky f16 pipeline");
         let pipeline_tri_wire_f16 = make_pipeline(
@@ -1733,7 +2086,7 @@ impl Renderer {
                 ],
             },
             wgpu::VertexBufferLayout {
-                array_stride: 64,
+                array_stride: 80,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &[
                     wgpu::VertexAttribute {
@@ -1754,6 +2107,11 @@ impl Renderer {
                     wgpu::VertexAttribute {
                         offset: 48,
                         shader_location: 7,
+                        format: wgpu::VertexFormat::Float32x4,
+                    },
+                    wgpu::VertexAttribute {
+                        offset: 64,
+                        shader_location: 8,
                         format: wgpu::VertexFormat::Float32x4,
                     },
                 ],
@@ -1969,7 +2327,7 @@ impl Renderer {
         let make_shadow_pipeline = |entry: &str, label: &str| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&pipeline_layout),
+                layout: Some(&shadow_pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: entry,
@@ -2427,13 +2785,64 @@ impl Renderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let frame_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("threers frame bg"),
-            layout: &frame_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame_buffer.as_entire_binding(),
-            }],
+        let probe_coeff_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("threers light probe SH coefficients"),
+            size: LIGHT_PROBE_COEFFICIENT_BYTES,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let probe_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("threers light probe atlas"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let probe_texture_view = probe_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let probe_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("threers light probe atlas sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let frame_bind_group = create_frame_bind_group(
+            &device,
+            &frame_bgl,
+            &frame_buffer,
+            &probe_coeff_buffer,
+            &probe_texture_view,
+            &probe_sampler,
+            "threers frame bg",
+        );
+        let point_shadow_frame_buffers: [wgpu::Buffer; 6] = std::array::from_fn(|_| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("threers point-shadow frame uniform"),
+                size: std::mem::size_of::<FrameUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        let point_shadow_frame_bind_groups: [wgpu::BindGroup; 6] = std::array::from_fn(|face| {
+            create_frame_bind_group(
+                &device,
+                &frame_bgl,
+                &point_shadow_frame_buffers[face],
+                &probe_coeff_buffer,
+                &probe_texture_view,
+                &probe_sampler,
+                "threers point-shadow frame bg",
+            )
         });
 
         let sampler_linear = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -2585,8 +2994,10 @@ impl Renderer {
             ..Default::default()
         });
 
-        // Point shadow cubemap depth (6 layers × 512×512 Depth32Float).
-        const POINT_SHADOW_SIZE: u32 = 512;
+        // Point shadow cubemap depth. The Cornell reference requests 256²;
+        // keeping the renderer's allocation at that size avoids silently doing
+        // four times the shadow raster work.
+        const POINT_SHADOW_SIZE: u32 = 256;
         let point_shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("threers point shadow depth cube"),
             size: wgpu::Extent3d {
@@ -2689,64 +3100,6 @@ impl Renderer {
             &ss_depth_placeholder_view,
         );
 
-        // Dummy 1x1 depth textures used by `shadow_env_bind_group` so the
-        // shadow passes can satisfy the pipeline layout without binding the
-        // textures they're currently writing to (WebGPU forbids simultaneous
-        // RenderAttachment + TextureBinding usage of the same resource).
-        let dummy_depth_2d = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("threers dummy depth 2d"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let dummy_depth_2d_view =
-            dummy_depth_2d.create_view(&wgpu::TextureViewDescriptor::default());
-        let dummy_depth_cube = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("threers dummy depth cube"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 6,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let dummy_depth_cube_view = dummy_depth_cube.create_view(&wgpu::TextureViewDescriptor {
-            label: Some("threers dummy depth cube view"),
-            dimension: Some(wgpu::TextureViewDimension::Cube),
-            ..Default::default()
-        });
-        let shadow_env_bind_group = env_bind_group!(
-            device,
-            &env_bgl,
-            "threers shadow env bg (dummies)",
-            &default_env_cube.view,
-            &env_sampler,
-            &dummy_depth_2d_view,
-            &shadow_sampler,
-            &dummy_depth_2d_view,
-            &spot_shadow_sampler,
-            &dummy_depth_cube_view,
-            &point_shadow_sampler,
-            &default_cube_uv_view,
-            &default_cube_uv_view,
-            &ss_glass_sampler,
-            &ss_depth_placeholder_view,
-            &ss_depth_placeholder_view,
-        );
-
         Self {
             device,
             queue,
@@ -2779,8 +3132,18 @@ impl Renderer {
             taa_sampler,
             pipeline_taa,
             pipeline_taa_f16,
+            tone_mapping: 0,
+            tone_mapping_exposure: 1.0,
+            last_stats: RendererStats::default(),
+            static_mode: false,
+            static_invalidated: true,
+            static_draw_cache: None,
+            static_main_bundle: None,
             pipeline_tri,
             pipeline_tri_alpha,
+            pipeline_standard,
+            pipeline_standard_alpha,
+            pipeline_standard_nocull,
             pipeline_tri_nocull,
             pipeline_tri_sky,
             pipeline_tri_wire,
@@ -2790,6 +3153,9 @@ impl Renderer {
             pipeline_tri_f16,
             pipeline_tri_alpha_f16,
             pipeline_tri_nocull_f16,
+            pipeline_standard_f16,
+            pipeline_standard_alpha_f16,
+            pipeline_standard_nocull_f16,
             pipeline_tri_sky_f16,
             pipeline_tri_wire_f16,
             pipeline_line_f16,
@@ -2844,7 +3210,6 @@ impl Renderer {
             cube_rt_view_cache: HashMap::new(),
             cube_cache: HashMap::new(),
             env_bind_group,
-            shadow_env_bind_group,
             env_sampler,
             default_env_cube,
             default_cube_uv_view,
@@ -2858,8 +3223,17 @@ impl Renderer {
             point_shadow_face_views,
             point_shadow_sampler,
             frame_buffer,
+            point_shadow_frame_buffers,
+            probe_coeff_buffer,
+            probe_texture,
+            probe_texture_view,
+            probe_sampler,
+            probe_grid: LightProbeGridState::default(),
             frame_bind_group,
+            point_shadow_frame_bind_groups,
             per_mesh: Vec::new(),
+            per_mesh_uniform_cache: Vec::new(),
+            texture_bind_group_cache: HashMap::new(),
             sampler_linear,
             sampler_nearest_clamp,
             sampler_linear_repeat,
@@ -2874,6 +3248,231 @@ impl Renderer {
 
     pub fn color_format(&self) -> wgpu::TextureFormat {
         self.color_format
+    }
+
+    pub fn stats(&self) -> RendererStats {
+        self.last_stats
+    }
+
+    /// Enable or disable the explicit static-scene optimization contract.
+    /// Enabling always forces one complete refresh so the first visible frame
+    /// cannot observe an uninitialized cache.
+    pub fn set_static_mode(&mut self, enabled: bool) {
+        if enabled && !self.static_mode {
+            self.static_invalidated = true;
+        }
+        self.static_mode = enabled;
+        if !enabled {
+            self.static_draw_cache = None;
+            self.static_main_bundle = None;
+        }
+    }
+
+    /// Mark cached static light-space outputs stale after a scene, material,
+    /// geometry, or light mutation.
+    pub fn invalidate_static_scene(&mut self) {
+        self.static_invalidated = true;
+        self.static_draw_cache = None;
+        self.static_main_bundle = None;
+    }
+
+    /// Upload a packed L2 spherical-harmonic grid.
+    ///
+    /// Coefficients are probe-major, nine coefficients per probe, with each
+    /// coefficient stored as a vec4 (RGB used, A padding).
+    pub fn set_light_probe_grid(
+        &mut self,
+        coefficients: &[f32],
+        resolution: [u32; 3],
+        min: Vector3,
+        max: Vector3,
+    ) -> Result<(), String> {
+        self.static_main_bundle = None;
+        if resolution.iter().any(|&v| v < 2) {
+            return Err("light probe resolution must be at least 2 on every axis".into());
+        }
+        let probe_count = resolution
+            .iter()
+            .try_fold(1usize, |acc, &v| acc.checked_mul(v as usize))
+            .ok_or_else(|| "light probe resolution overflows".to_string())?;
+        if probe_count > MAX_LIGHT_PROBE_GRID_PROBES {
+            return Err(format!(
+                "light probe grid has {probe_count} probes; maximum is {MAX_LIGHT_PROBE_GRID_PROBES}"
+            ));
+        }
+        let expected = probe_count * 9 * 4;
+        if coefficients.len() != expected {
+            return Err(format!(
+                "light probe coefficient length is {}; expected {expected}",
+                coefficients.len()
+            ));
+        }
+        if coefficients.iter().any(|v| !v.is_finite()) {
+            return Err("light probe coefficients must be finite".into());
+        }
+        let bounds = [min.x, min.y, min.z, max.x, max.y, max.z];
+        if bounds.iter().any(|v| !v.is_finite())
+            || max.x <= min.x
+            || max.y <= min.y
+            || max.z <= min.z
+        {
+            return Err("light probe bounds must be finite and have positive extent".into());
+        }
+
+        self.queue.write_buffer(
+            &self.probe_coeff_buffer,
+            0,
+            bytemuck::cast_slice(coefficients),
+        );
+
+        // Match Three.js' packed 3D atlas so the texture unit performs the
+        // trilinear interpolation. Nine RGB SH coefficients fit into seven
+        // RGBA texels; each sub-volume gets one duplicated padding slice at
+        // either end to prevent filtering into its neighbor.
+        let [nx, ny, nz] = resolution;
+        let padded_slices = nz + 2;
+        let atlas_depth = 7 * padded_slices;
+        let max_3d_dimension = self.device.limits().max_texture_dimension_3d;
+        if nx > max_3d_dimension || ny > max_3d_dimension || atlas_depth > max_3d_dimension {
+            return Err(format!(
+                "light probe atlas dimensions {nx}x{ny}x{atlas_depth} exceed the device's {max_3d_dimension} texel 3D texture limit"
+            ));
+        }
+        let unpadded_row_bytes = nx * 4 * std::mem::size_of::<u16>() as u32;
+        let padded_row_bytes = unpadded_row_bytes.div_ceil(256) * 256;
+        let row_u16 = (padded_row_bytes / 2) as usize;
+        let layer_u16 = row_u16 * ny as usize;
+        let mut atlas = vec![0u16; layer_u16 * atlas_depth as usize];
+        for packed_index in 0..7usize {
+            for local_slice in 0..padded_slices as usize {
+                let source_z = if local_slice == 0 {
+                    0
+                } else if local_slice == padded_slices as usize - 1 {
+                    nz as usize - 1
+                } else {
+                    local_slice - 1
+                };
+                let atlas_z = packed_index * padded_slices as usize + local_slice;
+                for y in 0..ny as usize {
+                    for x in 0..nx as usize {
+                        let probe = x + y * nx as usize + source_z * nx as usize * ny as usize;
+                        let coefficient = |index: usize, channel: usize| {
+                            coefficients[(probe * 9 + index) * 4 + channel]
+                        };
+                        let rgba = match packed_index {
+                            0 => [
+                                coefficient(0, 0),
+                                coefficient(0, 1),
+                                coefficient(0, 2),
+                                coefficient(1, 0),
+                            ],
+                            1 => [
+                                coefficient(1, 1),
+                                coefficient(1, 2),
+                                coefficient(2, 0),
+                                coefficient(2, 1),
+                            ],
+                            2 => [
+                                coefficient(2, 2),
+                                coefficient(3, 0),
+                                coefficient(3, 1),
+                                coefficient(3, 2),
+                            ],
+                            3 => [
+                                coefficient(4, 0),
+                                coefficient(4, 1),
+                                coefficient(4, 2),
+                                coefficient(5, 0),
+                            ],
+                            4 => [
+                                coefficient(5, 1),
+                                coefficient(5, 2),
+                                coefficient(6, 0),
+                                coefficient(6, 1),
+                            ],
+                            5 => [
+                                coefficient(6, 2),
+                                coefficient(7, 0),
+                                coefficient(7, 1),
+                                coefficient(7, 2),
+                            ],
+                            _ => [coefficient(8, 0), coefficient(8, 1), coefficient(8, 2), 0.0],
+                        };
+                        let dst = atlas_z * layer_u16 + y * row_u16 + x * 4;
+                        for channel in 0..4 {
+                            atlas[dst + channel] = f32_to_f16_bits(rgba[channel]);
+                        }
+                    }
+                }
+            }
+        }
+        let probe_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("threers light probe atlas"),
+            size: wgpu::Extent3d {
+                width: nx,
+                height: ny,
+                depth_or_array_layers: atlas_depth,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::ImageCopyTexture {
+                texture: &probe_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&atlas),
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(padded_row_bytes),
+                rows_per_image: Some(ny),
+            },
+            wgpu::Extent3d {
+                width: nx,
+                height: ny,
+                depth_or_array_layers: atlas_depth,
+            },
+        );
+        self.probe_texture_view =
+            probe_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.probe_texture = probe_texture;
+        self.frame_bind_group = create_frame_bind_group(
+            &self.device,
+            &self.frame_bgl,
+            &self.frame_buffer,
+            &self.probe_coeff_buffer,
+            &self.probe_texture_view,
+            &self.probe_sampler,
+            "threers frame bg",
+        );
+        self.point_shadow_frame_bind_groups = std::array::from_fn(|face| {
+            create_frame_bind_group(
+                &self.device,
+                &self.frame_bgl,
+                &self.point_shadow_frame_buffers[face],
+                &self.probe_coeff_buffer,
+                &self.probe_texture_view,
+                &self.probe_sampler,
+                "threers point-shadow frame bg",
+            )
+        });
+        self.probe_grid = LightProbeGridState {
+            min: [min.x, min.y, min.z, 0.0],
+            max: [max.x, max.y, max.z, 0.0],
+            resolution: [resolution[0], resolution[1], resolution[2], 1],
+        };
+        Ok(())
+    }
+
+    pub fn clear_light_probe_grid(&mut self) {
+        self.probe_grid.resolution[3] = 0;
+        self.static_main_bundle = None;
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -3548,7 +4147,12 @@ impl Renderer {
         );
         self.depth_size = (target.side, target.side);
         let face_view = &target.face_views[face % 6];
-        self.render(scene, camera, face_view, false);
+        self.render(
+            scene,
+            camera,
+            face_view,
+            target.format == wgpu::TextureFormat::Rgba16Float,
+        );
         self.depth_view = orig_depth;
         self.depth_size = (orig_w, orig_h);
     }
@@ -3604,6 +4208,9 @@ impl Renderer {
         depth_src: Option<&wgpu::Texture>,
         color_src: Option<&wgpu::Texture>,
     ) {
+        self.last_stats = RendererStats::default();
+        let update_static_outputs =
+            should_update_static_outputs(self.static_mode, self.static_invalidated);
         scene.update_world();
 
         // TAA active only when we have a sampleable color+depth target.
@@ -3620,7 +4227,9 @@ impl Renderer {
             proj_m.elements[8] += jx;
             proj_m.elements[9] += jy;
         }
-        let view_proj = proj_m.multiply(&view_m).elements;
+        let view_proj_matrix = proj_m.multiply(&view_m);
+        let view_frustum = Frustum::from_projection_matrix(&view_proj_matrix);
+        let view_proj = view_proj_matrix.elements;
         let taa_inv_vp = unjittered.invert().elements;
         let taa_unjittered_vp = unjittered.elements;
 
@@ -3629,6 +4238,11 @@ impl Renderer {
         // environment source (CPU cube texture or cube render target).
         let has_env = scene.environment.is_some() || scene.environment_cube_rt.is_some();
         let (cam_near, cam_far) = camera.near_far();
+        let (tone_mapping, tone_mapping_exposure) = tone_mapping_for_target(
+            self.tone_mapping,
+            self.tone_mapping_exposure,
+            linear_framebuffer,
+        );
         let mut frame_u = FrameUniforms {
             view: view_m.elements,
             projection: proj_m.elements,
@@ -3647,8 +4261,8 @@ impl Renderer {
                 scene.fog.mode as f32,
             ],
             tone_mapping_exposure: [
-                0.0,
-                1.0,
+                tone_mapping,
+                tone_mapping_exposure,
                 if has_env { 1.0 } else { 0.0 },
                 if linear_framebuffer { 1.0 } else { 0.0 },
             ],
@@ -3658,6 +4272,9 @@ impl Renderer {
                 cam_near,
                 cam_far,
             ],
+            probe_min: self.probe_grid.min,
+            probe_max: self.probe_grid.max,
+            probe_resolution: self.probe_grid.resolution,
             ..FrameUniforms::default()
         };
 
@@ -3666,70 +4283,19 @@ impl Renderer {
         let mut n_point = 0usize;
         let mut n_spot = 0usize;
         let mut n_hemi = 0usize;
-        let mut shadow_caster: Option<(Vector3, crate::lights::ShadowSettings)> = None;
+        let mut shadow_caster: Option<(Vector3, Vector3, Vector3, crate::lights::ShadowSettings)> =
+            None;
         let mut spot_caster: Option<(Vector3, Vector3, f32, crate::lights::ShadowSettings)> = None;
         let mut point_caster: Option<(Vector3, f32, crate::lights::ShadowSettings)> = None;
 
-        #[derive(Clone, Copy, PartialEq, Eq)]
-        enum Topology {
-            Triangle,
-            TriangleAlpha,
-            TriangleWire,
-            TriangleNoCull,
-            Sky,
-            Line,
-            #[allow(dead_code)]
-            Point,
-            Sprite,
-            Instanced,
-            Skinned,
-            /// Single-layer glass depth prepass (writes depth, no color).
-            GlassDepth,
-            /// Single-layer glass color pass (LessEqual, alpha blend, no depth write).
-            GlassColor,
-            /// Weighted-blended OIT surface (drawn into accum+revealage MRT).
-            Oit,
-            /// Screen-space refraction glass (drawn in a dedicated pass that
-            /// samples the captured opaque color + depth).
-            Refract,
-            /// Custom-shader material: (fragment-source hash, is-transparent).
-            Custom(u64, bool),
-        }
-        struct DrawMesh {
-            key: *const BufferGeometry,
-            topology: Topology,
-            /// Z in view space, used to back-to-front sort transparent draws.
-            view_z: f32,
-            render_order: i32,
-            cast_shadow: bool,
-            refract_capture: bool,
-            alpha_test: f32,
-            model: [f32; 16],
-            normal_matrix: [f32; 16],
-            color: [f32; 4],
-            emissive: [f32; 4],
-            specular: [f32; 4],
-            shininess_or_near: f32,
-            opacity_or_far: f32,
-            roughness: f32,
-            metalness: f32,
-            ao_intensity: f32,
-            normal_scale: [f32; 2],
-            toon_steps: u32,
-            physical: [f32; 4],
-            physical2: [f32; 4],
-            shader_flags: u32,
-            kind: MaterialKind,
-            slots: MaterialTextureSlots,
-            /// Index into `instance_buffers` for Topology::Instanced.
-            instance_buf_idx: usize,
-            instance_count: u32,
-            /// Index into `skin_data` for Topology::Skinned.
-            skin_idx: usize,
-            /// Index into `shader_data` for Topology::Custom.
-            shader_idx: usize,
-        }
-        let mut draws: Vec<DrawMesh> = Vec::new();
+        let retained_draws = if self.static_mode && !update_static_outputs {
+            self.static_draw_cache.clone()
+        } else {
+            None
+        };
+        let reuse_retained_draws = retained_draws.is_some();
+        let mut draws = retained_draws.unwrap_or_default();
+        let mut static_draw_cacheable = true;
         // Per-custom-shader-material draw data (parallel to Topology::Custom).
         struct ShaderDrawData {
             fragment: String,
@@ -3824,8 +4390,11 @@ impl Renderer {
                 shader_flags |= FLAG_RECEIVE_SHADOW;
             }
             DrawMesh {
+                retained_id: usize::MAX,
                 key,
                 topology,
+                camera_visible: true,
+                world_bounds: Sphere::empty(),
                 view_z,
                 render_order: obj.render_order,
                 cast_shadow: obj.cast_shadow,
@@ -3891,16 +4460,12 @@ impl Renderer {
                         if n_dir >= MAX_DIR_LIGHTS {
                             return;
                         }
-                        // three.js: direction = normalize(target - position); default target (0,0,0).
-                        let pos = obj.world_position();
-                        let dir = {
-                            let d = Vector3::new(-pos.x, -pos.y, -pos.z);
-                            if d.length_sq() > 1e-8 {
-                                d.normalize()
-                            } else {
-                                transform_direction(&obj.matrix_world, l.direction).normalize()
-                            }
-                        };
+                        // The compatibility layer keeps `direction` synchronized
+                        // to three.js' `target - position`. Transform it as a
+                        // direction so translation never changes the result.
+                        let source = obj.world_position();
+                        let world_direction = transform_direction(&obj.matrix_world, l.direction);
+                        let dir = world_direction.normalize();
                         let c = l.color;
                         frame_u.dir_lights[n_dir] = DirLightGpu {
                             direction: [dir.x, dir.y, dir.z, 0.0],
@@ -3908,7 +4473,7 @@ impl Renderer {
                         };
                         // First cast_shadow dir light becomes the shadow caster.
                         if l.cast_shadow && n_dir == 0 && shadow_caster.is_none() {
-                            shadow_caster = Some((dir, l.shadow));
+                            shadow_caster = Some((source, source + world_direction, dir, l.shadow));
                         }
                         n_dir += 1;
                     }
@@ -3974,11 +4539,20 @@ impl Renderer {
                     Light::RectArea(_) => { /* TODO LTC */ }
                 },
                 ObjectKind::Mesh(mesh) => {
+                    if reuse_retained_draws {
+                        return;
+                    }
                     self.ensure_geometry(&mesh.geometry);
                     let mut d = make_draw(&mesh.geometry, &mesh.material, obj, Topology::Triangle);
+                    let cached = &self.geom_cache[&d.key];
+                    let world_bounds = cached.bounds.apply_matrix4(&obj.matrix_world);
+                    d.camera_visible =
+                        world_bounds.is_empty() || view_frustum.intersects_sphere(&world_bounds);
+                    d.world_bounds = world_bounds;
                     // Custom-shader material: route to a per-source pipeline and
                     // stash its user data for the @group(4) bind group.
                     if let Material::Shader(sm) = &*mesh.material {
+                        static_draw_cacheable = false;
                         let hash = custom_shader_hash(&sm.fragment);
                         let transparent = sm.transparent || sm.opacity < 1.0;
                         d.topology = Topology::Custom(hash, transparent);
@@ -4001,12 +4575,15 @@ impl Renderer {
                     if d.topology == Topology::TriangleAlpha {
                         match mesh.material.transparency_mode() {
                             crate::materials::TransparencyMode::Glass => {
-                                draws.push(make_draw(
+                                let mut depth_draw = make_draw(
                                     &mesh.geometry,
                                     &mesh.material,
                                     obj,
                                     Topology::GlassDepth,
-                                ));
+                                );
+                                depth_draw.camera_visible = d.camera_visible;
+                                depth_draw.world_bounds = d.world_bounds;
+                                draws.push(depth_draw);
                                 d.topology = Topology::GlassColor;
                             }
                             crate::materials::TransparencyMode::Oit => d.topology = Topology::Oit,
@@ -4019,10 +4596,18 @@ impl Renderer {
                     draws.push(d);
                 }
                 ObjectKind::LineSegments(ls) => {
+                    if reuse_retained_draws {
+                        return;
+                    }
+                    static_draw_cacheable = false;
                     self.ensure_geometry(&ls.geometry);
                     draws.push(make_draw(&ls.geometry, &ls.material, obj, Topology::Line));
                 }
                 ObjectKind::Points(p) => {
+                    if reuse_retained_draws {
+                        return;
+                    }
+                    static_draw_cacheable = false;
                     // three.js's PointsMaterial.size is a screen-space pixel
                     // size. WebGPU's PointList topology can't honor that —
                     // it always renders 1 fragment per point. We instead emit
@@ -4095,8 +4680,11 @@ impl Renderer {
                                 + view_m.elements[10] * world_pos.z
                                 + view_m.elements[14];
                             draws.push(DrawMesh {
+                                retained_id: usize::MAX,
                                 key: std::ptr::null::<BufferGeometry>(),
                                 topology: Topology::Sprite,
+                                camera_visible: true,
+                                world_bounds: Sphere::empty(),
                                 view_z: svz,
                                 render_order: obj.render_order,
                                 cast_shadow: false,
@@ -4128,6 +4716,10 @@ impl Renderer {
                     }
                 }
                 ObjectKind::Sprite(sprite) => {
+                    if reuse_retained_draws {
+                        return;
+                    }
+                    static_draw_cacheable = false;
                     // Inline construction — the sprite quad is built-in, so we
                     // can't reuse make_draw (which keys off an Arc<BufferGeometry>).
                     let mat = &*sprite.material;
@@ -4139,8 +4731,11 @@ impl Renderer {
                         + view_m.elements[10] * sp.z
                         + view_m.elements[14];
                     draws.push(DrawMesh {
+                        retained_id: usize::MAX,
                         key: std::ptr::null::<BufferGeometry>(),
                         topology: Topology::Sprite,
+                        camera_visible: true,
+                        world_bounds: Sphere::empty(),
                         view_z: svz,
                         render_order: obj.render_order,
                         cast_shadow: false,
@@ -4170,19 +4765,29 @@ impl Renderer {
                     });
                 }
                 ObjectKind::InstancedMesh(im) => {
+                    if reuse_retained_draws {
+                        return;
+                    }
+                    static_draw_cacheable = false;
                     self.ensure_geometry(&im.geometry);
                     if im.transforms.is_empty() {
                         return;
                     }
-                    let mut matrices: Vec<f32> = Vec::with_capacity(im.transforms.len() * 16);
-                    for t in &im.transforms {
-                        matrices.extend_from_slice(&t.elements);
+                    let mut instances: Vec<f32> = Vec::with_capacity(im.transforms.len() * 20);
+                    for (i, t) in im.transforms.iter().enumerate() {
+                        instances.extend_from_slice(&t.elements);
+                        let color = im
+                            .colors
+                            .get(i)
+                            .copied()
+                            .unwrap_or_else(|| crate::Color::new(1.0, 1.0, 1.0));
+                        instances.extend_from_slice(&[color.r, color.g, color.b, 1.0]);
                     }
                     let buf = wgpu::util::DeviceExt::create_buffer_init(
                         &*self.device,
                         &wgpu::util::BufferInitDescriptor {
                             label: Some("threers instance buffer"),
-                            contents: bytemuck::cast_slice(&matrices),
+                            contents: bytemuck::cast_slice(&instances),
                             usage: wgpu::BufferUsages::VERTEX,
                         },
                     );
@@ -4194,6 +4799,10 @@ impl Renderer {
                     draws.push(d);
                 }
                 ObjectKind::SkinnedMesh(sm) => {
+                    if reuse_retained_draws {
+                        return;
+                    }
+                    static_draw_cacheable = false;
                     self.ensure_geometry(&sm.geometry);
                     let key = geom_cache_key(&sm.geometry);
                     // Upload joints+weights to slot-1 vertex buffer (cached per-geometry).
@@ -4259,6 +4868,24 @@ impl Renderer {
             }
         });
 
+        if reuse_retained_draws {
+            for draw in &mut draws {
+                draw.camera_visible =
+                    shadow_bounds_visible(&draw.world_bounds, Some(&view_frustum));
+                let world_pos = Vector3::new(draw.model[12], draw.model[13], draw.model[14]);
+                draw.view_z = view_m.elements[2] * world_pos.x
+                    + view_m.elements[6] * world_pos.y
+                    + view_m.elements[10] * world_pos.z
+                    + view_m.elements[14];
+            }
+            self.last_stats.static_cache_hits += draws.len() as u32;
+        } else if self.static_mode && update_static_outputs && static_draw_cacheable {
+            for (retained_id, draw) in draws.iter_mut().enumerate() {
+                draw.retained_id = retained_id;
+            }
+            self.static_draw_cache = Some(draws.clone());
+        }
+
         // Sort: opaque first (stable order), then transparents back-to-front so
         // alpha blending composites correctly. Sprites are already alpha-blended
         // and we treat them as transparent for ordering purposes.
@@ -4297,20 +4924,42 @@ impl Renderer {
                 })
         });
 
+        self.last_stats.render_items = draws.len() as u32;
+        self.last_stats.camera_visible_items =
+            draws.iter().filter(|draw| draw.camera_visible).count() as u32;
+        self.last_stats.shadow_draw_calls = 0;
+        if !update_static_outputs {
+            self.last_stats.static_cache_hits += u32::from(shadow_caster.is_some())
+                + u32::from(spot_caster.is_some())
+                + 6 * u32::from(point_caster.is_some());
+        }
+        self.last_stats.main_draw_calls = draws
+            .iter()
+            .filter(|draw| {
+                draw.camera_visible
+                    && draw.topology != Topology::Oit
+                    && draw.topology != Topology::Refract
+            })
+            .count() as u32;
+
         frame_u.ambient = [ambient[0], ambient[1], ambient[2], 0.0];
         frame_u.light_counts = [n_dir as u32, n_point as u32, n_spot as u32, n_hemi as u32];
 
-        // Shadow VP: orthographic from the caster light's direction. Camera fits
-        // a fixed cube centered on the world origin (matches the default
-        // ShadowSettings.camera_size). For a richer integration the box would
-        // track the visible meshes' AABB.
-        if let Some((dir, settings)) = shadow_caster {
+        // Match three.js' DirectionalLightShadow: the orthographic shadow
+        // camera lives at the light source and looks at the light's target.
+        let mut directional_shadow_frustum = None;
+        if let Some((source, target, dir, settings)) = shadow_caster {
             let s = settings.camera_size;
-            let light_eye = -dir.normalize() * (s * 1.5);
-            let light_view = Matrix4::look_at(light_eye, Vector3::ZERO, Vector3::UP);
+            let up = if dir.y.abs() > 0.999 {
+                Vector3::new(0.0, 0.0, 1.0)
+            } else {
+                Vector3::UP
+            };
+            let light_view = Matrix4::look_at(source, target, up);
             let light_proj =
                 Matrix4::orthographic(-s, s, s, -s, settings.camera_near, settings.camera_far);
             let light_vp = light_proj.multiply(&light_view);
+            directional_shadow_frustum = Some(Frustum::from_projection_matrix(&light_vp));
             frame_u.shadow_vp = light_vp.elements;
             frame_u.shadow_params[0] = 1.0;
             frame_u.shadow_params[1] = settings.bias.max(0.0);
@@ -4318,6 +4967,7 @@ impl Renderer {
         if let Some((pos, radius, _settings)) = point_caster {
             frame_u.point_shadow_pos = [pos.x, pos.y, pos.z, radius];
         }
+        let mut spot_shadow_frustum = None;
         if let Some((pos, dir, angle, settings)) = spot_caster {
             let target = pos + dir.normalize();
             let light_view = Matrix4::look_at(pos, target, Vector3::UP);
@@ -4326,6 +4976,7 @@ impl Renderer {
             let light_proj =
                 Matrix4::perspective(fov, 1.0, settings.camera_near, settings.camera_far);
             let light_vp = light_proj.multiply(&light_view);
+            spot_shadow_frustum = Some(Frustum::from_projection_matrix(&light_vp));
             frame_u.spot_shadow_vp = light_vp.elements;
             frame_u.shadow_params[2] = 1.0;
             frame_u.shadow_params[3] = settings.bias.max(0.0);
@@ -4433,6 +5084,7 @@ impl Renderer {
             // frame. Build a "default everything" tex bg for initialization.
             let tex_bg = self.make_default_tex_bg();
             self.per_mesh.push((buf, mesh_bg, tex_bg));
+            self.per_mesh_uniform_cache.push(None);
         }
 
         // -- Build combined mesh+skin bind groups now that per_mesh is grown. --
@@ -4460,7 +5112,7 @@ impl Renderer {
         // -- Upload uniforms + rebuild per-mesh tex bind groups. --
         self.queue
             .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_u));
-        let mut new_tex_bgs: Vec<wgpu::BindGroup> = Vec::with_capacity(draws.len());
+        let mut new_tex_bgs: Vec<Arc<wgpu::BindGroup>> = Vec::with_capacity(draws.len());
         for (i, d) in draws.iter().enumerate() {
             let mut flags: u32 = 0;
             if d.slots.map.is_some() {
@@ -4507,8 +5159,11 @@ impl Renderer {
                 params4: d.physical2,
                 flags: [d.kind as u32, flags, d.shader_flags, d.alpha_test.to_bits()],
             };
-            self.queue
-                .write_buffer(&self.per_mesh[i].0, 0, bytemuck::bytes_of(&u));
+            if self.per_mesh_uniform_cache[i] != Some(u) {
+                self.queue
+                    .write_buffer(&self.per_mesh[i].0, 0, bytemuck::bytes_of(&u));
+                self.per_mesh_uniform_cache[i] = Some(u);
+            }
 
             new_tex_bgs.push(self.build_tex_bg(&d.slots));
         }
@@ -4523,8 +5178,10 @@ impl Renderer {
                 label: Some("threers encoder"),
             });
 
+        let mut encoded_shadow_draws = 0u32;
+
         // Shadow depth pre-pass: render scene from the directional light's POV.
-        if shadow_caster.is_some() {
+        if update_static_outputs && shadow_caster.is_some() {
             let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("threers shadow pass"),
                 color_attachments: &[],
@@ -4548,10 +5205,11 @@ impl Renderer {
                 if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull {
                     continue;
                 }
+                if !shadow_bounds_visible(&d.world_bounds, directional_shadow_frustum.as_ref()) {
+                    continue;
+                }
                 let gm = &self.geom_cache[&d.key].mesh;
                 spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                spass.set_bind_group(2, &self.per_mesh[i].2, &[]);
-                spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
                 spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                 if let Some(ib) = &gm.index_buffer {
                     spass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
@@ -4559,11 +5217,12 @@ impl Renderer {
                 } else {
                     spass.draw(0..gm.vertex_count, 0..1);
                 }
+                encoded_shadow_draws += 1;
             }
         }
 
         // Spot shadow depth pre-pass.
-        if spot_caster.is_some() {
+        if update_static_outputs && spot_caster.is_some() {
             let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("threers spot shadow pass"),
                 color_attachments: &[],
@@ -4587,10 +5246,11 @@ impl Renderer {
                 if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull {
                     continue;
                 }
+                if !shadow_bounds_visible(&d.world_bounds, spot_shadow_frustum.as_ref()) {
+                    continue;
+                }
                 let gm = &self.geom_cache[&d.key].mesh;
                 spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                spass.set_bind_group(2, &self.per_mesh[i].2, &[]);
-                spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
                 spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
                 if let Some(ib) = &gm.index_buffer {
                     spass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
@@ -4598,77 +5258,92 @@ impl Renderer {
                 } else {
                     spass.draw(0..gm.vertex_count, 0..1);
                 }
+                encoded_shadow_draws += 1;
             }
         }
 
         // Point-light cubemap depth: 6 face passes, one per cube face.
-        if let Some((pos, radius, _)) = point_caster {
-            self.queue.submit(Some(encoder.finish()));
-            encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("threers point shadow encoder"),
-                });
-            let face_lookat: [(Vector3, Vector3); 6] = [
-                (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
-                (Vector3::new(-1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
-                (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
-                (Vector3::new(0.0, -1.0, 0.0), Vector3::new(0.0, 0.0, -1.0)),
-                (Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, -1.0, 0.0)),
-                (Vector3::new(0.0, 0.0, -1.0), Vector3::new(0.0, -1.0, 0.0)),
-            ];
-            let fov = std::f32::consts::FRAC_PI_2;
-            let proj = Matrix4::perspective(fov, 1.0, 0.1, radius.max(1.0));
-            for face in 0..6 {
-                let (forward, up) = face_lookat[face];
-                let target = pos + forward;
-                let view = Matrix4::look_at(pos, target, up);
-                let vp = proj.multiply(&view);
-                frame_u.cube_face_vp = vp.elements;
-                self.queue
-                    .write_buffer(&self.frame_buffer, 0, bytemuck::bytes_of(&frame_u));
-
-                let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("threers point shadow face pass"),
-                    color_attachments: &[],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.point_shadow_face_views[face],
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    }),
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                });
-                spass.set_pipeline(&self.pipeline_shadow_point);
-                spass.set_bind_group(0, &self.frame_bind_group, &[]);
-                for (i, d) in draws.iter().enumerate() {
-                    if d.topology != Topology::Triangle && d.topology != Topology::TriangleNoCull {
-                        continue;
-                    }
-                    let gm = &self.geom_cache[&d.key].mesh;
-                    spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
-                    spass.set_bind_group(2, &self.per_mesh[i].2, &[]);
-                    spass.set_bind_group(3, &self.shadow_env_bind_group, &[]);
-                    spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
-                    if let Some(ib) = &gm.index_buffer {
-                        spass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                        spass.draw_indexed(0..gm.index_count, 0, 0..1);
-                    } else {
-                        spass.draw(0..gm.vertex_count, 0..1);
+        if update_static_outputs {
+            if let Some((pos, radius, _)) = point_caster {
+                let face_lookat: [(Vector3, Vector3); 6] = [
+                    (Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
+                    (Vector3::new(-1.0, 0.0, 0.0), Vector3::new(0.0, -1.0, 0.0)),
+                    (Vector3::new(0.0, 1.0, 0.0), Vector3::new(0.0, 0.0, 1.0)),
+                    (Vector3::new(0.0, -1.0, 0.0), Vector3::new(0.0, 0.0, -1.0)),
+                    (Vector3::new(0.0, 0.0, 1.0), Vector3::new(0.0, -1.0, 0.0)),
+                    (Vector3::new(0.0, 0.0, -1.0), Vector3::new(0.0, -1.0, 0.0)),
+                ];
+                let fov = std::f32::consts::FRAC_PI_2;
+                let proj = Matrix4::perspective(fov, 1.0, 0.1, radius.max(1.0));
+                for face in 0..6 {
+                    let (forward, up) = face_lookat[face];
+                    let target = pos + forward;
+                    let view = Matrix4::look_at(pos, target, up);
+                    let vp = proj.multiply(&view);
+                    let point_shadow_frustum = Frustum::from_projection_matrix(&vp);
+                    frame_u.cube_face_vp = vp.elements;
+                    self.queue.write_buffer(
+                        &self.point_shadow_frame_buffers[face],
+                        0,
+                        bytemuck::bytes_of(&frame_u),
+                    );
+                    {
+                        let mut spass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("threers point shadow face pass"),
+                            color_attachments: &[],
+                            depth_stencil_attachment: Some(
+                                wgpu::RenderPassDepthStencilAttachment {
+                                    view: &self.point_shadow_face_views[face],
+                                    depth_ops: Some(wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(1.0),
+                                        store: wgpu::StoreOp::Store,
+                                    }),
+                                    stencil_ops: None,
+                                },
+                            ),
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        spass.set_pipeline(&self.pipeline_shadow_point);
+                        spass.set_bind_group(0, &self.point_shadow_frame_bind_groups[face], &[]);
+                        for (i, d) in draws.iter().enumerate() {
+                            if !d.cast_shadow {
+                                continue;
+                            }
+                            if d.topology != Topology::Triangle
+                                && d.topology != Topology::TriangleNoCull
+                            {
+                                continue;
+                            }
+                            if !shadow_bounds_visible(&d.world_bounds, Some(&point_shadow_frustum))
+                            {
+                                continue;
+                            }
+                            let gm = &self.geom_cache[&d.key].mesh;
+                            spass.set_bind_group(1, &self.per_mesh[i].1, &[]);
+                            spass.set_vertex_buffer(0, gm.vertex_buffer.slice(..));
+                            if let Some(ib) = &gm.index_buffer {
+                                spass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                                spass.draw_indexed(0..gm.index_count, 0, 0..1);
+                            } else {
+                                spass.draw(0..gm.vertex_count, 0..1);
+                            }
+                            encoded_shadow_draws += 1;
+                        }
                     }
                 }
             }
         }
+        self.last_stats.shadow_draw_calls = encoded_shadow_draws;
 
         // Screen-space refraction glass: when any Refract surface is present, the
         // opaque scene is rendered into the mipped ss-color capture (instead of
         // straight to the frame target); the glass pass below then refracts and
         // reflects that capture. Otherwise the main pass targets the frame view
         // directly, exactly as before.
-        let refract_present = draws.iter().any(|d| d.topology == Topology::Refract);
+        let refract_present = draws
+            .iter()
+            .any(|d| d.camera_visible && d.topology == Topology::Refract);
         let ss_format = if linear_framebuffer {
             wgpu::TextureFormat::Rgba16Float
         } else {
@@ -4742,6 +5417,143 @@ impl Renderer {
                 }
             }
 
+            let visible_draw_key = static_bundle_draw_key(
+                draws
+                    .iter()
+                    .enumerate()
+                    .map(|(index, draw)| (index, draw.retained_id, draw.camera_visible)),
+            );
+            let visible_indices: Vec<usize> = visible_draw_key
+                .iter()
+                .map(|&(buffer_slot, _)| buffer_slot)
+                .collect();
+            let bundle_compatible = self.static_mode
+                && self.static_draw_cache.is_some()
+                && !refract_present
+                && visible_indices.iter().all(|&index| {
+                    matches!(
+                        draws[index].topology,
+                        Topology::Triangle
+                            | Topology::TriangleAlpha
+                            | Topology::TriangleNoCull
+                            | Topology::Sky
+                    )
+                });
+            self.last_stats.render_bundle_compatible_draws = visible_indices
+                .iter()
+                .filter(|&&index| {
+                    matches!(
+                        draws[index].topology,
+                        Topology::Triangle
+                            | Topology::TriangleAlpha
+                            | Topology::TriangleNoCull
+                            | Topology::Sky
+                    )
+                })
+                .count() as u32;
+            self.last_stats.render_bundle_incompatible_draws =
+                visible_indices.len() as u32 - self.last_stats.render_bundle_compatible_draws;
+            self.last_stats.material_specialized_draws = visible_indices
+                .iter()
+                .filter(|&&index| {
+                    matches!(
+                        draws[index].kind,
+                        MaterialKind::Standard | MaterialKind::Sky
+                    )
+                })
+                .count() as u32;
+            if bundle_compatible {
+                let bundle_matches = self.static_main_bundle.as_ref().is_some_and(|cached| {
+                    cached.linear_framebuffer == linear_framebuffer
+                        && cached.visible_draw_key == visible_draw_key
+                });
+                if !bundle_matches {
+                    let color_format = if linear_framebuffer {
+                        wgpu::TextureFormat::Rgba16Float
+                    } else {
+                        self.color_format
+                    };
+                    let color_formats = [Some(color_format)];
+                    let mut bundle_encoder = self.device.create_render_bundle_encoder(
+                        &wgpu::RenderBundleEncoderDescriptor {
+                            label: Some("threers retained static main bundle"),
+                            color_formats: &color_formats,
+                            depth_stencil: Some(wgpu::RenderBundleDepthStencil {
+                                format: DEPTH_FORMAT,
+                                depth_read_only: false,
+                                stencil_read_only: true,
+                            }),
+                            sample_count: 1,
+                            multiview: None,
+                        },
+                    );
+                    bundle_encoder.set_bind_group(0, &self.frame_bind_group, &[]);
+                    bundle_encoder.set_bind_group(3, &self.env_bind_group, &[]);
+                    let mut last_pipeline_key = None;
+                    for &index in &visible_indices {
+                        let draw = &draws[index];
+                        let pipeline_key = (draw.topology, draw.kind);
+                        if last_pipeline_key != Some(pipeline_key) {
+                            let pipeline = match (linear_framebuffer, draw.kind, draw.topology) {
+                                (true, MaterialKind::Standard, Topology::Triangle) => {
+                                    &self.pipeline_standard_f16
+                                }
+                                (true, MaterialKind::Standard, Topology::TriangleAlpha) => {
+                                    &self.pipeline_standard_alpha_f16
+                                }
+                                (true, MaterialKind::Standard, Topology::TriangleNoCull) => {
+                                    &self.pipeline_standard_nocull_f16
+                                }
+                                (false, MaterialKind::Standard, Topology::Triangle) => {
+                                    &self.pipeline_standard
+                                }
+                                (false, MaterialKind::Standard, Topology::TriangleAlpha) => {
+                                    &self.pipeline_standard_alpha
+                                }
+                                (false, MaterialKind::Standard, Topology::TriangleNoCull) => {
+                                    &self.pipeline_standard_nocull
+                                }
+                                (true, _, Topology::Triangle) => &self.pipeline_tri_f16,
+                                (true, _, Topology::TriangleAlpha) => &self.pipeline_tri_alpha_f16,
+                                (true, _, Topology::TriangleNoCull) => {
+                                    &self.pipeline_tri_nocull_f16
+                                }
+                                (true, _, Topology::Sky) => &self.pipeline_tri_sky_f16,
+                                (false, _, Topology::Triangle) => &self.pipeline_tri,
+                                (false, _, Topology::TriangleAlpha) => &self.pipeline_tri_alpha,
+                                (false, _, Topology::TriangleNoCull) => &self.pipeline_tri_nocull,
+                                (false, _, Topology::Sky) => &self.pipeline_tri_sky,
+                                _ => unreachable!("bundle compatibility checked above"),
+                            };
+                            bundle_encoder.set_pipeline(pipeline);
+                            last_pipeline_key = Some(pipeline_key);
+                        }
+                        let gpu_mesh = &self.geom_cache[&draw.key].mesh;
+                        bundle_encoder.set_bind_group(1, &self.per_mesh[index].1, &[]);
+                        bundle_encoder.set_bind_group(2, &self.per_mesh[index].2, &[]);
+                        bundle_encoder.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
+                        if let Some(index_buffer) = &gpu_mesh.index_buffer {
+                            bundle_encoder.set_index_buffer(
+                                index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint32,
+                            );
+                            bundle_encoder.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+                        } else {
+                            bundle_encoder.draw(0..gpu_mesh.vertex_count, 0..1);
+                        }
+                    }
+                    self.static_main_bundle = Some(StaticMainBundle {
+                        visible_draw_key,
+                        linear_framebuffer,
+                        bundle: bundle_encoder.finish(&wgpu::RenderBundleDescriptor {
+                            label: Some("threers retained static main bundle"),
+                        }),
+                    });
+                }
+            } else {
+                self.static_main_bundle = None;
+            }
+
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("threers main pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -4764,10 +5576,24 @@ impl Renderer {
                 occlusion_query_set: None,
             });
 
-            pass.set_bind_group(0, &self.frame_bind_group, &[]);
-            pass.set_bind_group(3, &self.env_bind_group, &[]);
+            let used_static_bundle = if let Some(cached) = self.static_main_bundle.as_ref() {
+                pass.execute_bundles(std::iter::once(&cached.bundle));
+                true
+            } else {
+                false
+            };
+            if !used_static_bundle {
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                pass.set_bind_group(3, &self.env_bind_group, &[]);
+            }
             let mut last_topology: Option<Topology> = None;
             for (i, d) in draws.iter().enumerate() {
+                if used_static_bundle {
+                    break;
+                }
+                if !d.camera_visible {
+                    continue;
+                }
                 // OIT + screen-space-refraction surfaces are drawn in dedicated
                 // later passes, not here.
                 if d.topology == Topology::Oit || d.topology == Topology::Refract {
@@ -4863,11 +5689,17 @@ impl Renderer {
                     pass.draw(0..gm.vertex_count, 0..instance_count);
                 }
             }
+            if used_static_bundle {
+                self.last_stats.render_bundle_uses = 1;
+            }
         }
 
         // --- Weighted-blended OIT: accumulate the OIT surfaces, then resolve
         // (composite) over the opaque image already in `target_view`. ---
-        if draws.iter().any(|d| d.topology == Topology::Oit) {
+        if draws
+            .iter()
+            .any(|d| d.camera_visible && d.topology == Topology::Oit)
+        {
             let (tw, th) = self.depth_size;
             self.ensure_oit_targets(tw, th);
             if let Some((_, _, _, accum_view, _, reveal_view, resolve_bg)) =
@@ -4915,7 +5747,7 @@ impl Renderer {
                     opass.set_bind_group(0, &self.frame_bind_group, &[]);
                     opass.set_bind_group(3, &self.env_bind_group, &[]);
                     for (i, d) in draws.iter().enumerate() {
-                        if d.topology != Topology::Oit {
+                        if !d.camera_visible || d.topology != Topology::Oit {
                             continue;
                         }
                         let gm = &self.geom_cache[&d.key].mesh;
@@ -5009,7 +5841,7 @@ impl Renderer {
                 bp.set_pipeline(&self.pipeline_ss_back_depth);
                 bp.set_bind_group(0, &self.frame_bind_group, &[]);
                 for (i, d) in draws.iter().enumerate() {
-                    if d.topology != Topology::Refract {
+                    if !d.camera_visible || d.topology != Topology::Refract {
                         continue;
                     }
                     let gm = &self.geom_cache[&d.key].mesh;
@@ -5167,7 +5999,7 @@ impl Renderer {
             gp.set_bind_group(0, &self.frame_bind_group, &[]);
             gp.set_bind_group(3, &glass_env_bg, &[]);
             for (i, d) in draws.iter().enumerate() {
-                if d.topology != Topology::Refract {
+                if !d.camera_visible || d.topology != Topology::Refract {
                     continue;
                 }
                 let gm = &self.geom_cache[&d.key].mesh;
@@ -5382,6 +6214,9 @@ impl Renderer {
         }
 
         self.queue.submit(Some(encoder.finish()));
+        if self.static_mode && update_static_outputs {
+            self.static_invalidated = false;
+        }
         let _ = (&self.frame_bgl,);
     }
 
@@ -5472,7 +6307,48 @@ impl Renderer {
         self.rt_registry.insert(rt_id, Arc::clone(rt));
     }
 
-    fn build_tex_bg(&self, slots: &MaterialTextureSlots) -> wgpu::BindGroup {
+    fn texture_bind_group_key(slots: &MaterialTextureSlots) -> Option<TextureBindGroupKey> {
+        let all_slots = [
+            &slots.map,
+            &slots.normal_map,
+            &slots.roughness_map,
+            &slots.metalness_map,
+            &slots.ao_map,
+            &slots.emissive_map,
+            &slots.matcap_map,
+        ];
+        // Render-target views may be replaced when a target is resized or
+        // re-registered, so they must not retain a cached bind group.
+        if all_slots.iter().any(|slot| {
+            slot.as_ref()
+                .is_some_and(|texture| texture.external_rt_id.is_some())
+        }) {
+            return None;
+        }
+        let textures = std::array::from_fn(|index| {
+            all_slots[index]
+                .as_ref()
+                .map(|texture| Arc::as_ptr(texture) as usize)
+                .unwrap_or(0)
+        });
+        let chosen = slots.map.as_ref().or(slots.matcap_map.as_ref());
+        let sampler = chosen.map_or(0, |texture| {
+            use crate::textures::{TextureFilter, TextureWrap};
+            let nearest = matches!(texture.mag_filter, TextureFilter::Nearest) as u8;
+            let repeat = (matches!(texture.wrap_s, TextureWrap::Repeat)
+                || matches!(texture.wrap_t, TextureWrap::Repeat)) as u8;
+            nearest | (repeat << 1)
+        });
+        Some(TextureBindGroupKey { textures, sampler })
+    }
+
+    fn build_tex_bg(&mut self, slots: &MaterialTextureSlots) -> Arc<wgpu::BindGroup> {
+        let cache_key = Self::texture_bind_group_key(slots);
+        if let Some(key) = cache_key {
+            if let Some(bind_group) = self.texture_bind_group_cache.get(&key) {
+                return bind_group.clone();
+            }
+        }
         let albedo = self.view_for(&slots.map, &self.default_white_srgb);
         let normal = self.view_for(&slots.normal_map, &self.default_normal);
         let roughness = self.view_for(&slots.roughness_map, &self.default_white_linear);
@@ -5489,7 +6365,7 @@ impl Renderer {
             None => &self.sampler_linear,
         };
 
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = Arc::new(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("threers tex bg"),
             layout: &self.tex_bgl,
             entries: &[
@@ -5526,7 +6402,12 @@ impl Renderer {
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
             ],
-        })
+        }));
+        if let Some(key) = cache_key {
+            self.texture_bind_group_cache
+                .insert(key, bind_group.clone());
+        }
+        bind_group
     }
 
     /// Select one of the 4 pre-built samplers based on a Texture's filter/wrap
@@ -5545,7 +6426,7 @@ impl Renderer {
         }
     }
 
-    fn make_default_tex_bg(&self) -> wgpu::BindGroup {
+    fn make_default_tex_bg(&mut self) -> Arc<wgpu::BindGroup> {
         self.build_tex_bg(&MaterialTextureSlots::default())
     }
 }
@@ -5621,9 +6502,83 @@ fn transform_direction(m: &Matrix4, v: Vector3) -> Vector3 {
     )
 }
 
+/// Three.js keeps intermediate render targets in linear HDR and applies the
+/// configured output transform only when writing to the display framebuffer.
+fn tone_mapping_for_target(mode: u32, exposure: f32, linear_framebuffer: bool) -> (f32, f32) {
+    if linear_framebuffer {
+        (0.0, 1.0)
+    } else {
+        (mode as f32, exposure)
+    }
+}
+
 fn mat3_to_mat4_array(m: &Matrix3) -> [f32; 16] {
     let e = &m.elements;
     [
         e[0], e[1], e[2], 0.0, e[3], e[4], e[5], 0.0, e[6], e[7], e[8], 0.0, 0.0, 0.0, 0.0, 1.0,
     ]
+}
+
+#[cfg(test)]
+mod output_transform_tests {
+    use super::{
+        shadow_bounds_visible, should_update_static_outputs, static_bundle_draw_key,
+        tone_mapping_for_target,
+    };
+    use crate::math::{Frustum, Matrix4, Sphere, Vector3};
+
+    #[test]
+    fn linear_targets_bypass_output_tone_mapping() {
+        assert_eq!(tone_mapping_for_target(2, 1.25, true), (0.0, 1.0));
+    }
+
+    #[test]
+    fn display_targets_keep_configured_tone_mapping() {
+        assert_eq!(tone_mapping_for_target(2, 1.25, false), (2.0, 1.25));
+    }
+
+    #[test]
+    fn dynamic_mode_always_refreshes_static_outputs() {
+        assert!(should_update_static_outputs(false, false));
+        assert!(should_update_static_outputs(false, true));
+    }
+
+    #[test]
+    fn static_mode_refreshes_only_when_invalidated() {
+        assert!(should_update_static_outputs(true, true));
+        assert!(!should_update_static_outputs(true, false));
+    }
+
+    #[test]
+    fn static_bundle_key_tracks_camera_driven_transparent_reordering() {
+        let original = static_bundle_draw_key([(0, 10, true), (1, 20, true)].into_iter());
+        let reordered = static_bundle_draw_key([(0, 20, true), (1, 10, true)].into_iter());
+        assert_ne!(original, reordered);
+    }
+
+    #[test]
+    fn static_bundle_key_tracks_visible_draw_buffer_slot_changes() {
+        let original = static_bundle_draw_key([(0, 10, true), (1, 20, false)].into_iter());
+        let shifted = static_bundle_draw_key([(0, 20, false), (1, 10, true)].into_iter());
+        assert_ne!(original, shifted);
+    }
+
+    #[test]
+    fn unknown_shadow_bounds_are_conservatively_visible() {
+        let frustum = Frustum::from_projection_matrix(&Matrix4::identity());
+        assert!(shadow_bounds_visible(&Sphere::empty(), Some(&frustum)));
+    }
+
+    #[test]
+    fn shadow_bounds_outside_light_frustum_are_rejected() {
+        let frustum = Frustum::from_projection_matrix(&Matrix4::identity());
+        assert!(shadow_bounds_visible(
+            &Sphere::new(Vector3::ZERO, 0.25),
+            Some(&frustum)
+        ));
+        assert!(!shadow_bounds_visible(
+            &Sphere::new(Vector3::new(4.0, 0.0, 0.0), 0.25),
+            Some(&frustum)
+        ));
+    }
 }

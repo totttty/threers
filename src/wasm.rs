@@ -20,12 +20,85 @@ pub struct WebRenderer {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     width: u32,
     height: u32,
     // When non-null, render() draws into this render target instead of the surface.
     current_target_id: Option<u32>,
     /// Scratch RT for kind-0 canvas copies (RT→RT→canvas avoids Dawn swapchain sampling glitch).
     copy_scratch: Option<(u32, Arc<crate::renderer::RenderTarget>)>,
+}
+
+/// Validated baked light-probe data returned by the Rust cache decoder.
+#[wasm_bindgen]
+pub struct WebBakedLightProbeGrid {
+    inner: crate::BakedLightProbeGrid,
+}
+
+#[wasm_bindgen]
+impl WebBakedLightProbeGrid {
+    pub fn coefficients(&self) -> Vec<f32> {
+        self.inner.coefficients.clone()
+    }
+
+    pub fn nx(&self) -> u32 {
+        self.inner.resolution[0]
+    }
+
+    pub fn ny(&self) -> u32 {
+        self.inner.resolution[1]
+    }
+
+    pub fn nz(&self) -> u32 {
+        self.inner.resolution[2]
+    }
+
+    #[wasm_bindgen(js_name = minX)]
+    pub fn min_x(&self) -> f32 {
+        self.inner.min.x
+    }
+
+    #[wasm_bindgen(js_name = minY)]
+    pub fn min_y(&self) -> f32 {
+        self.inner.min.y
+    }
+
+    #[wasm_bindgen(js_name = minZ)]
+    pub fn min_z(&self) -> f32 {
+        self.inner.min.z
+    }
+
+    #[wasm_bindgen(js_name = maxX)]
+    pub fn max_x(&self) -> f32 {
+        self.inner.max.x
+    }
+
+    #[wasm_bindgen(js_name = maxY)]
+    pub fn max_y(&self) -> f32 {
+        self.inner.max.y
+    }
+
+    #[wasm_bindgen(js_name = maxZ)]
+    pub fn max_z(&self) -> f32 {
+        self.inner.max.z
+    }
+
+    #[wasm_bindgen(js_name = cubemapSize)]
+    pub fn cubemap_size(&self) -> u32 {
+        self.inner.settings.cubemap_size
+    }
+
+    pub fn near(&self) -> f32 {
+        self.inner.settings.near
+    }
+
+    pub fn far(&self) -> f32 {
+        self.inner.settings.far
+    }
+
+    pub fn bounces(&self) -> u32 {
+        self.inner.settings.bounces
+    }
 }
 
 // Thread-local registry mapping render-target IDs to live Arcs. We use this
@@ -111,6 +184,81 @@ async fn read_texture_region(
     Ok(out)
 }
 
+/// Read tightly packed rows from consecutive array layers in one GPU copy.
+async fn read_texture_layers(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    layers: u32,
+) -> Result<Vec<u8>, String> {
+    let bytes_per_pixel = match format {
+        wgpu::TextureFormat::Rgba16Float => 8u32,
+        other => return Err(format!("unsupported layered readback format: {other:?}")),
+    };
+    const ALIGN: u32 = 256;
+    let unpadded = width * bytes_per_pixel;
+    let padded = ((unpadded + ALIGN - 1) / ALIGN) * ALIGN;
+    let rows = height
+        .checked_mul(layers)
+        .ok_or_else(|| "layered readback size overflows".to_string())?;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("threers layered cube readback"),
+        size: (padded * rows) as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("threers layered cube readback encoder"),
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::ImageCopyTexture {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::ImageCopyBuffer {
+            buffer: &buffer,
+            layout: wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: layers,
+        },
+    );
+    queue.submit(std::iter::once(encoder.finish()));
+
+    let slice = buffer.slice(..);
+    let (tx, rx) = futures_channel::oneshot::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = tx.send(result);
+    });
+    device.poll(wgpu::Maintain::Wait);
+    rx.await
+        .map_err(|_| "layered readback channel dropped".to_string())?
+        .map_err(|e| format!("layered buffer map failed: {e:?}"))?;
+
+    let mapped = slice.get_mapped_range();
+    let mut out = Vec::with_capacity((unpadded * rows) as usize);
+    for layer in 0..layers {
+        for row in 0..height {
+            let start = ((layer * height + row) * padded) as usize;
+            out.extend_from_slice(&mapped[start..start + unpadded as usize]);
+        }
+    }
+    drop(mapped);
+    buffer.unmap();
+    Ok(out)
+}
+
 fn postfx_camera_from(
     near: f32,
     far: f32,
@@ -164,8 +312,21 @@ pub struct WebCubeRenderTarget {
 impl WebCubeRenderTarget {
     #[wasm_bindgen(constructor)]
     pub fn new(renderer: &WebRenderer, side: u32) -> WebCubeRenderTarget {
-        let rt =
-            crate::renderer::RenderTarget::new_cube(&renderer.device, side, renderer.config.format);
+        Self::alloc(renderer, side, renderer.config.format)
+    }
+
+    /// Linear half-float cube target used exclusively for light-probe baking.
+    #[wasm_bindgen(js_name = newProbe)]
+    pub fn new_probe(renderer: &WebRenderer, side: u32) -> WebCubeRenderTarget {
+        Self::alloc(renderer, side, wgpu::TextureFormat::Rgba16Float)
+    }
+
+    fn alloc(
+        renderer: &WebRenderer,
+        side: u32,
+        format: wgpu::TextureFormat,
+    ) -> WebCubeRenderTarget {
+        let rt = crate::renderer::RenderTarget::new_cube(&renderer.device, side, format);
         let arc = std::sync::Arc::new(rt);
         let id = NEXT_RT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         // Register so scene.environment_cube_rt can find this RT at render time.
@@ -208,12 +369,33 @@ async fn acquire_browser_gpu(
         .await
         .ok_or_else(|| JsValue::from_str("no adapter"))?;
 
+    let adapter_limits = adapter.limits();
+    let required_probe_bytes = crate::renderer::LIGHT_PROBE_COEFFICIENT_BYTES as u32;
+    if adapter_limits.max_storage_buffers_per_shader_stage < 1
+        || adapter_limits.max_storage_buffer_binding_size < required_probe_bytes
+    {
+        return Err(JsValue::from_str(&format!(
+            "WebGPU adapter cannot support light-probe grids: need one fragment storage buffer of {required_probe_bytes} bytes (adapter exposes {} buffers / {} bytes)",
+            adapter_limits.max_storage_buffers_per_shader_stage,
+            adapter_limits.max_storage_buffer_binding_size,
+        )));
+    }
+    let mut required_limits = wgpu::Limits::downlevel_webgl2_defaults();
+    required_limits.max_storage_buffers_per_shader_stage = 1;
+    required_limits.max_storage_buffer_binding_size = required_probe_bytes;
+
+    let required_features = if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        wgpu::Features::TIMESTAMP_QUERY
+    } else {
+        wgpu::Features::empty()
+    };
+
     let (device, queue) = adapter
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: Some("threers device"),
-                required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                required_features,
+                required_limits,
             },
             None,
         )
@@ -322,6 +504,7 @@ impl WebRenderer {
             surface,
             config,
             device,
+            queue,
             width,
             height,
             current_target_id: None,
@@ -748,6 +931,123 @@ impl WebRenderer {
         self.renderer.set_ssao_noise(noise);
     }
 
+    /// Configure the PBR output transform. Modes mirror the compact renderer
+    /// representation: 0 = none, 1 = linear, 2 = ACES filmic.
+    #[wasm_bindgen(js_name = setToneMapping)]
+    pub fn set_tone_mapping(&mut self, mode: u32, exposure: f32) {
+        self.renderer.set_tone_mapping(mode, exposure);
+    }
+
+    #[wasm_bindgen(js_name = setLightProbeGrid)]
+    pub fn set_light_probe_grid(
+        &mut self,
+        coefficients: Vec<f32>,
+        nx: u32,
+        ny: u32,
+        nz: u32,
+        min_x: f32,
+        min_y: f32,
+        min_z: f32,
+        max_x: f32,
+        max_y: f32,
+        max_z: f32,
+    ) -> Result<(), JsValue> {
+        self.renderer
+            .set_light_probe_grid(
+                &coefficients,
+                [nx, ny, nz],
+                crate::Vector3::new(min_x, min_y, min_z),
+                crate::Vector3::new(max_x, max_y, max_z),
+            )
+            .map_err(|e| JsValue::from_str(&e))
+    }
+
+    /// Serialize renderer-independent probe coefficients into the stable
+    /// threers baked-probe cache format.
+    #[wasm_bindgen(js_name = encodeLightProbeGridCache)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_light_probe_grid_cache(
+        &self,
+        coefficients: Vec<f32>,
+        nx: u32,
+        ny: u32,
+        nz: u32,
+        min_x: f32,
+        min_y: f32,
+        min_z: f32,
+        max_x: f32,
+        max_y: f32,
+        max_z: f32,
+        cubemap_size: u32,
+        near: f32,
+        far: f32,
+        bounces: u32,
+        cache_key: String,
+    ) -> Result<Vec<u8>, JsValue> {
+        crate::BakedLightProbeGrid::new(
+            [nx, ny, nz],
+            crate::Vector3::new(min_x, min_y, min_z),
+            crate::Vector3::new(max_x, max_y, max_z),
+            crate::LightProbeBakeSettings {
+                cubemap_size,
+                near,
+                far,
+                bounces,
+            },
+            coefficients,
+            &cache_key,
+        )
+        .and_then(|grid| grid.to_bytes())
+        .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// Decode and validate baked probe data without trusting browser storage or
+    /// fetched assets. The caller-provided cache key must match the baked file.
+    #[wasm_bindgen(js_name = decodeLightProbeGridCache)]
+    pub fn decode_light_probe_grid_cache(
+        &self,
+        bytes: Vec<u8>,
+        expected_cache_key: String,
+    ) -> Result<WebBakedLightProbeGrid, JsValue> {
+        crate::BakedLightProbeGrid::from_bytes(&bytes, &expected_cache_key)
+            .map(|inner| WebBakedLightProbeGrid { inner })
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = clearLightProbeGrid)]
+    pub fn clear_light_probe_grid(&mut self) {
+        self.renderer.clear_light_probe_grid();
+    }
+
+    /// Read all six RGBA16F cube faces as tightly packed layer-major bytes.
+    #[wasm_bindgen(js_name = readProbeCube)]
+    pub fn read_probe_cube(&self, target: &WebCubeRenderTarget) -> js_sys::Promise {
+        let device = self.device.clone();
+        let queue = self.renderer.queue_arc();
+        let target = target.inner.clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            if target.format != wgpu::TextureFormat::Rgba16Float {
+                return Err(JsValue::from_str(
+                    "probe cube readback requires an RGBA16Float probe target",
+                ));
+            }
+            let bytes = read_texture_layers(
+                &device,
+                &queue,
+                &target.color_texture,
+                target.format,
+                target.side,
+                target.side,
+                6,
+            )
+            .await
+            .map_err(|e| JsValue::from_str(&e))?;
+            let array = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+            array.copy_from(&bytes);
+            Ok(JsValue::from(array))
+        })
+    }
+
     /// Render one face of a cube render target. CubeCamera.update() calls
     /// this six times with face indices 0..6 and the matching face camera.
     #[wasm_bindgen(js_name = renderToCubeFace)]
@@ -813,6 +1113,248 @@ impl WebRenderer {
                 self.surface.configure(&self.device, &self.config);
             }
         }
+    }
+
+    /// Opt into cached static light-space outputs. Dynamic behavior remains
+    /// the default; callers must invalidate after scene or light mutations.
+    #[wasm_bindgen(js_name = setStaticMode)]
+    pub fn set_static_mode(&mut self, enabled: bool) {
+        self.renderer.set_static_mode(enabled);
+    }
+
+    #[wasm_bindgen(js_name = invalidateStaticScene)]
+    pub fn invalidate_static_scene(&mut self) {
+        self.renderer.invalidate_static_scene();
+    }
+
+    /// Whether this browser/device pair exposes genuine GPU timestamp queries.
+    #[wasm_bindgen(js_name = benchmarkHasGpuTimestamps)]
+    pub fn benchmark_has_gpu_timestamps(&self) -> bool {
+        self.device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+    }
+
+    #[wasm_bindgen(js_name = benchmarkRendererStats)]
+    pub fn benchmark_renderer_stats(&self) -> js_sys::Object {
+        let stats = self.renderer.stats();
+        let object = js_sys::Object::new();
+        let set = |name: &str, value: u32| {
+            let _ = js_sys::Reflect::set(
+                &object,
+                &JsValue::from_str(name),
+                &JsValue::from_f64(value as f64),
+            );
+        };
+        set("renderItems", stats.render_items);
+        set("cameraVisibleItems", stats.camera_visible_items);
+        set("mainDrawCalls", stats.main_draw_calls);
+        set("shadowDrawCalls", stats.shadow_draw_calls);
+        set("staticCacheHits", stats.static_cache_hits);
+        set("renderBundleUses", stats.render_bundle_uses);
+        set(
+            "renderBundleCompatibleDraws",
+            stats.render_bundle_compatible_draws,
+        );
+        set(
+            "renderBundleIncompatibleDraws",
+            stats.render_bundle_incompatible_draws,
+        );
+        set("materialSpecializedDraws", stats.material_specialized_draws);
+        object
+    }
+
+    /// Wait until all previously submitted GPU work completes, without
+    /// submitting another scene frame. Used to isolate CPU submission timing.
+    #[wasm_bindgen(js_name = waitForGpu)]
+    pub fn wait_for_gpu(&self) -> js_sys::Promise {
+        let fence = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("threers benchmark queue fence"),
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("threers benchmark queue fence encoder"),
+            });
+        encoder.clear_buffer(&fence, 0, None);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let device = self.device.clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            let slice = fence.slice(..);
+            let (tx, rx) = futures_channel::oneshot::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+            device.poll(wgpu::Maintain::Wait);
+            rx.await
+                .map_err(|_| JsValue::from_str("GPU completion channel dropped"))?
+                .map_err(|error| {
+                    JsValue::from_str(&format!("GPU completion map failed: {error:?}"))
+                })?;
+            Ok(JsValue::UNDEFINED)
+        })
+    }
+
+    /// Render eight frames and report end-to-end wall-clock completion time per
+    /// frame. This deliberately includes CPU encoding, submission and fence
+    /// overhead; it is kept separate from true GPU timestamp time.
+    #[wasm_bindgen(js_name = benchmarkCompletionMs)]
+    pub fn benchmark_completion_ms(
+        &mut self,
+        scene: &mut WebScene,
+        camera: &WebCamera,
+    ) -> js_sys::Promise {
+        const FRAME_BATCH: usize = 8;
+        let start = web_sys::window()
+            .and_then(|window| window.performance())
+            .map(|performance| performance.now())
+            .unwrap_or(0.0);
+        for _ in 0..FRAME_BATCH {
+            self.render(scene, camera);
+        }
+        let fence = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("threers frame benchmark completion fence"),
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("threers frame benchmark completion encoder"),
+            });
+        encoder.clear_buffer(&fence, 0, None);
+        self.queue.submit(std::iter::once(encoder.finish()));
+        let device = self.device.clone();
+        wasm_bindgen_futures::future_to_promise(async move {
+            let slice = fence.slice(..);
+            let (tx, rx) = futures_channel::oneshot::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+            device.poll(wgpu::Maintain::Wait);
+            rx.await
+                .map_err(|_| JsValue::from_str("GPU completion channel dropped"))?
+                .map_err(|error| {
+                    JsValue::from_str(&format!("GPU completion map failed: {error:?}"))
+                })?;
+            let end = web_sys::window()
+                .and_then(|window| window.performance())
+                .map(|performance| performance.now())
+                .unwrap_or(start);
+            Ok(JsValue::from_f64((end - start) / FRAME_BATCH as f64))
+        })
+    }
+
+    /// Render eight frames and resolve true GPU time in milliseconds. Returns
+    /// `null` when timestamp queries are unavailable; callers must never relabel
+    /// wall-clock completion time as GPU execution time.
+    #[wasm_bindgen(js_name = benchmarkGpuMs)]
+    pub fn benchmark_gpu_ms(
+        &mut self,
+        scene: &mut WebScene,
+        camera: &WebCamera,
+    ) -> js_sys::Promise {
+        const FRAME_BATCH: usize = 8;
+        if !self.benchmark_has_gpu_timestamps() {
+            return js_sys::Promise::resolve(&JsValue::NULL);
+        }
+
+        let query_set = self.device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("threers frame benchmark timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2,
+        });
+        let resolve_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("threers frame benchmark resolve"),
+            size: 2 * wgpu::QUERY_SIZE as u64,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        let readback_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("threers frame benchmark readback"),
+            size: 2 * wgpu::QUERY_SIZE as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut start_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("threers frame benchmark start"),
+                });
+        {
+            let _pass = start_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("threers frame benchmark start timestamp"),
+                timestamp_writes: Some(wgpu::ComputePassTimestampWrites {
+                    query_set: &query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: None,
+                }),
+            });
+        }
+        self.queue.submit(std::iter::once(start_encoder.finish()));
+
+        for _ in 0..FRAME_BATCH {
+            self.render(scene, camera);
+        }
+
+        let mut end_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("threers frame benchmark end"),
+            });
+        {
+            let _pass = end_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("threers frame benchmark end timestamp"),
+                timestamp_writes: Some(wgpu::ComputePassTimestampWrites {
+                    query_set: &query_set,
+                    beginning_of_pass_write_index: None,
+                    end_of_pass_write_index: Some(1),
+                }),
+            });
+        }
+        end_encoder.resolve_query_set(&query_set, 0..2, &resolve_buffer, 0);
+        end_encoder.copy_buffer_to_buffer(
+            &resolve_buffer,
+            0,
+            &readback_buffer,
+            0,
+            2 * wgpu::QUERY_SIZE as u64,
+        );
+        self.queue.submit(std::iter::once(end_encoder.finish()));
+
+        let device = self.device.clone();
+        let timestamp_period = self.queue.get_timestamp_period() as f64;
+        wasm_bindgen_futures::future_to_promise(async move {
+            let slice = readback_buffer.slice(..);
+            let (tx, rx) = futures_channel::oneshot::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+            device.poll(wgpu::Maintain::Wait);
+            rx.await
+                .map_err(|_| JsValue::from_str("timestamp readback channel dropped"))?
+                .map_err(|error| {
+                    JsValue::from_str(&format!("timestamp buffer map failed: {error:?}"))
+                })?;
+
+            let mapped = slice.get_mapped_range();
+            let start = u64::from_le_bytes(mapped[0..8].try_into().unwrap());
+            let end = u64::from_le_bytes(mapped[8..16].try_into().unwrap());
+            drop(mapped);
+            readback_buffer.unmap();
+            if end <= start || !timestamp_period.is_finite() || timestamp_period <= 0.0 {
+                return Ok(JsValue::NULL);
+            }
+            let elapsed_ms = end.saturating_sub(start) as f64 * timestamp_period
+                / 1_000_000.0
+                / FRAME_BATCH as f64;
+            Ok(JsValue::from_f64(elapsed_ms))
+        })
     }
 }
 
@@ -962,6 +1504,7 @@ impl WebScene {
         geom: &WebGeometry,
         mat: &WebMaterial,
         transforms: Vec<f32>,
+        colors: Vec<f32>,
     ) -> WebObjectHandle {
         let count = transforms.len() / 16;
         let mut im =
@@ -970,10 +1513,44 @@ impl WebScene {
             let mut e = [0.0f32; 16];
             e.copy_from_slice(&transforms[i * 16..(i + 1) * 16]);
             im.set_matrix_at(i, crate::math::Matrix4 { elements: e });
+            if colors.len() >= (i + 1) * 4 {
+                im.set_color_at(
+                    i,
+                    crate::Color::new(colors[i * 4], colors[i * 4 + 1], colors[i * 4 + 2]),
+                );
+            }
         }
         let obj = crate::core::Object3D::instanced_mesh(im);
         let id = self.inner.add(obj);
         WebObjectHandle { id }
+    }
+
+    #[wasm_bindgen(js_name = setInstancedMatrices)]
+    pub fn set_instanced_matrices(&mut self, handle: &WebObjectHandle, transforms: Vec<f32>) {
+        if let Some(obj) = self.inner.get_mut(handle.id) {
+            if let crate::core::ObjectKind::InstancedMesh(im) = &mut obj.kind {
+                for (i, chunk) in transforms
+                    .chunks_exact(16)
+                    .take(im.transforms.len())
+                    .enumerate()
+                {
+                    let mut elements = [0.0f32; 16];
+                    elements.copy_from_slice(chunk);
+                    im.set_matrix_at(i, crate::Matrix4 { elements });
+                }
+            }
+        }
+    }
+
+    #[wasm_bindgen(js_name = setInstancedColors)]
+    pub fn set_instanced_colors(&mut self, handle: &WebObjectHandle, colors: Vec<f32>) {
+        if let Some(obj) = self.inner.get_mut(handle.id) {
+            if let crate::core::ObjectKind::InstancedMesh(im) = &mut obj.kind {
+                for (i, chunk) in colors.chunks_exact(4).take(im.colors.len()).enumerate() {
+                    im.set_color_at(i, crate::Color::new(chunk[0], chunk[1], chunk[2]));
+                }
+            }
+        }
     }
 
     /// Add a Points primitive (geometry interpreted as point-list).
@@ -1569,6 +2146,28 @@ impl WebMaterial {
     #[wasm_bindgen(js_name = setMapData)]
     pub fn set_map_data(&mut self, tex: &WebDataTexture) {
         self.set_map_arc(tex.inner.clone());
+    }
+
+    /// Attach the green channel of a glTF metallic-roughness texture.
+    #[wasm_bindgen(js_name = setRoughnessMapData)]
+    pub fn set_roughness_map_data(&mut self, tex: &WebDataTexture) {
+        let inner = Arc::make_mut(&mut self.inner);
+        match inner {
+            crate::Material::Standard(m) => m.roughness_map = Some(tex.inner.clone()),
+            crate::Material::Physical(m) => m.roughness_map = Some(tex.inner.clone()),
+            _ => {}
+        }
+    }
+
+    /// Attach the blue channel of a glTF metallic-roughness texture.
+    #[wasm_bindgen(js_name = setMetalnessMapData)]
+    pub fn set_metalness_map_data(&mut self, tex: &WebDataTexture) {
+        let inner = Arc::make_mut(&mut self.inner);
+        match inner {
+            crate::Material::Standard(m) => m.metalness_map = Some(tex.inner.clone()),
+            crate::Material::Physical(m) => m.metalness_map = Some(tex.inner.clone()),
+            _ => {}
+        }
     }
 }
 
@@ -2714,6 +3313,21 @@ impl WebDataTexture {
             )),
         }
     }
+
+    /// Color textures use an sRGB GPU format so sampling returns linear RGB,
+    /// while leaving alpha untouched. glTF base-color/emissive textures require
+    /// this transfer function; data maps continue to use the default UNORM path.
+    #[wasm_bindgen(js_name = newSrgb)]
+    pub fn new_srgb(width: u32, height: u32, data: Vec<u8>) -> WebDataTexture {
+        WebDataTexture {
+            inner: Arc::new(crate::DataTexture::new(
+                width,
+                height,
+                crate::TextureFormat::Rgba8UnormSrgb,
+                data,
+            )),
+        }
+    }
     #[wasm_bindgen(js_name = setFilters)]
     pub fn set_filters(&mut self, mag: u32, _min: u32, wrap_s: u32, wrap_t: u32) {
         let inner = Arc::make_mut(&mut self.inner);
@@ -3063,6 +3677,12 @@ impl WebFirstPersonControls {
     #[wasm_bindgen(js_name = setMoveInput)]
     pub fn set_move_input(&mut self, forward: f32, right: f32, up: f32) {
         self.inner.move_input = crate::Vector3::new(forward, right, up);
+    }
+
+    #[wasm_bindgen(js_name = setSpeeds)]
+    pub fn set_speeds(&mut self, movement: f32, look: f32) {
+        self.inner.move_speed = movement.max(0.0);
+        self.inner.look_speed = look.max(0.0);
     }
 }
 

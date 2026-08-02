@@ -58,6 +58,7 @@ pub mod helpers;
 pub mod extras;
 pub mod stats;
 pub mod scene;
+pub mod light_probes;
 
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
@@ -170,6 +171,10 @@ pub use renderers::{Css2dRenderer, Css3dRenderer, SvgRenderer};
 pub use extras::{MarchingCubes, CcdIkSolver, IkBone, Octree, SimplexNoise, PmremGenerator, PMREM_MIP_LEVELS};
 pub use stats::Stats;
 pub use scene::Scene;
+pub use light_probes::{
+    BakedLightProbeGrid, LightProbeBakeSettings, LightProbeCacheError,
+    LIGHT_PROBE_COEFFICIENTS_PER_PROBE, MAX_LIGHT_PROBE_GRID_PROBES,
+};
 pub use renderer::{Renderer, RenderTarget};
 #[cfg(not(target_arch = "wasm32"))]
 pub use renderer::headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};

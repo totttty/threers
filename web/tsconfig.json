@@ -16,6 +16,8 @@
   },
   "include": [
     "threejs-shim.d.ts",
+    "light-probe-grid.d.ts",
+    "light-probe-math.d.ts",
     "video-export.d.ts",
     "examples/controls-threers.ts",
     "examples/export-video.ts"

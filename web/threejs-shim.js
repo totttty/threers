@@ -42,6 +42,7 @@ import init, {
     WebRaycaster, WebClock,
 } from './pkg/threers.js';
 import { Earcut } from './node_modules/three/src/extras/Earcut.js';
+import { decodeGltfAccessor } from './gltf-accessor.js';
 import {
     BrowserVideoFormat,
     VideoEncodeWorker,
@@ -152,8 +153,13 @@ export const BackSide = 1;
 export const DoubleSide = 2;
 
 // three.js texture type constants (also exported on default THREE object below).
-const UnsignedByteType = 1009;
-const HalfFloatType = 1016;
+export const UnsignedByteType = 1009;
+export const HalfFloatType = 1016;
+
+// Tone-mapping constants used by three.js examples.
+export const NoToneMapping = 0;
+export const LinearToneMapping = 1;
+export const ACESFilmicToneMapping = 4;
 
 // ---- Math helpers ----
 function _color(input) {
@@ -1046,6 +1052,17 @@ function _applyMap(w, opts) {
     else if (t instanceof DataTexture) w.setMapData(t._w);
     else if (t instanceof Texture) w.setMap(t._w);
 }
+
+function _applyPbrMaps(w, opts) {
+    if (!opts || typeof opts !== 'object') return;
+    const bindDataMap = (texture, setter) => {
+        if (!texture || typeof w?.[setter] !== 'function') return;
+        _syncTextureFilters(texture);
+        w[setter](texture._w);
+    };
+    bindDataMap(opts.roughnessMap, 'setRoughnessMapData');
+    bindDataMap(opts.metalnessMap, 'setMetalnessMapData');
+}
 // Translate three.js's numeric filter/wrap constants to our compact
 // (mag, min, wrap_s, wrap_t) enum and push to the wasm Texture.
 function _syncTextureFilters(t) {
@@ -1145,7 +1162,7 @@ export class MeshStandardMaterial {
         const r = (typeof opts === 'object' && opts && 'roughness' in opts) ? opts.roughness : 1.0;
         const m = (typeof opts === 'object' && opts && 'metalness' in opts) ? opts.metalness : 0.0;
         this._w = WebMaterial.standard(c, r, m);
-        _applyMap(this._w, opts); _applyCommon(this._w, opts); _initMaterialBase(this, opts);
+        _applyMap(this._w, opts); _applyPbrMaps(this._w, opts); _applyCommon(this._w, opts); _initMaterialBase(this, opts);
     }
 }
 export class MeshPhongMaterial { constructor(opts = {}) { this._w = WebMaterial.phong(_matColor(opts)); } }
@@ -1157,7 +1174,7 @@ export class MeshPhysicalMaterial {
         const cc = 'clearcoat' in o ? o.clearcoat : 0.0;
         const cr = 'clearcoatRoughness' in o ? o.clearcoatRoughness : 0.0;
         this._w = WebMaterial.physical(_matColor(opts), r, m, cc, cr);
-        _applyMap(this._w, opts); _applyCommon(this._w, opts); _initMaterialBase(this, opts);
+        _applyMap(this._w, opts); _applyPbrMaps(this._w, opts); _applyCommon(this._w, opts); _initMaterialBase(this, opts);
     }
 }
 export class MeshNormalMaterial { constructor() { this._w = WebMaterial.normalMat(); } }
@@ -1354,26 +1371,44 @@ export class InstancedMesh {
         this.count = count;
         this._isInstancedMesh = true;
         this._matrices = new Float32Array(count * 16);
+        this._colors = new Float32Array(count * 4);
         for (let i = 0; i < count; i++) {
             const o = i * 16;
             this._matrices[o   ] = 1; this._matrices[o+5 ] = 1;
             this._matrices[o+10] = 1; this._matrices[o+15] = 1;
+            const c = i * 4;
+            this._colors[c] = this._colors[c + 1] = this._colors[c + 2] = this._colors[c + 3] = 1;
         }
+        this.instanceMatrix = { array: this._matrices, count, needsUpdate: true };
+        this.instanceColor = { array: this._colors, count, needsUpdate: true };
         this.position = new Vector3();
         this.rotation = new Euler();
         this.scale = new Vector3(1, 1, 1);
+        this.visible = true;
+        this.layers = new Layers();
         this._handle = null;
     }
     setMatrixAt(i, m) {
         const e = m.elements || m;
         const o = i * 16;
         for (let k = 0; k < 16; k++) this._matrices[o + k] = e[k];
+        this.instanceMatrix.needsUpdate = true;
     }
     getMatrixAt(i, m) {
         const e = m.elements || m;
         const o = i * 16;
         for (let k = 0; k < 16; k++) e[k] = this._matrices[o + k];
     }
+    setColorAt(i, color) {
+        const c = i * 4;
+        const value = color instanceof Color ? color : new Color(color);
+        this._colors[c] = value.r;
+        this._colors[c + 1] = value.g;
+        this._colors[c + 2] = value.b;
+        this._colors[c + 3] = 1;
+        this.instanceColor.needsUpdate = true;
+    }
+    dispose() {}
 }
 
 // BatchedMesh (three.js r165 API): each addGeometry call adds one drawable
@@ -2112,6 +2147,13 @@ export class Group {
         }
         return this;
     }
+    traverse(callback) {
+        callback(this);
+        for (const child of this._children) {
+            if (typeof child.traverse === 'function') child.traverse(callback);
+            else callback(child);
+        }
+    }
     updateMatrix() {
         const q = this.quaternion || new Quaternion().setFromEuler(this.rotation);
         this.matrix.compose(this.position, q, this.scale);
@@ -2326,11 +2368,16 @@ export class DataTexture {
             [data, width, height] = args;
         }
         const u8 = (data instanceof Uint8Array) ? data : new Uint8Array(data.buffer || data);
-        this._w = new WebDataTexture(width, height, u8);
+        const colorSpace = args[5];
+        this._w = colorSpace === 'srgb' && WebDataTexture.newSrgb
+            ? WebDataTexture.newSrgb(width, height, u8)
+            : new WebDataTexture(width, height, u8);
         this.image = { data: u8, width, height };
         this.needsUpdate = false;
         // Match three.js DataTexture: NearestFilter, no mipmaps.
         this.magFilter = 1003; this.minFilter = 1003;
+        this.wrapS = 1001; this.wrapT = 1001;
+        this.colorSpace = colorSpace === 'srgb' ? 'srgb' : 'srgb-linear';
     }
 }
 
@@ -2947,6 +2994,8 @@ export class FirstPersonControls {
         this._camera = camera;
         this.domElement = domElement;
         this.enabled = true;
+        this.movementSpeed = 1;
+        this.lookSpeed = 0.005;
         this._rotating = false;
         this._keys = {};
         if (domElement?.addEventListener) {
@@ -2965,6 +3014,7 @@ export class FirstPersonControls {
         const back = (this._keys['KeyS'] || this._keys['ArrowDown']) ? 1 : 0;
         const left = (this._keys['KeyA'] || this._keys['ArrowLeft']) ? 1 : 0;
         const right = (this._keys['KeyD'] || this._keys['ArrowRight']) ? 1 : 0;
+        this._w.setSpeeds(this.movementSpeed, this.lookSpeed);
         this._w.setMoveInput(fwd - back, right - left, 0);
         this._w.update(this._camera._w, dx, dy, dt, rotating);
     }
@@ -3498,7 +3548,8 @@ export class Scene {
             this._objects.push(obj);
             return;
         } else if (obj._isInstancedMesh) {
-            obj._handle = this._w.addInstancedMesh(obj.geometry._w, obj.material._w, obj._matrices);
+            obj._handle = this._w.addInstancedMesh(obj.geometry._w, obj.material._w, obj._matrices, obj._colors);
+            obj._scene = this;
         } else if (obj._isSkinnedMesh) {
             const boneCount = obj.skeleton?.bones?.length ?? 1;
             const geomW = _geomToWebGeom(obj.geometry);
@@ -3612,6 +3663,19 @@ export class Scene {
                 const rot = _effectiveEuler(o);
                 this._w.setTransform(o._handle, o.position._w(), rot._w());
                 this._w.setVisible(o._handle, layered);
+            } else if (o._isInstancedMesh && o._handle) {
+                const layered = o.visible !== false && onLayer(o);
+                this._w.setTransform(o._handle, o.position._w(), _effectiveEuler(o)._w());
+                this._w.setScale(o._handle, o.scale.x, o.scale.y, o.scale.z);
+                this._w.setVisible(o._handle, layered);
+                if (o.instanceMatrix?.needsUpdate) {
+                    this._w.setInstancedMatrices(o._handle, o._matrices);
+                    o.instanceMatrix.needsUpdate = false;
+                }
+                if (o.instanceColor?.needsUpdate) {
+                    this._w.setInstancedColors(o._handle, o._colors);
+                    o.instanceColor.needsUpdate = false;
+                }
             } else if (o._isSkinnedMesh && o._handle) {
                 // Combined skin + morph: apply morph blend first (rewrites
                 // position buffer), then push bone matrices. The skinned VS
@@ -3704,9 +3768,29 @@ export class WebGLRenderer {
         r._w = w;
         r._canvas = canvas;
         r.shadowMap = { enabled: true, type: 2 };
+        r._activeLightProbeGrid = null;
+        r._toneMapping = NoToneMapping;
+        r._toneMappingExposure = 1;
         return r;
     }
     get domElement() { return this._canvas; }
+    get toneMapping() { return this._toneMapping; }
+    set toneMapping(value) {
+        this._toneMapping = value;
+        this._syncToneMapping();
+    }
+    get toneMappingExposure() { return this._toneMappingExposure; }
+    set toneMappingExposure(value) {
+        this._toneMappingExposure = Number.isFinite(value) ? Math.max(0, value) : 1;
+        this._syncToneMapping();
+    }
+    _syncToneMapping() {
+        if (!this._w?.setToneMapping) return;
+        const mode = this._toneMapping === ACESFilmicToneMapping
+            ? 2
+            : this._toneMapping === LinearToneMapping ? 1 : 0;
+        this._w.setToneMapping(mode, this._toneMappingExposure);
+    }
     setSize(w, h, updateStyle = true) {
         this._canvas.width = w;
         this._canvas.height = h;
@@ -3792,7 +3876,62 @@ export class WebGLRenderer {
         const height = h ?? target.height ?? this._canvas?.height ?? 600;
         return this._w.readRenderTargetF16(target._w.id, x, y, width, height);
     }
+    async readProbeCube(target) {
+        if (!target?._w_cube) throw new Error('Probe cube target has not been rendered yet');
+        return this._w.readProbeCube(target._w_cube);
+    }
+    setLightProbeGrid(coefficients, resolution, min, max) {
+        this._w.setLightProbeGrid(
+            coefficients,
+            resolution.x, resolution.y, resolution.z,
+            min.x, min.y, min.z,
+            max.x, max.y, max.z,
+        );
+    }
+    encodeLightProbeGridCache(coefficients, resolution, min, max, settings, cacheKey) {
+        return this._w.encodeLightProbeGridCache(
+            coefficients,
+            resolution.x, resolution.y, resolution.z,
+            min.x, min.y, min.z,
+            max.x, max.y, max.z,
+            settings.cubemapSize,
+            settings.near,
+            settings.far,
+            settings.bounces,
+            cacheKey,
+        );
+    }
+    decodeLightProbeGridCache(bytes, expectedCacheKey) {
+        const decoded = this._w.decodeLightProbeGridCache(bytes, expectedCacheKey);
+        try {
+            return {
+                coefficients: decoded.coefficients(),
+                resolution: new Vector3(decoded.nx(), decoded.ny(), decoded.nz()),
+                min: new Vector3(decoded.minX(), decoded.minY(), decoded.minZ()),
+                max: new Vector3(decoded.maxX(), decoded.maxY(), decoded.maxZ()),
+                settings: {
+                    cubemapSize: decoded.cubemapSize(),
+                    near: decoded.near(),
+                    far: decoded.far(),
+                    bounces: decoded.bounces(),
+                },
+            };
+        } finally {
+            decoded.free();
+        }
+    }
+    clearLightProbeGrid() {
+        this._w.clearLightProbeGrid();
+        this._activeLightProbeGrid = null;
+    }
     render(scene, camera) {
+        const probeGrid = scene?.children?.find((child) => child?.isLightProbeGrid && child.visible !== false && child.coefficients);
+        if (probeGrid) {
+            probeGrid._applyToRenderer(this, this._activeLightProbeGrid !== probeGrid);
+            this._activeLightProbeGrid = probeGrid;
+        } else if (this._activeLightProbeGrid) {
+            this.clearLightProbeGrid();
+        }
         // Orbit/trackball controls own the wasm camera pose — don't push stale JS over it.
         if (!camera?._orbitControlled && typeof camera?._sync === 'function') camera._sync();
         // Fire material.onBeforeCompile once per material on first render, and
@@ -3827,6 +3966,44 @@ export class WebGLRenderer {
         scene._syncTransforms(camera);
         if (!camera?._orbitControlled) camera._sync();
         this._w.render(scene._w, camera._w);
+    }
+    _prepareBenchmark(scene, camera) {
+        // Run the normal wrapper path once so transforms, probe coefficients,
+        // materials, and camera state are synchronized before the timed frame.
+        if (!this._benchmarkGpuPrepared) {
+            this.render(scene, camera);
+            this._benchmarkGpuPrepared = true;
+        }
+    }
+    benchmarkHasGpuTimestamps() {
+        return this._w?.benchmarkHasGpuTimestamps?.() === true;
+    }
+    setStaticMode(enabled) {
+        this._w?.setStaticMode?.(enabled === true);
+    }
+    invalidateStaticScene() {
+        this._w?.invalidateStaticScene?.();
+    }
+    benchmarkRendererStats() {
+        return this._w?.benchmarkRendererStats?.() ?? null;
+    }
+    async waitForGpu() {
+        if (!this._w?.waitForGpu) throw new Error('This threers build does not expose a GPU queue fence');
+        return this._w.waitForGpu();
+    }
+    async benchmarkCompletionMs(scene, camera) {
+        if (!this._w?.benchmarkCompletionMs) {
+            throw new Error('This threers build does not expose completion benchmarking');
+        }
+        this._prepareBenchmark(scene, camera);
+        return this._w.benchmarkCompletionMs(scene._w, camera._w);
+    }
+    async benchmarkGpuMs(scene, camera) {
+        if (!this._w?.benchmarkGpuMs) {
+            throw new Error('This threers build does not expose GPU timestamp benchmarking');
+        }
+        this._prepareBenchmark(scene, camera);
+        return this._w.benchmarkGpuMs(scene._w, camera._w);
     }
 }
 export const WebGPURenderer = WebGLRenderer;
@@ -5644,13 +5821,6 @@ export class CubeTextureLoader extends _Loader {
 // Real GLTFLoader. Handles .gltf (JSON + external/data buffers) and .glb
 // (binary container). Builds Scene + Mesh + BufferGeometry + materials per
 // GLTF 2.0; animations parsed into AnimationClips with KeyframeTracks.
-const _GLTF_COMPONENT_BYTES = { 5120:1, 5121:1, 5122:2, 5123:2, 5125:4, 5126:4 };
-const _GLTF_COMPONENT_ARRAY = {
-    5120: Int8Array, 5121: Uint8Array, 5122: Int16Array, 5123: Uint16Array,
-    5125: Uint32Array, 5126: Float32Array,
-};
-const _GLTF_TYPE_SIZES = { SCALAR:1, VEC2:2, VEC3:3, VEC4:4, MAT2:4, MAT3:9, MAT4:16 };
-
 function _decodeDataUri(uri) {
     const m = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(uri);
     if (!m) return new ArrayBuffer(0);
@@ -5663,6 +5833,36 @@ function _decodeDataUri(uri) {
         return out.buffer;
     }
     return new TextEncoder().encode(decodeURIComponent(body)).buffer;
+}
+
+async function _blobToDataTexture(blob, colorSpace = 'srgb-linear') {
+    const bitmap = await createImageBitmap(blob);
+    const canvas = typeof OffscreenCanvas !== 'undefined'
+        ? new OffscreenCanvas(bitmap.width, bitmap.height)
+        : Object.assign(document.createElement('canvas'), { width: bitmap.width, height: bitmap.height });
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    context.drawImage(bitmap, 0, 0);
+    const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    bitmap.close?.();
+    const texture = new DataTexture(new Uint8Array(pixels), canvas.width, canvas.height, undefined, undefined, colorSpace);
+    texture.needsUpdate = true;
+    return texture;
+}
+
+function _gltfFilter(value, fallback) {
+    if (value === 9728) return 1003;
+    if (value === 9984) return 1004;
+    if (value === 9985) return 1005;
+    if (value === 9986) return 1007;
+    if (value === 9987) return 1008;
+    if (value === 9729) return 1006;
+    return fallback;
+}
+
+function _gltfWrap(value) {
+    if (value === 10497) return 1000;
+    if (value === 33648) return 1002;
+    return 1001;
 }
 
 export class GLTFLoader extends _Loader {
@@ -5709,34 +5909,77 @@ export class GLTFLoader extends _Loader {
             if (glbBin && i === 0 && !b.uri) return glbBin;
             if (b.uri?.startsWith('data:')) return _decodeDataUri(b.uri);
             const res = await fetch(baseDir + b.uri);
+            if (!res.ok) throw new Error(`Failed to load glTF buffer ${b.uri}: ${res.status}`);
             return await res.arrayBuffer();
         }));
-        return this.parse(json, buffers);
+        const usedTextures = new Set();
+        const srgbTextures = new Set();
+        for (const material of json.materials || []) {
+            const baseColor = material.pbrMetallicRoughness?.baseColorTexture?.index;
+            const metallicRoughness = material.pbrMetallicRoughness?.metallicRoughnessTexture?.index;
+            const emissive = material.emissiveTexture?.index;
+            if (baseColor != null) { usedTextures.add(baseColor); srgbTextures.add(baseColor); }
+            if (metallicRoughness != null) usedTextures.add(metallicRoughness);
+            if (emissive != null) { usedTextures.add(emissive); srgbTextures.add(emissive); }
+        }
+        const textures = [];
+        await Promise.all([...usedTextures].map(async (textureIndex) => {
+            const textureSpec = json.textures?.[textureIndex];
+            const imageSpec = json.images?.[textureSpec?.source];
+            if (!imageSpec) return;
+            let blob;
+            if (imageSpec.uri?.startsWith('data:')) {
+                const response = await fetch(imageSpec.uri);
+                blob = await response.blob();
+            } else if (imageSpec.uri) {
+                const response = await fetch(baseDir + imageSpec.uri);
+                if (!response.ok) throw new Error(`Failed to load glTF image ${imageSpec.uri}: ${response.status}`);
+                blob = await response.blob();
+            } else if (imageSpec.bufferView != null) {
+                const view = json.bufferViews[imageSpec.bufferView];
+                const start = view.byteOffset || 0;
+                blob = new Blob([buffers[view.buffer].slice(start, start + view.byteLength)], { type: imageSpec.mimeType });
+            }
+            if (!blob) return;
+            const texture = await _blobToDataTexture(blob, srgbTextures.has(textureIndex) ? 'srgb' : 'srgb-linear');
+            const sampler = json.samplers?.[textureSpec.sampler] || {};
+            texture.magFilter = _gltfFilter(sampler.magFilter, 1006);
+            texture.minFilter = _gltfFilter(sampler.minFilter, 1008);
+            texture.wrapS = _gltfWrap(sampler.wrapS);
+            texture.wrapT = _gltfWrap(sampler.wrapT);
+            textures[textureIndex] = texture;
+        }));
+        return this.parse(json, buffers, baseDir, undefined, textures);
     }
-    parse(json, buffers, _path = '', onLoad) {
+    parse(json, buffers, _path = '', onLoad, textures = []) {
         const bufferViews = (json.bufferViews || []).map(bv => ({
             buffer: buffers[bv.buffer], byteOffset: bv.byteOffset || 0,
             byteLength: bv.byteLength, byteStride: bv.byteStride,
         }));
-        const accessors = (json.accessors || []).map(acc => {
-            const bv = bufferViews[acc.bufferView];
-            const ArrayCtor = _GLTF_COMPONENT_ARRAY[acc.componentType] || Float32Array;
-            const tcount = _GLTF_TYPE_SIZES[acc.type] || 1;
-            const byteOff = (bv?.byteOffset || 0) + (acc.byteOffset || 0);
-            const totalElements = acc.count * tcount;
-            const data = bv ? new ArrayCtor(bv.buffer, byteOff, totalElements) : new ArrayCtor(totalElements);
-            return { array: Array.from(data), itemSize: tcount, count: acc.count };
-        });
+        const accessors = (json.accessors || []).map(acc => decodeGltfAccessor(acc, bufferViews[acc.bufferView]));
         const materials = (json.materials || []).map(m => {
             const matOpts = {
                 roughness: m.pbrMetallicRoughness?.roughnessFactor ?? 1,
-                metalness: m.pbrMetallicRoughness?.metallicFactor ?? 0,
+                // glTF defaults both factors to 1. The packed texture then
+                // supplies roughness in G and metalness in B.
+                metalness: m.pbrMetallicRoughness?.metallicFactor ?? 1,
+                side: m.doubleSided ? DoubleSide : FrontSide,
             };
             const f = m.pbrMetallicRoughness?.baseColorFactor;
             // glTF factors are linear RGB (three.js uses LinearSRGBColorSpace); do not
             // round-trip through hex or WebColor.fromHex applies sRGB decode twice.
             if (f) matOpts.color = new Color(f[0], f[1], f[2]);
             else matOpts.color = new Color(1, 1, 1);
+            if (f?.[3] != null) matOpts.opacity = f[3];
+            const baseColorTexture = m.pbrMetallicRoughness?.baseColorTexture?.index;
+            if (baseColorTexture != null && textures[baseColorTexture]) matOpts.map = textures[baseColorTexture];
+            const metallicRoughnessTexture = m.pbrMetallicRoughness?.metallicRoughnessTexture?.index;
+            if (metallicRoughnessTexture != null && textures[metallicRoughnessTexture]) {
+                matOpts.roughnessMap = textures[metallicRoughnessTexture];
+                matOpts.metalnessMap = textures[metallicRoughnessTexture];
+            }
+            if (m.alphaMode === 'MASK') matOpts.alphaTest = m.alphaCutoff ?? 0.5;
+            if (m.alphaMode === 'BLEND') matOpts.transparent = true;
             const e = m.emissiveFactor;
             if (e) matOpts.emissive = new Color(e[0], e[1], e[2]);
             return new MeshStandardMaterial(matOpts);
@@ -5782,7 +6025,11 @@ export class GLTFLoader extends _Loader {
             if (nodeSpec.scale) o.scale.set(...nodeSpec.scale);
             if (nodeSpec.mesh != null && meshes[nodeSpec.mesh]) {
                 for (const item of meshes[nodeSpec.mesh]) {
-                    o.add(new Mesh(item.geom, item.mat));
+                    const mesh = new Mesh(item.geom, item.mat);
+                    // Scene's flattened group bridge uploads mesh scale directly.
+                    // Preserve the common glTF node-scale case (including Sponza).
+                    mesh.scale.copy(o.scale);
+                    o.add(mesh);
                 }
             }
             return o;
@@ -5791,7 +6038,8 @@ export class GLTFLoader extends _Loader {
             const ns = json.nodes[i];
             if (ns.children) for (const ci of ns.children) nodeObjs[i].add(nodeObjs[ci]);
         }
-        const scene = new Scene();
+        const scene = new Group();
+        scene.name = (json.scenes || [])[json.scene ?? 0]?.name || 'Scene';
         const sceneSpec = (json.scenes || [])[json.scene ?? 0] || { nodes: [] };
         for (const ni of sceneSpec.nodes) scene.add(nodeObjs[ni]);
         const animations = (json.animations || []).map(a => {
@@ -8282,7 +8530,9 @@ export class CubeCamera extends Object3D {
         const rt = this.renderTarget;
         if (!rt) return;
         if (!rt._w_cube) {
-            rt._w_cube = new WebCubeRenderTarget(renderer._w, rt._cubeSide);
+            rt._w_cube = rt._halfFloat && WebCubeRenderTarget.newProbe
+                ? WebCubeRenderTarget.newProbe(renderer._w, rt._cubeSide)
+                : new WebCubeRenderTarget(renderer._w, rt._cubeSide);
             // Tag the texture so `scene.environment = rt.texture` finds the cube RT id.
             rt.texture._cubeRTId = rt._w_cube.id;
         }

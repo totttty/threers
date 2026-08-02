@@ -26,4 +26,5 @@ pub use gpu_texture::GpuCubeTexture;
 #[cfg(not(target_arch = "wasm32"))]
 pub use headless::{HeadlessBuilder, HeadlessConfig, HeadlessRenderer};
 pub use render_target::{CubeRenderTarget, RenderTarget};
-pub use renderer::{PostFxCamera, Renderer};
+pub use renderer::{PostFxCamera, Renderer, LIGHT_PROBE_COEFFICIENT_BYTES};
+pub use crate::light_probes::MAX_LIGHT_PROBE_GRID_PROBES;

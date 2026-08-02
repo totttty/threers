@@ -172,6 +172,23 @@ export class WebGLRenderer implements ThreersHandle {
     setSize(width: number, height?: number, updateStyle?: boolean): void;
     setPixelRatio(value: number): void;
     render(scene: Scene, camera: PerspectiveCamera | OrthographicCamera): void;
+    setStaticMode(enabled: boolean): void;
+    invalidateStaticScene(): void;
+    benchmarkHasGpuTimestamps(): boolean;
+    benchmarkRendererStats(): {
+        renderItems: number;
+        cameraVisibleItems: number;
+        mainDrawCalls: number;
+        shadowDrawCalls: number;
+        staticCacheHits: number;
+        renderBundleUses: number;
+        renderBundleCompatibleDraws: number;
+        renderBundleIncompatibleDraws: number;
+        materialSpecializedDraws: number;
+    } | null;
+    waitForGpu(): Promise<void>;
+    benchmarkCompletionMs(scene: Scene, camera: PerspectiveCamera | OrthographicCamera): Promise<number>;
+    benchmarkGpuMs(scene: Scene, camera: PerspectiveCamera | OrthographicCamera): Promise<number | null>;
     setRenderTarget(target: WebGLRenderTarget | null): void;
     getRenderTarget(): WebGLRenderTarget | null;
     applyPostFx(
