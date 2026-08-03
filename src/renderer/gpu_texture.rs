@@ -27,25 +27,51 @@ fn pad_rows_for_upload(pixels: &[u8], width: u32, height: u32, bpp: u32) -> (Vec
 pub(crate) fn f32_to_f16_bits(v: f32) -> u16 {
     let bits = v.to_bits();
     let sign = ((bits >> 16) & 0x8000) as u16;
-    let val = bits & 0x7fff_ffff;
-    if val >= 0x4780_0000 {
-        if val >= 0x7f80_0000 {
-            return sign | 0x7c00 | (if val > 0x7f80_0000 { 0x0200 } else { 0 }) as u16;
-        }
+    let exponent = ((bits >> 23) & 0xff) as i32;
+    let mantissa = bits & 0x007f_ffff;
+
+    if exponent == 0xff {
+        return if mantissa == 0 {
+            sign | 0x7c00
+        } else {
+            sign | 0x7e00
+        };
+    }
+
+    let mut half_exponent = exponent - 127 + 15;
+    if half_exponent >= 31 {
+        // Preserve the previous finite-overflow contract: saturate instead of
+        // introducing infinities into HDR textures.
         return sign | 0x7bff;
     }
-    if val < 0x3880_0000 {
-        if val < 0x3300_0000 {
+    if half_exponent <= 0 {
+        if half_exponent < -10 {
             return sign;
         }
-        let exp = val >> 23;
-        let m = (val & 0x007f_ffff) | 0x0080_0000;
-        let shift = 125u32.wrapping_sub(exp).min(24);
-        let m = m >> shift;
-        return sign | (((m + 0x1000 + ((m >> 13) & 1)) >> 13) as u16);
+        let significand = mantissa | 0x0080_0000;
+        let shift = (14 - half_exponent) as u32;
+        let mut half_mantissa = significand >> shift;
+        let remainder = significand & ((1u32 << shift) - 1);
+        let halfway = 1u32 << (shift - 1);
+        if remainder > halfway || (remainder == halfway && half_mantissa & 1 != 0) {
+            half_mantissa += 1;
+        }
+        return sign | half_mantissa as u16;
     }
-    let m = val as u64 + 0xc800_0000u64;
-    sign | (((m >> 13) & 0x3fff) as u16)
+
+    let mut half_mantissa = mantissa >> 13;
+    let remainder = mantissa & 0x1fff;
+    if remainder > 0x1000 || (remainder == 0x1000 && half_mantissa & 1 != 0) {
+        half_mantissa += 1;
+        if half_mantissa == 0x400 {
+            half_mantissa = 0;
+            half_exponent += 1;
+            if half_exponent >= 31 {
+                return sign | 0x7bff;
+            }
+        }
+    }
+    sign | ((half_exponent as u16) << 10) | half_mantissa as u16
 }
 
 pub(crate) fn f16_bits_to_f32(h: u16) -> f32 {
@@ -393,4 +419,40 @@ pub fn wgpu_wrap(w: TextureWrap) -> wgpu::AddressMode {
 
 pub fn tex_cache_key(t: &Arc<Texture>) -> *const Texture {
     Arc::as_ptr(t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn f32_to_f16_matches_ieee_known_values() {
+        for (value, expected) in [
+            (0.0, 0x0000),
+            (1.0, 0x3c00),
+            (-1.0, 0xbc00),
+            (2.0, 0x4000),
+            (20.0, 0x4d00),
+            (-9.0, 0xc880),
+            (65504.0, 0x7bff),
+        ] {
+            assert_eq!(
+                f32_to_f16_bits(value),
+                expected,
+                "incorrect f16 encoding for {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn f16_round_trip_preserves_probe_range() {
+        for value in [-20.0, -9.0, -2.0, -0.1, 0.1, 2.0, 9.0, 20.0] {
+            let round_trip = f16_bits_to_f32(f32_to_f16_bits(value));
+            let relative_error = (round_trip - value).abs() / value.abs();
+            assert!(
+                relative_error < 0.001,
+                "{value} became {round_trip} ({relative_error} relative error)"
+            );
+        }
+    }
 }

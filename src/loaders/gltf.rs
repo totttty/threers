@@ -27,6 +27,12 @@ use crate::textures::{Texture, TextureFilter, TextureFormat, TextureWrap};
 /// Keyed by GLTF `images[i]` index. Format must be 8-bit RGBA.
 pub type GltfImages = HashMap<usize, (u32, u32, Vec<u8>)>;
 
+#[derive(Debug, Clone)]
+struct GltfTextureVariants {
+    srgb: Arc<Texture>,
+    linear: Arc<Texture>,
+}
+
 #[derive(Debug)]
 pub enum GltfError {
     Json(&'static str),
@@ -188,7 +194,10 @@ impl GltfLoader {
             .unwrap_or_default();
         let default_scene = obj.get("scene").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
-        // Build texture map: GLTF texture index → Arc<Texture>.
+        // Build both color-space views for each GLTF texture. A single image may
+        // legally be referenced by color slots (base/emissive, sRGB) and data
+        // slots (normal/metal-rough/AO, linear), so color space belongs to the
+        // material use rather than the image itself.
         let textures_json = obj
             .get("textures")
             .and_then(|v| v.as_array())
@@ -199,7 +208,8 @@ impl GltfLoader {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        let mut gltf_textures: Vec<Option<Arc<Texture>>> = Vec::with_capacity(textures_json.len());
+        let mut gltf_textures: Vec<Option<GltfTextureVariants>> =
+            Vec::with_capacity(textures_json.len());
         for tj in &textures_json {
             let Some(t) = tj.as_object() else {
                 gltf_textures.push(None);
@@ -249,7 +259,12 @@ impl GltfLoader {
                     };
                 }
             }
-            gltf_textures.push(Some(Arc::new(tex)));
+            let mut linear = tex.clone();
+            linear.format = TextureFormat::Rgba8Unorm;
+            gltf_textures.push(Some(GltfTextureVariants {
+                srgb: Arc::new(tex),
+                linear: Arc::new(linear),
+            }));
         }
 
         // Build materials.
@@ -608,8 +623,13 @@ pub fn add_to_scene(scene: &mut Scene, loaded: GltfScene) -> Vec<ObjectId> {
 
 // ---------- helpers ----------
 
-fn parse_material(mj: &Value, gltf_textures: &[Option<Arc<Texture>>]) -> Material {
-    let mut std_mat = StandardMaterial::default();
+fn parse_material(mj: &Value, gltf_textures: &[Option<GltfTextureVariants>]) -> Material {
+    let mut std_mat = StandardMaterial {
+        // glTF's metallicFactor defaults to 1.0, unlike threers' general-purpose
+        // MeshStandardMaterial default of 0.0.
+        metalness: 1.0,
+        ..Default::default()
+    };
     let mut emissive_strength = 1.0_f32;
     // KHR_materials_clearcoat / KHR_materials_ior / KHR_materials_transmission /
     // KHR_materials_sheen / KHR_materials_iridescence — collected into a Physical.
@@ -625,11 +645,17 @@ fn parse_material(mj: &Value, gltf_textures: &[Option<Arc<Texture>>]) -> Materia
     let mut use_physical = false;
     let mut is_unlit = false;
 
-    let lookup_tex = |o: &HashMap<String, Value>, key: &str| -> Option<Arc<Texture>> {
-        let info = o.get(key).and_then(|v| v.as_object())?;
-        let idx = info.get("index").and_then(|v| v.as_u64())? as usize;
-        gltf_textures.get(idx).and_then(|t| t.clone())
-    };
+    let lookup_tex =
+        |o: &HashMap<String, Value>, key: &str, linear: bool| -> Option<Arc<Texture>> {
+            let info = o.get(key).and_then(|v| v.as_object())?;
+            let idx = info.get("index").and_then(|v| v.as_u64())? as usize;
+            let variants = gltf_textures.get(idx)?.as_ref()?;
+            Some(if linear {
+                variants.linear.clone()
+            } else {
+                variants.srgb.clone()
+            })
+        };
     if let Some(m) = mj.as_object() {
         if let Some(pbr) = m.get("pbrMetallicRoughness").and_then(|v| v.as_object()) {
             if let Some(bcf) = pbr.get("baseColorFactor").and_then(|v| v.as_array()) {
@@ -646,14 +672,14 @@ fn parse_material(mj: &Value, gltf_textures: &[Option<Arc<Texture>>]) -> Materia
             if let Some(mv) = pbr.get("metallicFactor").and_then(|v| v.as_f32()) {
                 std_mat.metalness = mv;
             }
-            std_mat.map = lookup_tex(pbr, "baseColorTexture");
-            let mr = lookup_tex(pbr, "metallicRoughnessTexture");
+            std_mat.map = lookup_tex(pbr, "baseColorTexture", false);
+            let mr = lookup_tex(pbr, "metallicRoughnessTexture", true);
             std_mat.roughness_map = mr.clone();
             std_mat.metalness_map = mr;
         }
-        std_mat.normal_map = lookup_tex(m, "normalTexture");
-        std_mat.ao_map = lookup_tex(m, "occlusionTexture");
-        std_mat.emissive_map = lookup_tex(m, "emissiveTexture");
+        std_mat.normal_map = lookup_tex(m, "normalTexture", true);
+        std_mat.ao_map = lookup_tex(m, "occlusionTexture", true);
+        std_mat.emissive_map = lookup_tex(m, "emissiveTexture", false);
         if let Some(ef) = m.get("emissiveFactor").and_then(|v| v.as_array()) {
             std_mat.emissive = Color::new(
                 ef.first().and_then(|v| v.as_f32()).unwrap_or(0.0),
@@ -1114,4 +1140,89 @@ fn decode_base64(s: &str) -> Result<Vec<u8>, GltfError> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gltf_texture_roles_use_correct_color_spaces() {
+        let json = r#"{
+            "asset":{"version":"2.0"},
+            "buffers":[{"byteLength":36,"uri":"triangle.bin"}],
+            "bufferViews":[{"buffer":0,"byteLength":36}],
+            "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}],
+            "images":[
+                {"uri":"base.png"},{"uri":"mr.png"},{"uri":"normal.png"},
+                {"uri":"ao.png"},{"uri":"emissive.png"}
+            ],
+            "textures":[
+                {"source":0},{"source":1},{"source":2},{"source":3},{"source":4}
+            ],
+            "materials":[{
+                "pbrMetallicRoughness":{
+                    "baseColorTexture":{"index":0},
+                    "metallicRoughnessTexture":{"index":1}
+                },
+                "normalTexture":{"index":2},
+                "occlusionTexture":{"index":3},
+                "emissiveTexture":{"index":4}
+            }],
+            "meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],
+            "nodes":[{"mesh":0}],
+            "scenes":[{"nodes":[0]}],
+            "scene":0
+        }"#;
+        let mut external = HashMap::new();
+        external.insert(0, vec![0; 36]);
+        let mut images = GltfImages::new();
+        for index in 0..5 {
+            images.insert(index, (1, 1, vec![128, 128, 255, 255]));
+        }
+
+        let loaded = GltfLoader::parse_gltf_with_images(json, &external, &images).unwrap();
+        let material = loaded
+            .arena
+            .nodes
+            .values()
+            .find_map(|object| match &object.kind {
+                crate::core::ObjectKind::Mesh(mesh) => Some(mesh.material.as_ref()),
+                _ => None,
+            })
+            .expect("loaded mesh material");
+        let Material::Standard(material) = material else {
+            panic!("expected standard material");
+        };
+
+        assert_eq!(material.metalness, 1.0, "glTF metallicFactor defaults to 1");
+        assert_eq!(
+            material.roughness, 1.0,
+            "glTF roughnessFactor defaults to 1"
+        );
+        assert_eq!(
+            material.map.as_ref().unwrap().format,
+            TextureFormat::Rgba8UnormSrgb
+        );
+        assert_eq!(
+            material.emissive_map.as_ref().unwrap().format,
+            TextureFormat::Rgba8UnormSrgb
+        );
+        assert_eq!(
+            material.normal_map.as_ref().unwrap().format,
+            TextureFormat::Rgba8Unorm
+        );
+        assert_eq!(
+            material.roughness_map.as_ref().unwrap().format,
+            TextureFormat::Rgba8Unorm
+        );
+        assert_eq!(
+            material.metalness_map.as_ref().unwrap().format,
+            TextureFormat::Rgba8Unorm
+        );
+        assert_eq!(
+            material.ao_map.as_ref().unwrap().format,
+            TextureFormat::Rgba8Unorm
+        );
+    }
 }
