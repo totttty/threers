@@ -1391,6 +1391,30 @@ fn shadow_factor_spot(world_pos : vec3<f32>) -> f32 {
     return textureSampleCompareLevel(spot_shadow_tex, spot_shadow_sampler, uv, ndc.z - bias);
 }
 
+// Naga's native Metal path does not permit dynamically indexing a function-local
+// constant array. Keep the Poisson taps in a switch so the same WGSL validates
+// on Metal and browser WebGPU without changing the sample pattern.
+fn point_shadow_offset(index : u32) -> vec2<f32> {
+    switch index {
+        case 0u: { return vec2<f32>(0.000, 0.000); }
+        case 1u: { return vec2<f32>(0.527, 0.085); }
+        case 2u: { return vec2<f32>(-0.040, 0.536); }
+        case 3u: { return vec2<f32>(-0.670, -0.180); }
+        case 4u: { return vec2<f32>(0.120, -0.740); }
+        case 5u: { return vec2<f32>(0.790, 0.430); }
+        case 6u: { return vec2<f32>(-0.500, 0.720); }
+        case 7u: { return vec2<f32>(-0.870, 0.250); }
+        case 8u: { return vec2<f32>(0.550, -0.620); }
+        case 9u: { return vec2<f32>(0.930, -0.160); }
+        case 10u: { return vec2<f32>(0.270, 0.920); }
+        case 11u: { return vec2<f32>(-0.250, -0.940); }
+        case 12u: { return vec2<f32>(-0.940, -0.470); }
+        case 13u: { return vec2<f32>(0.740, 0.760); }
+        case 14u: { return vec2<f32>(-0.710, 0.550); }
+        default: { return vec2<f32>(0.410, -0.890); }
+    }
+}
+
 fn shadow_factor_point(world_pos : vec3<f32>) -> f32 {
     let radius = frame.point_shadow_pos.w;
     if (radius <= 0.0) { return 1.0; }
@@ -1413,20 +1437,10 @@ fn shadow_factor_point(world_pos : vec3<f32>) -> f32 {
     let helper_up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(cube_dir.y) > 0.9);
     let tangent = normalize(cross(helper_up, cube_dir));
     let bitangent = cross(cube_dir, tangent);
-    let offsets = array<vec2<f32>, 16>(
-        vec2<f32>(0.000, 0.000), vec2<f32>(0.527, 0.085),
-        vec2<f32>(-0.040, 0.536), vec2<f32>(-0.670, -0.180),
-        vec2<f32>(0.120, -0.740), vec2<f32>(0.790, 0.430),
-        vec2<f32>(-0.500, 0.720), vec2<f32>(-0.870, 0.250),
-        vec2<f32>(0.550, -0.620), vec2<f32>(0.930, -0.160),
-        vec2<f32>(0.270, 0.920), vec2<f32>(-0.250, -0.940),
-        vec2<f32>(-0.940, -0.470), vec2<f32>(0.740, 0.760),
-        vec2<f32>(-0.710, 0.550), vec2<f32>(0.410, -0.890)
-    );
     var visibility = 0.0;
     let spread = 0.028;
     for (var i = 0u; i < 16u; i = i + 1u) {
-        let offset = offsets[i];
+        let offset = point_shadow_offset(i);
         let tap_dir = normalize(
             cube_dir + (tangent * offset.x + bitangent * offset.y) * spread
         );
